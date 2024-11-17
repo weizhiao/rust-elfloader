@@ -211,7 +211,6 @@ impl ElfRawDynamic {
     }
 }
 
-#[allow(unused)]
 pub struct ElfDynamic {
     pub dyn_ptr: *const Dyn,
     pub hashtab: usize,

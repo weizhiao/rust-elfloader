@@ -39,3 +39,25 @@ cfg_if::cfg_if! {
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
     }
 }
+
+#[repr(C)]
+pub struct ElfRela {
+    rela: Rela,
+}
+
+impl ElfRela {
+    #[inline]
+    pub fn r_type(&self) -> usize {
+        self.rela.r_info as usize & REL_MASK
+    }
+
+    #[inline]
+    pub fn r_offset(&self) -> usize {
+        self.rela.r_offset as usize
+    }
+
+    #[inline]
+    pub fn r_append(&self) -> usize {
+        self.rela.r_addend as usize
+    }
+}

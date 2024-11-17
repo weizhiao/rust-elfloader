@@ -1,255 +1,9 @@
 use crate::{
-    arch::*,
-    dynamic::ElfDynamic,
-    find_symbol_error, relocate_error,
-    segment::ElfSegments,
-    symbol::{SymbolData, SymbolInfo},
-    ElfDylib, Result, ThreadLocal, Unwind, UserData,
+    arch::*, relocate_error, symbol::SymbolInfo, ElfDylib, RelocatedDylib, RelocatedInner, Result,
+    ThreadLocal, Unwind,
 };
-use alloc::{boxed::Box, ffi::CString, fmt::Debug, format, string::String, sync::Arc, vec::Vec};
-use core::{any::Any, ffi::CStr, marker::PhantomData, ops};
+use alloc::{boxed::Box, format, string::String, sync::Arc, vec::Vec};
 use elf::abi::*;
-
-#[allow(unused)]
-struct ElfTls {
-    id: usize,
-    data: Box<dyn Any>,
-}
-
-#[allow(unused)]
-pub(crate) struct RelocatedInner {
-    name: CString,
-    base: usize,
-    symbols: SymbolData,
-    dynamic: *const Dyn,
-    #[cfg(feature = "tls")]
-    tls: Option<ElfTls>,
-    unwind: Option<Box<dyn Any>>,
-    /// semgents
-    segments: ElfSegments,
-    /// .fini
-    fini_fn: Option<extern "C" fn()>,
-    /// .fini_array
-    fini_array_fn: Option<&'static [extern "C" fn()]>,
-    /// user data
-    user_data: UserData,
-    /// dependency libraries
-    dep_libs: Vec<RelocatedDylib>,
-}
-
-impl Debug for RelocatedInner {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("RelocatedLibrary")
-            .field("name", &self.name)
-            .field("base", &self.base)
-            .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct RelocatedDylib {
-    pub(crate) inner: Arc<RelocatedInner>,
-}
-
-impl Debug for RelocatedDylib {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-unsafe impl Send for RelocatedDylib {}
-unsafe impl Sync for RelocatedDylib {}
-
-impl RelocatedDylib {
-    /// Retrieves the list of dependent libraries.
-    ///
-    /// This method returns an optional reference to a vector of `RelocatedDylib` instances,
-    /// which represent the libraries that the current dynamic library depends on.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// if let Some(dependencies) = library.dep_libs() {
-    ///     for lib in dependencies {
-    ///         println!("Dependency: {:?}", lib);
-    ///     }
-    /// } else {
-    ///     println!("No dependencies found.");
-    /// }
-    /// ```
-    pub fn dep_libs(&self) -> Option<&Vec<RelocatedDylib>> {
-        if self.inner.dep_libs.is_empty() {
-            None
-        } else {
-            Some(&self.inner.dep_libs)
-        }
-    }
-
-    /// Retrieves the name of the dynamic library.
-    ///
-    /// This method returns a string slice that represents the name of the dynamic library.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// let library_name = library.name();
-    /// println!("The dynamic library name is: {}", library_name);
-    /// ```
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.inner.name.to_str().unwrap()
-    }
-
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        &self.inner.name
-    }
-
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.inner.base
-    }
-
-    #[inline]
-    pub fn user_data(&self) -> &UserData {
-        &self.inner.user_data
-    }
-
-    #[allow(unused_variables)]
-    pub unsafe fn from_raw(
-        name: CString,
-        base: usize,
-        dynamic: ElfDynamic,
-        tls: Option<usize>,
-        segments: ElfSegments,
-        user_data: UserData,
-    ) -> Self {
-        Self {
-            inner: Arc::new(RelocatedInner {
-                name,
-                base,
-                symbols: SymbolData::new(&dynamic),
-                dynamic: dynamic.dyn_ptr,
-                #[cfg(feature = "tls")]
-                tls: tls.map(|t| ElfTls {
-                    id: t,
-                    data: Box::new(()),
-                }),
-                unwind: None,
-                segments,
-                fini_fn: None,
-                fini_array_fn: None,
-                user_data: UserData::empty(),
-                dep_libs: Vec::new(),
-            }),
-        }
-    }
-
-    /// Get a pointer to a function or static variable by symbol name.
-    ///
-    /// The symbol is interpreted as-is; no mangling is done. This means that symbols like `x::y` are
-    /// most likely invalid.
-    ///
-    /// # Safety
-    ///
-    /// Users of this API must specify the correct type of the function or variable loaded.
-    ///
-    ///
-    /// # Examples
-    ///
-    /// Given a loaded library:
-    ///
-    /// ```no_run
-    /// # use ::dlopen_rs::ELFLibrary;
-    /// let lib = ELFLibrary::from_file("/path/to/awesome.module")
-    ///		.unwrap()
-    ///		.relocate(&[])
-    ///		.unwrap();
-    /// ```
-    ///
-    /// Loading and using a function looks like this:
-    ///
-    /// ```no_run
-    /// unsafe {
-    ///     let awesome_function: Symbol<unsafe extern fn(f64) -> f64> =
-    ///         lib.get("awesome_function").unwrap();
-    ///     awesome_function(0.42);
-    /// }
-    /// ```
-    ///
-    /// A static variable may also be loaded and inspected:
-    ///
-    /// ```no_run
-    /// unsafe {
-    ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
-    ///     **awesome_variable = 42.0;
-    /// };
-    /// ```
-    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
-        self.inner
-            .symbols
-            .get_sym(&SymbolInfo::new(name))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
-            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
-    }
-
-    /// Attempts to load a versioned symbol from the dynamically-linked library.
-    ///
-    /// # Safety
-    /// This function is unsafe because it involves raw pointer manipulation and
-    /// dereferencing. The caller must ensure that the library handle is valid
-    /// and that the symbol exists and has the correct type.
-    ///
-    /// # Parameters
-    /// - `&'lib self`: A reference to the library instance from which the symbol will be loaded.
-    /// - `name`: The name of the symbol to load.
-    /// - `version`: The version of the symbol to load.
-    ///
-    /// # Returns
-    /// If the symbol is found and has the correct type, this function returns
-    /// `Ok(Symbol<'lib, T>)`, where `Symbol` is a wrapper around a raw function pointer.
-    /// If the symbol cannot be found or an error occurs, it returns an `Err` with a message.
-    ///
-    /// # Examples
-    /// ```
-    /// let symbol = unsafe { lib.get_version::<fn()>>("function_name", "1.0").unwrap() };
-    /// ```
-    ///
-    /// # Errors
-    /// Returns a custom error if the symbol cannot be found, or if there is a problem
-    /// retrieving the symbol.
-    #[cfg(feature = "version")]
-    pub unsafe fn get_version<'lib, T>(
-        &'lib self,
-        name: &str,
-        version: &str,
-    ) -> Result<Symbol<'lib, T>> {
-        self.inner
-            .symbols
-            .get_sym(&SymbolInfo::new_with_version(name, version))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
-            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Symbol<'lib, T: 'lib> {
-    ptr: *mut (),
-    pd: PhantomData<&'lib T>,
-}
-
-impl<'lib, T> ops::Deref for Symbol<'lib, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        unsafe { &*(&self.ptr as *const *mut _ as *const T) }
-    }
-}
 
 #[allow(unused)]
 struct SymDef<'temp> {
@@ -325,7 +79,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                             sym,
                             base: lib.base(),
                             #[cfg(feature = "tls")]
-                            tls: lib.inner.tls.as_ref().map(|tls| tls.id),
+                            tls: lib.inner.tls,
                         });
                         break;
                     }
@@ -433,12 +187,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                             .wrapping_sub(TLS_DTV_OFFSET);
                         self.write_val(rela.r_offset as usize, tls_val);
                     }
-                    _ => {
-                        // REL_TPOFF：这种类型的重定位明显做不到，它是为静态模型设计的，这种方式
-                        // 可以通过带偏移量的内存读取来获取TLS变量，无需使用__tls_get_addr，
-                        // 实现它需要对要libc做修改，因为它要使用tp来访问thread local，
-                        // 而线程栈里保存的东西完全是由libc控制的
-                    }
+                    _ => {}
                 }
             });
         }
@@ -477,20 +226,26 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
             relro.relro()?;
         }
 
+        #[cfg(feature = "tls")]
+        let tls = self.tls.map(|t| {
+            let tls = unsafe { t.module_id() };
+            self.user_data.data_mut().push(Box::new(t));
+            tls
+        });
+
+        if let Some(u) = self.unwind {
+            self.user_data.data_mut().push(Box::new(u));
+        }
+
         Ok(RelocatedDylib {
             inner: Arc::new(RelocatedInner {
                 name: self.name,
+                entry: self.entry,
                 base: self.segments.base(),
                 symbols: self.symbols,
                 dynamic: self.dynamic,
                 #[cfg(feature = "tls")]
-                tls: self.tls.map(|t| unsafe {
-                    ElfTls {
-                        id: t.module_id(),
-                        data: Box::new(t),
-                    }
-                }),
-                unwind: self.unwind.map(|val| Box::new(val) as Box<dyn Any>),
+                tls,
                 segments: self.segments,
                 fini_fn: self.fini_fn,
                 fini_array_fn: self.fini_array_fn,
@@ -501,6 +256,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
     }
 
     #[cold]
+    #[inline(never)]
     fn not_relocated(&mut self) -> String {
         let mut f = String::new();
         f.push_str(&format!(
@@ -558,6 +314,7 @@ impl ElfRelocation {
         Self { pltrel, dynrel }
     }
 
+    #[inline]
     fn is_finished(&self) -> bool {
         let mut finished = true;
         if let Some(array) = &self.pltrel {
@@ -621,6 +378,7 @@ impl<'bitmap> BitMapIterator<'bitmap> {
 }
 
 impl ElfRelaArray {
+    #[inline]
     fn is_finished(&self) -> bool {
         let mut finished = true;
         if self.state.stage == RelocateStage::Init {
@@ -636,6 +394,7 @@ impl ElfRelaArray {
         finished
     }
 
+    #[inline]
     fn relocate(
         &mut self,
         f: impl Fn(&Rela, usize, &mut RelocateState, fn(usize, &mut RelocateState)),
@@ -672,7 +431,7 @@ impl ElfRelaArray {
     }
 }
 
-pub(crate) struct BitMap {
+struct BitMap {
     bitmap: Vec<u32>,
 }
 

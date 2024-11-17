@@ -49,7 +49,6 @@ pub enum OffsetType {
     /// An offset type that is based on a file descriptor and a file offset.
     ///
     /// This variant is used when the memory mapping operation is related to a file.
-    #[cfg(feature = "std")]
     File {
         /// The file descriptor associated with the file.
         fd: c_int,

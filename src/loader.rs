@@ -14,13 +14,13 @@ use core::{
     mem::{forget, MaybeUninit},
 };
 use elf::{
-    abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_LOAD},
+    abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_LOAD, PT_PHDR},
     endian::NativeEndian,
     file::{parse_ident, FileHeader},
 };
 
-pub(crate) struct ELFEhdr {
-    ehdr: FileHeader<NativeEndian>,
+pub struct ELFEhdr {
+    pub ehdr: FileHeader<NativeEndian>,
 }
 
 impl ELFEhdr {
@@ -87,13 +87,18 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         }
     }
 
-    /// validate ehdr and get phdrs
-    fn parse_ehdr(&mut self) -> crate::Result<Vec<Phdr>> {
+    /// load and validate ehdr
+    pub fn load_ehdr(&mut self) -> Result<ELFEhdr> {
         let mut buf: MaybeUninit<[u8; EHDR_SIZE]> = MaybeUninit::uninit();
         self.object.read(unsafe { &mut *buf.as_mut_ptr() }, 0)?;
         let buf = unsafe { buf.assume_init() };
         let ehdr = ELFEhdr::new(&buf)?;
         ehdr.validate()?;
+        Ok(ehdr)
+    }
+
+    /// parse ehdr to get phdrs
+    pub fn parse_ehdr(&mut self, ehdr: ELFEhdr) -> crate::Result<Vec<Phdr>> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
         let phdrs_size = phdr_end - phdr_start;
         let phdr_num = phdrs_size / PHDR_SIZE;
@@ -208,7 +213,10 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         T: ThreadLocal,
         U: Unwind,
     {
-        let phdrs = self.parse_ehdr()?;
+        let ehdr = self.load_ehdr()?;
+        let (phdr_start, phdr_end) = ehdr.phdr_range();
+        let entry = ehdr.ehdr.e_entry;
+        let phdrs = self.parse_ehdr(ehdr)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let segments = self.create_segments(&phdrs)?;
         // 获取基地址
@@ -216,6 +224,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         let mut unwind = None;
         let mut dynamics = None;
         let mut relro = None;
+        let mut phdr_mmap = None;
         #[cfg(feature = "tls")]
         let mut tls = None;
 
@@ -233,11 +242,34 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                         unsafe { U::new(phdr, segments.base()..segments.base() + segments.len()) }
                 }
                 PT_GNU_RELRO => relro = Some(ELFRelro::new::<M>(phdr, segments.base())),
+                PT_PHDR => {
+                    phdr_mmap = Some(unsafe {
+                        core::slice::from_raw_parts(
+                            (segments.base() + phdr.p_vaddr as usize) as *const Phdr,
+                            phdr.p_memsz as usize / size_of::<Phdr>(),
+                        )
+                    })
+                }
                 #[cfg(feature = "tls")]
                 elf::abi::PT_TLS => tls = unsafe { T::new(phdr, base) },
                 _ => {}
             }
         }
+
+        let phdrs = phdr_mmap.unwrap_or_else(|| {
+            for phdr in phdrs {
+                let cur_range = phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
+                if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                    return unsafe {
+                        core::slice::from_raw_parts(
+                            (segments.base() + phdr_start - cur_range.start) as *const Phdr,
+                            (cur_range.end - cur_range.start) / size_of::<Phdr>(),
+                        )
+                    };
+                }
+            }
+            unreachable!()
+        });
 
         let dynamics = dynamics
             .ok_or(parse_dynamic_error("elf file does not have dynamic"))?
@@ -249,8 +281,11 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             .iter()
             .map(|needed_lib| symbols.strtab().get(*needed_lib))
             .collect();
+        let user_data = UserData::empty();
+        let name = self.object.file_name();
         let elf_lib = ElfDylib {
-            name: self.object.file_name(),
+            name,
+            entry: entry as usize,
             phdrs,
             symbols,
             dynamic: dynamics.dyn_ptr,
@@ -260,7 +295,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             segments,
             fini_fn: dynamics.fini_fn,
             fini_array_fn: dynamics.fini_array_fn,
-            user_data: UserData::empty(),
+            user_data,
             dep_libs: Vec::new(),
             relro,
             relocation,

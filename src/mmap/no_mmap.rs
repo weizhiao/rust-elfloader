@@ -91,6 +91,10 @@ impl Mmap for MmapImpl {
                 dest.copy_from_slice(src);
                 Ok(NonNull::new_unchecked(ptr as _))
             }
+            #[allow(unused)]
+            _ => {
+                unreachable!()
+            }
         }
     }
 
