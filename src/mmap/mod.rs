@@ -43,12 +43,8 @@ bitflags! {
 }
 
 /// Represents the type of offset used for memory mapping operations.
-///
-/// This enum distinguishes between offsets based on a file descriptor and offsets based on a raw address.
 pub enum OffsetType {
     /// An offset type that is based on a file descriptor and a file offset.
-    ///
-    /// This variant is used when the memory mapping operation is related to a file.
     File {
         /// The file descriptor associated with the file.
         fd: c_int,
@@ -56,16 +52,14 @@ pub enum OffsetType {
         file_offset: usize,
     },
     /// An offset type that is based on a raw address.
-    ///
-    /// This variant is used when the memory mapping operation is related to an anonymous memory region or an address.
+    /// Points to the starting address of the content to be mapped
     Addr(*const u8),
 }
 
 /// Represents an offset along with its length for memory mapping operations.
-///
 /// This struct is used to specify the offset and length for memory-mapped regions.
 pub struct Offset {
-    /// The offset of the mapping content relative to the addr
+    /// The offset of the mapping content relative to the start address of the mapping
     pub align_offset: usize,
     /// The length of the memory region to be mapped.
     pub len: usize,
@@ -81,15 +75,10 @@ pub struct Offset {
 /// # Examples
 /// To use this trait, one would typically implement it for a specific type that represents a memory mapping facility.
 /// The implementations would handle the platform-specific details of memory management.
-///
-/// # Note
-/// The `ProtFlags`, `MapFlags`, and `Offset` types are expected to be defined elsewhere in the module,
-/// and are used here to specify the protection options, mapping flags, and offset for the memory mapping operations.
 pub trait Mmap {
     /// Maps a memory region into the process's address space.
     ///
     /// This function maps a file or device into memory at the specified address with the given protection and flags.
-    /// If the `addr` is `None`, the kernel will choose an address at which to map the memory.
     ///
     /// # Arguments
     /// * `addr` - An optional starting address for the mapping.

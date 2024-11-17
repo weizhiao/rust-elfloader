@@ -80,6 +80,7 @@ where
 }
 
 impl<O: ElfObject, M: Mmap> Loader<O, M> {
+    /// Create a new loader
     pub fn new(object: O) -> Self {
         Self {
             object,
@@ -87,7 +88,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         }
     }
 
-    /// load and validate ehdr
+    /// Load and validate ehdr
     pub fn load_ehdr(&mut self) -> Result<ELFEhdr> {
         let mut buf: MaybeUninit<[u8; EHDR_SIZE]> = MaybeUninit::uninit();
         self.object.read(unsafe { &mut *buf.as_mut_ptr() }, 0)?;
@@ -97,7 +98,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         Ok(ehdr)
     }
 
-    /// parse ehdr to get phdrs
+    /// Parse ehdr to get phdrs
     pub fn parse_ehdr(&mut self, ehdr: ELFEhdr) -> crate::Result<Vec<Phdr>> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
         let phdrs_size = phdr_end - phdr_start;
@@ -208,6 +209,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         Ok(())
     }
 
+    /// Load a dynamic library into memory
     pub fn load_dylib<T, U>(mut self) -> Result<ElfDylib<T, U>>
     where
         T: ThreadLocal,

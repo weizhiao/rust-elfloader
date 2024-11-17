@@ -15,6 +15,7 @@ mod binary {
         ElfObject,
     };
 
+    /// An elf file stored in memory
     pub struct ElfBinary<'a> {
         name: &'a str,
         bytes: &'a [u8],
@@ -61,6 +62,7 @@ mod file {
         ElfObject, Result,
     };
 
+    /// An elf file saved in a file
     pub struct ElfFile {
         name: CString,
         file: File,

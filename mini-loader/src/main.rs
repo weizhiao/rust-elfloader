@@ -60,17 +60,6 @@ struct Aux {
 // argc <---sp
 #[no_mangle]
 unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
-    let argc = sp.read();
-    let argv = sp.add(1);
-    let env = sp.add(argc + 1 + 1);
-    let mut env_count = 0;
-    let mut cur_env = env;
-    while cur_env.read() != 0 {
-        env_count += 1;
-        cur_env = cur_env.add(1);
-    }
-    let auxv = env.add(env_count + 1).cast::<Aux>();
-
     let mut cur_dyn_ptr = dynv;
     let mut cur_dyn = &*dynv;
     let mut rela = None;
@@ -91,6 +80,18 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     let mut base = 0;
     let mut phnum = 0;
     let mut ph = null();
+
+    let argc = sp.read();
+    let env = sp.add(argc + 1 + 1);
+    let mut env_count = 0;
+    let mut cur_env = env;
+    while cur_env.read() != 0 {
+        env_count += 1;
+        cur_env = cur_env.add(1);
+    }
+    let auxv = env.add(env_count + 1).cast::<Aux>();
+
+    // 获得mini-loader的phdrs
     let mut cur_aux_ptr = auxv;
     let mut cur_aux = cur_aux_ptr.read();
     loop {
@@ -104,7 +105,6 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         cur_aux_ptr = cur_aux_ptr.add(1);
         cur_aux = cur_aux_ptr.read();
     }
-
     // 通常是0，需要自行计算
     if base == 0 {
         let phdrs = core::slice::from_raw_parts(ph, phnum);
@@ -130,7 +130,8 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     if argc == 1 {
         panic!("no input file");
     }
-
+    // 加载输入的elf文件
+    let argv = sp.add(1);
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
     let elf_file = MyFile::new(elf_name);
     let loader = Loader::<_, MmapImpl>::new(elf_file);
@@ -138,7 +139,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     let phdrs = dylib.phdrs();
     let mut interp_dylib = None;
     for phdr in phdrs {
-        // 加载动态加载器ld.so
+        // 加载动态加载器ld.so，如果有的话
         if phdr.p_type == PT_INTERP {
             let interp_name = CStr::from_ptr((dylib.base() + phdr.p_vaddr as usize) as _);
             let interp_file = MyFile::new(interp_name);
@@ -151,7 +152,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             break;
         }
     }
-
+    // 重新设置aux
     let mut cur_aux_ptr = auxv as *mut Aux;
     let mut cur_aux = &mut *cur_aux_ptr;
     loop {

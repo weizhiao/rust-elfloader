@@ -1,3 +1,11 @@
+//! # elf_loader
+//! A `lightweight`, `extensible`, and `high-performance` library for loading ELF files.
+//! ## Usage
+//! It implements the general steps for loading ELF files and leaves extension interfaces,
+//! allowing users to implement their own customized loaders.
+//! ## Example
+//! This repository provides an example of a [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) implemented using `elf_loader`.
+//! The miniloader can load PIE files and currently only supports `x86_64`.
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 
@@ -55,10 +63,12 @@ impl<T: ThreadLocal, U: Unwind> Debug for ElfDylib<T, U> {
     }
 }
 
+/// Handle the parts of the elf file related to the ehframe
 pub trait Unwind: Sized + 'static {
     unsafe fn new(phdr: &Phdr, map_range: Range<usize>) -> Option<Self>;
 }
 
+/// Handles the parts of the elf file related to thread local storage
 pub trait ThreadLocal: Sized + 'static {
     unsafe fn new(phdr: &Phdr, base: usize) -> Option<Self>;
     unsafe fn module_id(&self) -> usize;
@@ -128,21 +138,25 @@ where
 }
 
 impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
+    /// Get the entry point of the dynamic library.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry + self.base()
     }
 
+    /// Get phdrs of the dynamic library
     #[inline]
     pub fn phdrs(&self) -> &[Phdr] {
         self.phdrs
     }
 
+    /// Get the C-style name of the dynamic library.
     #[inline]
     pub fn cname(&self) -> &CStr {
         self.name.as_c_str()
     }
 
+    /// Get the name of the dynamic library.
     #[inline]
     pub fn name(&self) -> &str {
         self.name.to_str().unwrap()
@@ -153,6 +167,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         self.dynamic
     }
 
+    /// Get the base address of the dynamic library.
     #[inline]
     pub fn base(&self) -> usize {
         self.segments.base()
@@ -199,6 +214,7 @@ impl Debug for RelocatedInner {
     }
 }
 
+/// A symbol from dynamic library
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
     ptr: *mut (),
@@ -212,6 +228,7 @@ impl<'lib, T> ops::Deref for Symbol<'lib, T> {
     }
 }
 
+/// A dynamic library that has been relocated
 #[derive(Clone)]
 pub struct RelocatedDylib {
     pub(crate) inner: Arc<RelocatedInner>,
@@ -227,11 +244,7 @@ unsafe impl Send for RelocatedDylib {}
 unsafe impl Sync for RelocatedDylib {}
 
 impl RelocatedDylib {
-    /// Retrieves the list of dependent libraries.
-    ///
-    /// This method returns an optional reference to a vector of `RelocatedDylib` instances,
-    /// which represent the libraries that the current dynamic library depends on.
-    ///
+    /// Get dependent libraries.
     /// # Examples
     ///
     /// ```no_run
@@ -251,36 +264,31 @@ impl RelocatedDylib {
         }
     }
 
-    /// Retrieves the name of the dynamic library.
-    ///
-    /// This method returns a string slice that represents the name of the dynamic library.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// let library_name = library.name();
-    /// println!("The dynamic library name is: {}", library_name);
-    /// ```
+    /// Get the name of the dynamic library.
     #[inline]
     pub fn name(&self) -> &str {
         self.inner.name.to_str().unwrap()
     }
 
+    /// Get the C-style name of the dynamic library.
     #[inline]
     pub fn cname(&self) -> &CStr {
         &self.inner.name
     }
 
+    /// Get the base address of the dynamic library.
     #[inline]
     pub fn base(&self) -> usize {
         self.inner.base
     }
 
+    /// Get the user data of the dynamic library.
     #[inline]
     pub fn user_data(&self) -> &UserData {
         &self.inner.user_data
     }
 
+    /// Get the entry point of the dynamic library.
     #[inline]
     pub fn entry(&self) -> usize {
         self.base() + self.inner.entry
@@ -320,24 +328,9 @@ impl RelocatedDylib {
     /// most likely invalid.
     ///
     /// # Safety
-    ///
     /// Users of this API must specify the correct type of the function or variable loaded.
     ///
-    ///
     /// # Examples
-    ///
-    /// Given a loaded library:
-    ///
-    /// ```no_run
-    /// # use ::dlopen_rs::ELFLibrary;
-    /// let lib = ELFLibrary::from_file("/path/to/awesome.module")
-    ///		.unwrap()
-    ///		.relocate(&[])
-    ///		.unwrap();
-    /// ```
-    ///
-    /// Loading and using a function looks like this:
-    ///
     /// ```no_run
     /// unsafe {
     ///     let awesome_function: Symbol<unsafe extern fn(f64) -> f64> =
@@ -345,9 +338,7 @@ impl RelocatedDylib {
     ///     awesome_function(0.42);
     /// }
     /// ```
-    ///
     /// A static variable may also be loaded and inspected:
-    ///
     /// ```no_run
     /// unsafe {
     ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
@@ -365,31 +356,12 @@ impl RelocatedDylib {
             .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
     }
 
-    /// Attempts to load a versioned symbol from the dynamically-linked library.
-    ///
-    /// # Safety
-    /// This function is unsafe because it involves raw pointer manipulation and
-    /// dereferencing. The caller must ensure that the library handle is valid
-    /// and that the symbol exists and has the correct type.
-    ///
-    /// # Parameters
-    /// - `&'lib self`: A reference to the library instance from which the symbol will be loaded.
-    /// - `name`: The name of the symbol to load.
-    /// - `version`: The version of the symbol to load.
-    ///
-    /// # Returns
-    /// If the symbol is found and has the correct type, this function returns
-    /// `Ok(Symbol<'lib, T>)`, where `Symbol` is a wrapper around a raw function pointer.
-    /// If the symbol cannot be found or an error occurs, it returns an `Err` with a message.
+    /// Load a versioned symbol from the dynamic library.
     ///
     /// # Examples
     /// ```
     /// let symbol = unsafe { lib.get_version::<fn()>>("function_name", "1.0").unwrap() };
     /// ```
-    ///
-    /// # Errors
-    /// Returns a custom error if the symbol cannot be found, or if there is a problem
-    /// retrieving the symbol.
     #[cfg(feature = "version")]
     pub unsafe fn get_version<'lib, T>(
         &'lib self,
@@ -429,9 +401,6 @@ pub enum Error {
     ParseEhdrError {
         msg: String,
     },
-    UnKnownError {
-        msg: String,
-    },
 }
 
 impl Display for Error {
@@ -444,7 +413,6 @@ impl Display for Error {
             Error::FindSymbolError { msg } => write!(f, "{msg}"),
             Error::ParseDynamicError { msg } => write!(f, "{msg}"),
             Error::ParseEhdrError { msg } => write!(f, "{msg}"),
-            Error::UnKnownError { msg } => write!(f, "{msg}"),
         }
     }
 }

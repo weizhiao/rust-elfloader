@@ -1,6 +1,8 @@
 #![no_std]
 extern crate alloc;
 
+pub mod syscall;
+
 use alloc::ffi::CString;
 use core::{
     ffi::{c_int, CStr},
@@ -13,7 +15,6 @@ use elf_loader::{
     ThreadLocal, Unwind,
 };
 use syscall::{lseek, mmap, mprotect, munmap, open, read, MAP_ANONYMOUS, SEEK_SET};
-pub mod syscall;
 
 pub struct MyFile {
     fd: i32,

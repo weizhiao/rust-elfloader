@@ -34,6 +34,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         &self.needed_libs
     }
 
+    /// Relocate dynamic library with given libraries
     pub fn relocate<S>(self, libs: impl AsRef<[RelocatedDylib]>) -> Self
     where
         S: StaticSymbol,
@@ -41,6 +42,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         self.relocate_impl(libs.as_ref(), |name| S::symbol(name))
     }
 
+    /// Relocate dynamic library with given libraries and a custom symbol finder function
     pub fn relocate_with<S, F>(self, libs: impl AsRef<[RelocatedDylib]>, func: F) -> Self
     where
         F: Fn(&str) -> Option<*const ()> + 'static,
@@ -205,11 +207,13 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         };
     }
 
+    /// Whether there are any items that have not been relocated
     #[inline]
     pub fn is_finished(&self) -> bool {
         self.relocation.is_finished()
     }
 
+    /// Finish relocation
     pub fn finish(mut self) -> Result<RelocatedDylib> {
         if !self.is_finished() {
             return Err(relocate_error(self.not_relocated()));

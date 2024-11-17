@@ -1,4 +1,4 @@
-use super::{Mmap, ProtFlags};
+use super::{MapFlags, Mmap, ProtFlags};
 use crate::segment::MASK;
 use crate::Error;
 use core::ptr::NonNull;
@@ -36,7 +36,7 @@ impl Mmap for MmapImpl {
                     addr.unwrap_or(0) as _,
                     len,
                     ProtFlags::PROT_WRITE.bits(),
-                    flags.bits(),
+                    (flags | MapFlags::MAP_ANONYMOUS).bits(),
                     -1,
                     0,
                 );
