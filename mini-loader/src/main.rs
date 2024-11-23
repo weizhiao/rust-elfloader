@@ -16,13 +16,13 @@ use linked_list_allocator::LockedHeap;
 use mini_loader::{println, syscall::exit, MmapImpl, MyFile, MyThreadLocal, MyUnwind};
 use syscalls::{syscall3, Sysno};
 
-const AT_NULL: usize = 0;
-const AT_PHDR: usize = 3;
-const AT_PHENT: usize = 4;
-const AT_PHNUM: usize = 5;
-const AT_BASE: usize = 7;
-const AT_ENTRY: usize = 9;
-const AT_EXECFN: usize = 31;
+const AT_NULL: u64 = 0;
+const AT_PHDR: u64 = 3;
+const AT_PHENT: u64 = 4;
+const AT_PHNUM: u64 = 5;
+const AT_BASE: u64 = 7;
+const AT_ENTRY: u64 = 9;
+const AT_EXECFN: u64 = 31;
 
 #[global_allocator]
 static mut ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -48,8 +48,8 @@ global_asm!(include_str!("trampoline.S"));
 
 #[repr(C)]
 struct Aux {
-    tag: usize,
-    val: usize,
+    tag: u64,
+    val: u64,
 }
 
 // auxv <---sp + argc + 2 + env_count + 2
@@ -99,7 +99,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             AT_NULL => break,
             AT_PHDR => ph = cur_aux.val as *const Phdr,
             AT_PHNUM => phnum = cur_aux.val,
-            AT_BASE => base = cur_aux.val,
+            AT_BASE => base = cur_aux.val as usize,
             _ => {}
         }
         cur_aux_ptr = cur_aux_ptr.add(1);
@@ -107,7 +107,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
     // 通常是0，需要自行计算
     if base == 0 {
-        let phdrs = core::slice::from_raw_parts(ph, phnum);
+        let phdrs = core::slice::from_raw_parts(ph, phnum as usize);
         for phdr in phdrs {
             if phdr.p_type == PT_DYNAMIC {
                 base = dynv as usize - phdr.p_vaddr as usize;
@@ -158,12 +158,17 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     loop {
         match cur_aux.tag {
             AT_NULL => break,
-            AT_PHDR => cur_aux.val = phdrs.as_ptr() as usize,
-            AT_PHNUM => cur_aux.val = phdrs.len(),
-            AT_PHENT => cur_aux.val = size_of::<Phdr>(),
-            AT_ENTRY => cur_aux.val = dylib.entry(),
-            AT_EXECFN => cur_aux.val = argv.add(1).read(),
-            AT_BASE => cur_aux.val = 0,
+            AT_PHDR => cur_aux.val = phdrs.as_ptr() as u64,
+            AT_PHNUM => cur_aux.val = phdrs.len() as u64,
+            AT_PHENT => cur_aux.val = size_of::<Phdr>() as u64,
+            AT_ENTRY => cur_aux.val = dylib.entry() as u64,
+            AT_EXECFN => cur_aux.val = argv.add(1).read() as u64,
+            AT_BASE => {
+                cur_aux.val = interp_dylib
+                    .as_ref()
+                    .map(|dylib| dylib.entry())
+                    .unwrap_or(dylib.entry()) as u64
+            }
             _ => {}
         }
         cur_aux_ptr = cur_aux_ptr.add(1);
@@ -186,6 +191,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
 }
 
+#[inline]
 pub fn print_str(s: &str) {
     let _ = unsafe { syscall3(Sysno::write, 1, s.as_ptr() as usize, s.len()) }.unwrap();
 }
