@@ -62,14 +62,7 @@ impl Mmap for MmapImpl {
         prot: super::ProtFlags,
         flags: super::MapFlags,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
-        let ptr = mmap(
-            addr as _,
-            len,
-            prot.bits(),
-            flags.bits() | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        );
+        let ptr = mmap(addr as _, len, prot.bits(), flags.bits(), -1, 0);
         if ptr == libc::MAP_FAILED {
             return Err(map_error("mmap anonymous failed"));
         }

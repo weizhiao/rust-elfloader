@@ -1,5 +1,4 @@
 use crate::{arch::ElfSymbol, dynamic::ElfDynamic};
-use core::ops::Shr;
 
 #[derive(Clone)]
 struct ElfGnuHash {
@@ -76,20 +75,25 @@ impl ElfGnuHash {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct ElfStringTable {
-    data: &'static [u8],
+    data: *const u8,
 }
 
 impl ElfStringTable {
-    const fn new(data: &'static [u8]) -> Self {
+    const fn new(data: *const u8) -> Self {
         ElfStringTable { data }
     }
 
-    pub(crate) fn get(&self, offset: usize) -> &'static str {
-        let start = self.data.get(offset..).unwrap();
-        let end = start.iter().position(|&b| b == 0u8).unwrap();
-        unsafe { core::str::from_utf8_unchecked(start.split_at(end).0) }
+    pub(crate) unsafe fn get(&self, offset: usize) -> &'static str {
+        let start = self.data.add(offset);
+        let mut end = start;
+        while end.read() != 0 {
+            end = end.add(1)
+        }
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+            start,
+            end as usize - start as usize,
+        ))
     }
 }
 
@@ -133,9 +137,7 @@ impl SymbolData {
     pub(crate) fn new(dynamic: &ElfDynamic) -> Self {
         let hashtab = unsafe { ElfGnuHash::parse(dynamic.hashtab as *const u8) };
         let symtab = dynamic.symtab as *const ElfSymbol;
-        let strtab = ElfStringTable::new(unsafe {
-            core::slice::from_raw_parts(dynamic.strtab as *const u8, dynamic.strtab_size)
-        });
+        let strtab = ElfStringTable::new(dynamic.strtab as *const u8);
         #[cfg(feature = "version")]
         let version = super::version::ELFVersion::new(
             dynamic.version_idx,
@@ -164,7 +166,7 @@ impl SymbolData {
         if filter & (1 << (hash % bloom_width)) == 0 {
             return None;
         }
-        let hash2 = hash.shr(self.hashtab.nshift);
+        let hash2 = hash >> self.hashtab.nshift;
         if filter & (1 << (hash2 % bloom_width)) == 0 {
             return None;
         }
@@ -185,7 +187,7 @@ impl SymbolData {
             let chain_hash = unsafe { cur_chain.read() };
             if hash | 1 == chain_hash | 1 {
                 let cur_symbol = unsafe { &*cur_symbol_ptr };
-                let sym_name = self.strtab.get(cur_symbol.st_name as usize);
+                let sym_name = unsafe { self.strtab.get(cur_symbol.st_name as usize) };
                 #[cfg(feature = "version")]
                 if sym_name == symbol.name && self.check_match(dynsym_idx, &symbol.version) {
                     return Some(cur_symbol);
@@ -205,9 +207,10 @@ impl SymbolData {
         None
     }
 
+    #[inline]
     pub(crate) fn rel_symbol(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
         let symbol = unsafe { &*self.symtab.add(idx) };
-        let name = self.strtab.get(symbol.st_name as usize);
+        let name = unsafe { self.strtab.get(symbol.st_name as usize) };
         (
             symbol,
             SymbolInfo {

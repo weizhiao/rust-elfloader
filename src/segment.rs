@@ -30,11 +30,11 @@ impl ELFRelro {
 }
 
 pub struct ElfSegments {
-    memory: NonNull<c_void>,
-    /// -addr_min / -addr_min + align_offset
-    offset: isize,
-    len: usize,
-    munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
+    pub(crate) memory: NonNull<c_void>,
+    /// addr_min
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
+    pub(crate) munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
 }
 
 impl Debug for ElfSegments {
@@ -71,13 +71,12 @@ impl Drop for ElfSegments {
 impl ElfSegments {
     pub fn new(
         memory: NonNull<c_void>,
-        offset: isize,
         len: usize,
         munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
     ) -> Self {
         ElfSegments {
             memory,
-            offset,
+            offset: 0,
             len,
             munmap,
         }
@@ -91,13 +90,11 @@ impl ElfSegments {
     }
 
     #[inline]
-    #[allow(unused)]
-    pub(crate) fn offset(&self) -> isize {
+    pub(crate) fn offset(&self) -> usize {
         self.offset
     }
 
     #[inline]
-    #[allow(unused)]
     pub(crate) fn len(&self) -> usize {
         self.len
     }
@@ -105,7 +102,7 @@ impl ElfSegments {
     /// base = memory_addr - addr_min
     #[inline]
     pub(crate) fn base(&self) -> usize {
-        unsafe { self.memory.as_ptr().cast::<u8>().byte_offset(self.offset) as usize }
+        unsafe { self.memory.as_ptr().cast::<u8>().sub(self.offset) as usize }
     }
 
     /// start = memory_addr - addr_min
@@ -113,7 +110,7 @@ impl ElfSegments {
     pub(crate) fn as_mut_slice(&self) -> &'static mut [u8] {
         unsafe {
             core::slice::from_raw_parts_mut(
-                self.memory.as_ptr().cast::<u8>().byte_offset(self.offset),
+                self.memory.as_ptr().cast::<u8>().sub(self.offset),
                 self.len,
             )
         }

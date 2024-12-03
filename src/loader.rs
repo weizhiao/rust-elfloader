@@ -81,7 +81,7 @@ where
 
 impl<O: ElfObject, M: Mmap> Loader<O, M> {
     /// Create a new loader
-    pub fn new(object: O) -> Self {
+    pub const fn new(object: O) -> Self {
         Self {
             object,
             _marker: PhantomData,
@@ -140,9 +140,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         // 按页对齐
         max_vaddr = (max_vaddr + PAGE_SIZE - 1) & MASK;
         min_vaddr &= MASK as usize;
-
         let total_size = max_vaddr - min_vaddr;
-
         let memory = unsafe {
             M::mmap(
                 None,
@@ -152,17 +150,17 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                 self.object.transport(min_off, min_filesz),
             )?
         };
-        Ok(ElfSegments::new(
+        Ok(ElfSegments {
             memory,
-            -(min_vaddr as isize),
-            total_size,
-            M::munmap,
-        ))
+            offset: min_vaddr,
+            len: total_size,
+            munmap: M::munmap,
+        })
     }
 
     fn load_segment(&self, segments: &ElfSegments, phdr: &Phdr) -> crate::Result<()> {
         // 映射的起始地址与结束地址都是页对齐的
-        let addr_min = (-segments.offset()) as usize;
+        let addr_min = segments.offset();
         let base = segments.base();
         let min_vaddr = phdr.p_vaddr as usize & MASK;
         let max_vaddr = (phdr.p_vaddr as usize + phdr.p_memsz as usize + PAGE_SIZE - 1) & MASK;
@@ -200,7 +198,9 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                             zero_mmap_addr,
                             zero_mmap_len,
                             prot,
-                            mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
+                            mmap::MapFlags::MAP_PRIVATE
+                                | mmap::MapFlags::MAP_FIXED
+                                | mmap::MapFlags::MAP_ANONYMOUS,
                         )?;
                     }
                 }
@@ -210,7 +210,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
     }
 
     /// Load a dynamic library into memory
-    pub fn load_dylib<T, U>(mut self) -> Result<ElfDylib<T, U>>
+    pub fn load_dylib<T, U>(mut self, lazy_bind: bool) -> Result<ElfDylib<T, U>>
     where
         T: ThreadLocal,
         U: Unwind,
@@ -257,7 +257,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                 _ => {}
             }
         }
-
+        // 获取映射到内存中的Phdr
         let phdrs = phdr_mmap.unwrap_or_else(|| {
             for phdr in phdrs {
                 let cur_range = phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
@@ -272,7 +272,6 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             }
             unreachable!()
         });
-
         let dynamics = dynamics
             .ok_or(parse_dynamic_error("elf file does not have dynamic"))?
             .finish(base);
@@ -281,7 +280,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         let needed_libs: Vec<&'static str> = dynamics
             .needed_libs
             .iter()
-            .map(|needed_lib| symbols.strtab().get(*needed_lib))
+            .map(|needed_lib| unsafe { symbols.strtab().get(*needed_lib) })
             .collect();
         let user_data = UserData::empty();
         let name = self.object.file_name();
@@ -299,11 +298,13 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             fini_array_fn: dynamics.fini_array_fn,
             user_data,
             dep_libs: Vec::new(),
+            closures: Vec::new(),
             relro,
             relocation,
             init_fn: dynamics.init_fn,
             init_array_fn: dynamics.init_array_fn,
             needed_libs,
+            lazy: lazy_bind,
             _marker: PhantomData,
         };
         Ok(elf_lib)

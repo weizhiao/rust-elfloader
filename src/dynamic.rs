@@ -1,5 +1,5 @@
 use crate::{
-    arch::{Dyn, Rela},
+    arch::{Dyn, ElfRela},
     parse_dynamic_error, Result,
 };
 use alloc::vec::Vec;
@@ -14,8 +14,6 @@ pub struct ElfRawDynamic {
     pub symtab_off: usize,
     /// DT_STRTAB
     pub strtab_off: usize,
-    /// DT_STRSZ
-    pub strtab_size: usize,
     /// DT_JMPREL
     pub pltrel_off: Option<usize>,
     /// DT_PLTRELSZ
@@ -55,7 +53,6 @@ impl ElfRawDynamic {
         let mut hash_off = None;
         let mut symtab_off = None;
         let mut strtab_off = None;
-        let mut strtab_size = None;
         let mut pltrel_size = None;
         let mut pltrel_off = None;
         let mut rela_off = None;
@@ -82,7 +79,6 @@ impl ElfRawDynamic {
                 DT_GNU_HASH => hash_off = Some(dynamic.d_un as usize),
                 DT_SYMTAB => symtab_off = Some(dynamic.d_un as usize),
                 DT_STRTAB => strtab_off = Some(dynamic.d_un as usize),
-                DT_STRSZ => strtab_size = Some(dynamic.d_un as usize),
                 DT_PLTRELSZ => pltrel_size = Some(dynamic.d_un as usize),
                 DT_JMPREL => pltrel_off = Some(dynamic.d_un as usize),
                 DT_RELA => rela_off = Some(dynamic.d_un as usize),
@@ -104,7 +100,6 @@ impl ElfRawDynamic {
             cur_dyn_ptr = unsafe { cur_dyn_ptr.add(1) };
             dynamic = unsafe { &*cur_dyn_ptr };
         }
-
         let hash_off = hash_off.ok_or(parse_dynamic_error(
             "dynamic section does not have DT_GNU_HASH",
         ))?;
@@ -114,16 +109,12 @@ impl ElfRawDynamic {
         let strtab_off = strtab_off.ok_or(parse_dynamic_error(
             "dynamic section does not have DT_STRTAB",
         ))?;
-        let strtab_size = strtab_size.ok_or(parse_dynamic_error(
-            "dynamic section does not have DT_STRSZ",
-        ))?;
         Ok(ElfRawDynamic {
             dyn_ptr: dynamic_ptr,
             hash_off,
             symtab_off,
             needed_libs,
             strtab_off,
-            strtab_size,
             pltrel_off,
             pltrel_size,
             rela_off,
@@ -146,14 +137,14 @@ impl ElfRawDynamic {
     pub fn finish(self, base: usize) -> ElfDynamic {
         let pltrel = self.pltrel_off.map(|pltrel_off| unsafe {
             from_raw_parts(
-                (base + pltrel_off) as *const Rela,
-                self.pltrel_size.unwrap_unchecked() / size_of::<Rela>(),
+                (base + pltrel_off) as *const ElfRela,
+                self.pltrel_size.unwrap_unchecked() / size_of::<ElfRela>(),
             )
         });
         let dynrel = self.rela_off.map(|rel_off| unsafe {
             from_raw_parts(
-                (base + rel_off) as *const Rela,
-                self.rela_size.unwrap_unchecked() / size_of::<Rela>(),
+                (base + rel_off) as *const ElfRela,
+                self.rela_size.unwrap_unchecked() / size_of::<ElfRela>(),
             )
         });
         let init_fn = self
@@ -196,7 +187,6 @@ impl ElfRawDynamic {
             hashtab: self.hash_off + base,
             symtab: self.symtab_off + base,
             strtab: self.strtab_off + base,
-            strtab_size: self.strtab_size,
             init_fn,
             init_array_fn,
             fini_fn,
@@ -216,13 +206,12 @@ pub struct ElfDynamic {
     pub hashtab: usize,
     pub symtab: usize,
     pub strtab: usize,
-    pub strtab_size: usize,
     pub init_fn: Option<extern "C" fn()>,
     pub init_array_fn: Option<&'static [extern "C" fn()]>,
     pub fini_fn: Option<extern "C" fn()>,
     pub fini_array_fn: Option<&'static [extern "C" fn()]>,
-    pub pltrel: Option<&'static [Rela]>,
-    pub dynrel: Option<&'static [Rela]>,
+    pub pltrel: Option<&'static [ElfRela]>,
+    pub dynrel: Option<&'static [ElfRela]>,
     pub needed_libs: Vec<usize>,
     pub version_idx: Option<usize>,
     pub verneed: Option<(usize, usize)>,

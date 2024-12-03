@@ -52,12 +52,17 @@ impl ElfRela {
     }
 
     #[inline]
+    pub fn r_symbol(&self) -> usize {
+        self.rela.r_info as usize >> REL_BIT
+    }
+
+    #[inline]
     pub fn r_offset(&self) -> usize {
         self.rela.r_offset as usize
     }
 
     #[inline]
-    pub fn r_append(&self) -> usize {
+    pub fn r_addend(&self) -> usize {
         self.rela.r_addend as usize
     }
 }

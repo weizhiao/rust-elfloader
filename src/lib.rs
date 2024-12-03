@@ -36,7 +36,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use arch::{Dyn, Phdr};
+use arch::{Dyn, ElfRela, Phdr};
 use core::{
     any::Any,
     ffi::CStr,
@@ -79,6 +79,7 @@ pub struct UserData {
 }
 
 impl UserData {
+    #[inline]
     pub const fn empty() -> Self {
         Self { data: Vec::new() }
     }
@@ -124,6 +125,8 @@ where
     user_data: UserData,
     /// dependency libraries
     dep_libs: Vec<RelocatedDylib>,
+    /// function closure
+    closures: Vec<Box<dyn Fn(&str) -> Option<*const ()>>>,
     /// rela.dyn and rela.plt
     relocation: ElfRelocation,
     /// GNU_RELRO segment
@@ -134,6 +137,8 @@ where
     init_array_fn: Option<&'static [extern "C" fn()]>,
     /// needed libs' name
     needed_libs: Vec<&'static str>,
+    /// lazy binding
+    lazy: bool,
     _marker: PhantomData<T>,
 }
 
@@ -187,10 +192,9 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
 #[allow(unused)]
 pub(crate) struct RelocatedInner {
     name: CString,
-    entry: usize,
-    base: usize,
     symbols: SymbolData,
     dynamic: *const Dyn,
+    pltrel: *const ElfRela,
     #[cfg(feature = "tls")]
     tls: Option<usize>,
     /// .fini
@@ -202,14 +206,15 @@ pub(crate) struct RelocatedInner {
     /// semgents
     segments: ElfSegments,
     /// dependency libraries
-    dep_libs: Vec<RelocatedDylib>,
+    dep_libs: Box<[RelocatedDylib]>,
+    /// function closure
+    closures: Box<[Box<dyn Fn(&str) -> Option<*const ()>>]>,
 }
 
 impl Debug for RelocatedInner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RelocatedLibrary")
             .field("name", &self.name)
-            .field("base", &self.base)
             .finish()
     }
 }
@@ -256,7 +261,8 @@ impl RelocatedDylib {
     ///     println!("No dependencies found.");
     /// }
     /// ```
-    pub fn dep_libs(&self) -> Option<&Vec<RelocatedDylib>> {
+    #[inline]
+    pub fn dep_libs(&self) -> Option<&[RelocatedDylib]> {
         if self.inner.dep_libs.is_empty() {
             None
         } else {
@@ -279,7 +285,7 @@ impl RelocatedDylib {
     /// Get the base address of the dynamic library.
     #[inline]
     pub fn base(&self) -> usize {
-        self.inner.base
+        self.inner.segments.base()
     }
 
     /// Get the user data of the dynamic library.
@@ -288,28 +294,21 @@ impl RelocatedDylib {
         &self.inner.user_data
     }
 
-    /// Get the entry point of the dynamic library.
-    #[inline]
-    pub fn entry(&self) -> usize {
-        self.base() + self.inner.entry
-    }
-
     #[allow(unused_variables)]
     pub unsafe fn from_raw(
         name: CString,
-        entry: usize,
         base: usize,
         dynamic: ElfDynamic,
         tls: Option<usize>,
-        segments: ElfSegments,
+        mut segments: ElfSegments,
         user_data: UserData,
     ) -> Self {
+        segments.offset = segments.memory.as_ptr() as usize - base;
         Self {
             inner: Arc::new(RelocatedInner {
                 name,
-                entry,
-                base,
                 symbols: SymbolData::new(&dynamic),
+                pltrel: core::ptr::null(),
                 dynamic: dynamic.dyn_ptr,
                 #[cfg(feature = "tls")]
                 tls,
@@ -317,7 +316,8 @@ impl RelocatedDylib {
                 fini_fn: None,
                 fini_array_fn: None,
                 user_data: UserData::empty(),
-                dep_libs: Vec::new(),
+                dep_libs: Box::new([]),
+                closures: Box::new([]),
             }),
         }
     }

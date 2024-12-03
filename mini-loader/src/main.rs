@@ -123,7 +123,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             print_str("unknown rela type");
         }
         let ptr = (rela.r_offset() + base) as *mut usize;
-        ptr.write(base + rela.r_append());
+        ptr.write(base + rela.r_addend());
     }
     // 至此就完成自举，可以进行函数调用了
     ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HAEP_SIZE);
@@ -135,7 +135,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
     let elf_file = MyFile::new(elf_name);
     let loader = Loader::<_, MmapImpl>::new(elf_file);
-    let dylib = loader.load_dylib::<MyThreadLocal, MyUnwind>().unwrap();
+    let dylib = loader.load_dylib::<MyThreadLocal, MyUnwind>(false).unwrap();
     let phdrs = dylib.phdrs();
     let mut interp_dylib = None;
     for phdr in phdrs {
@@ -146,7 +146,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             let interp_loader = Loader::<_, MmapImpl>::new(interp_file);
             interp_dylib = Some(
                 interp_loader
-                    .load_dylib::<MyThreadLocal, MyUnwind>()
+                    .load_dylib::<MyThreadLocal, MyUnwind>(false)
                     .unwrap(),
             );
             break;
