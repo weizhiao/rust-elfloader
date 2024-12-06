@@ -210,7 +210,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
     }
 
     /// Load a dynamic library into memory
-    pub fn load_dylib<T, U>(mut self, lazy_bind: bool) -> Result<ElfDylib<T, U>>
+    pub fn load_dylib<T, U>(mut self, lazy_bind: Option<bool>) -> Result<ElfDylib<T, U>>
     where
         T: ThreadLocal,
         U: Unwind,
@@ -304,7 +304,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             init_fn: dynamics.init_fn,
             init_array_fn: dynamics.init_array_fn,
             needed_libs,
-            lazy: lazy_bind,
+            lazy: lazy_bind.unwrap_or(!dynamics.bind_now),
             _marker: PhantomData,
             got: dynamics.got,
         };

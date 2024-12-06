@@ -146,7 +146,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             let interp_loader = Loader::<_, MmapImpl>::new(interp_file);
             interp_dylib = Some(
                 interp_loader
-                    .load_dylib::<MyThreadLocal, MyUnwind>(false)
+                    .load_dylib::<MyThreadLocal, MyUnwind>(None)
                     .unwrap(),
             );
             break;

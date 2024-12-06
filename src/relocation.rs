@@ -197,10 +197,10 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
     pub fn is_finished(&self) -> bool {
         let mut finished = true;
         if let Some(array) = &self.relocation.pltrel {
-            finished = array.is_finished();
+            finished &= array.is_finished();
         }
         if let Some(array) = &self.relocation.dynrel {
-            finished = array.is_finished();
+            finished &= array.is_finished();
         }
         finished
     }
@@ -300,18 +300,22 @@ unsafe extern "C" fn dl_fixup(dylib: &RelocatedInner, rela_idx: usize) -> usize 
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
     assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
-    let (_, syminfo) = dylib.symbols.rel_symbol(r_sym);
+    let (dynsym, syminfo) = dylib.symbols.rel_symbol(r_sym);
     let symbol = dylib
         .closures
         .iter()
         .find_map(|f| f(syminfo.name))
         .or_else(|| {
-            for lib in dylib.dep_libs.iter() {
-                if let Some(sym) = lib.inner.symbols.get_sym(&syminfo) {
-                    return Some((sym.st_value as usize + lib.base()) as _);
-                }
+            if dynsym.st_shndx != SHN_UNDEF {
+                Some((dynsym.st_value as usize + dylib.segments.base()) as _)
+            } else {
+                dylib.dep_libs.iter().find_map(|lib| {
+                    lib.inner
+                        .symbols
+                        .get_sym(&syminfo)
+                        .map(|sym| (sym.st_value as usize + lib.base()) as _)
+                })
             }
-            None
         })
         .expect("lazy bind fail") as usize;
 

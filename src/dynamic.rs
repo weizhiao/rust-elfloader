@@ -14,6 +14,8 @@ pub struct ElfRawDynamic {
     pub symtab_off: usize,
     /// DT_STRTAB
     pub strtab_off: usize,
+    /// DT_FLAGS
+    pub flags: usize,
     /// DT_PLTGOT
     pub got_off: Option<usize>,
     /// DT_JMPREL
@@ -72,6 +74,7 @@ impl ElfRawDynamic {
         let mut verneed_num = None;
         let mut verdef_off = None;
         let mut verdef_num = None;
+        let mut flags = 0;
         let mut needed_libs = Vec::new();
 
         let mut cur_dyn_ptr = dynamic_ptr;
@@ -79,6 +82,7 @@ impl ElfRawDynamic {
 
         loop {
             match dynamic.d_tag {
+                DT_FLAGS => flags = dynamic.d_un as usize,
                 DT_PLTGOT => got_off = Some(dynamic.d_un as usize),
                 DT_NEEDED => needed_libs.push(dynamic.d_un as usize),
                 DT_GNU_HASH => hash_off = Some(dynamic.d_un as usize),
@@ -112,6 +116,7 @@ impl ElfRawDynamic {
             dyn_ptr: dynamic_ptr,
             hash_off,
             symtab_off,
+            flags,
             got_off,
             needed_libs,
             strtab_off,
@@ -187,6 +192,7 @@ impl ElfRawDynamic {
             hashtab: self.hash_off + base,
             symtab: self.symtab_off + base,
             strtab: self.strtab_off + base,
+            bind_now: self.flags & DF_BIND_NOW as usize != 0,
             got: self.got_off.map(|off| (base + off) as *mut usize),
             init_fn,
             init_array_fn,
@@ -207,6 +213,7 @@ pub struct ElfDynamic {
     pub hashtab: usize,
     pub symtab: usize,
     pub strtab: usize,
+    pub bind_now: bool,
     pub got: Option<*mut usize>,
     pub init_fn: Option<extern "C" fn()>,
     pub init_array_fn: Option<&'static [extern "C" fn()]>,

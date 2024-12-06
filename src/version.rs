@@ -295,7 +295,7 @@ impl ELFVersion {
         if let Some((ptr, num)) = verdefs {
             let verdef_table = VerDefTable { ptr: ptr as _, num };
             for (verdef, mut vd_iter) in verdef_table.into_iter() {
-                let name = strtab.get(vd_iter.next().unwrap().vda_name as usize);
+                let name = unsafe { strtab.get(vd_iter.next().unwrap().vda_name as usize) };
                 versions[verdef.index()] = Version {
                     name,
                     hash: verdef.vd_hash,
@@ -306,7 +306,7 @@ impl ELFVersion {
             let verneed_table = VerNeedTable { ptr: ptr as _, num };
             for (_, vna_iter) in verneed_table.into_iter() {
                 for aux in vna_iter {
-                    let name = strtab.get(aux.vna_name as usize);
+                    let name = unsafe { strtab.get(aux.vna_name as usize) };
                     versions[aux.index()] = Version {
                         name,
                         hash: aux.vna_hash,
