@@ -14,6 +14,8 @@ pub struct ElfRawDynamic {
     pub symtab_off: usize,
     /// DT_STRTAB
     pub strtab_off: usize,
+    /// DT_PLTGOT
+    pub got_off: Option<usize>,
     /// DT_JMPREL
     pub pltrel_off: Option<usize>,
     /// DT_PLTRELSZ
@@ -50,9 +52,11 @@ pub struct ElfRawDynamic {
 
 impl ElfRawDynamic {
     pub fn new(dynamic_ptr: *const Dyn) -> Result<ElfRawDynamic> {
+        // 这两个是一个格式正常的elf动态库中必须存在的
+        let mut symtab_off = 0;
+        let mut strtab_off = 0;
         let mut hash_off = None;
-        let mut symtab_off = None;
-        let mut strtab_off = None;
+        let mut got_off = None;
         let mut pltrel_size = None;
         let mut pltrel_off = None;
         let mut rela_off = None;
@@ -75,10 +79,11 @@ impl ElfRawDynamic {
 
         loop {
             match dynamic.d_tag {
+                DT_PLTGOT => got_off = Some(dynamic.d_un as usize),
                 DT_NEEDED => needed_libs.push(dynamic.d_un as usize),
                 DT_GNU_HASH => hash_off = Some(dynamic.d_un as usize),
-                DT_SYMTAB => symtab_off = Some(dynamic.d_un as usize),
-                DT_STRTAB => strtab_off = Some(dynamic.d_un as usize),
+                DT_SYMTAB => symtab_off = dynamic.d_un as usize,
+                DT_STRTAB => strtab_off = dynamic.d_un as usize,
                 DT_PLTRELSZ => pltrel_size = Some(dynamic.d_un as usize),
                 DT_JMPREL => pltrel_off = Some(dynamic.d_un as usize),
                 DT_RELA => rela_off = Some(dynamic.d_un as usize),
@@ -103,16 +108,11 @@ impl ElfRawDynamic {
         let hash_off = hash_off.ok_or(parse_dynamic_error(
             "dynamic section does not have DT_GNU_HASH",
         ))?;
-        let symtab_off = symtab_off.ok_or(parse_dynamic_error(
-            "dynamic section does not have DT_SYMTAB",
-        ))?;
-        let strtab_off = strtab_off.ok_or(parse_dynamic_error(
-            "dynamic section does not have DT_STRTAB",
-        ))?;
         Ok(ElfRawDynamic {
             dyn_ptr: dynamic_ptr,
             hash_off,
             symtab_off,
+            got_off,
             needed_libs,
             strtab_off,
             pltrel_off,
@@ -187,6 +187,7 @@ impl ElfRawDynamic {
             hashtab: self.hash_off + base,
             symtab: self.symtab_off + base,
             strtab: self.strtab_off + base,
+            got: self.got_off.map(|off| (base + off) as *mut usize),
             init_fn,
             init_array_fn,
             fini_fn,
@@ -206,6 +207,7 @@ pub struct ElfDynamic {
     pub hashtab: usize,
     pub symtab: usize,
     pub strtab: usize,
+    pub got: Option<*mut usize>,
     pub init_fn: Option<extern "C" fn()>,
     pub init_array_fn: Option<&'static [extern "C" fn()]>,
     pub fini_fn: Option<extern "C" fn()>,

@@ -306,6 +306,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             needed_libs,
             lazy: lazy_bind,
             _marker: PhantomData,
+            got: dynamics.got,
         };
         Ok(elf_lib)
     }

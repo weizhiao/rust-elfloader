@@ -207,7 +207,6 @@ impl SymbolData {
         None
     }
 
-    #[inline]
     pub(crate) fn rel_symbol(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let name = unsafe { self.strtab.get(symbol.st_name as usize) };

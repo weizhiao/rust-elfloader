@@ -11,7 +11,6 @@ extern crate alloc;
 
 #[cfg(not(any(
     target_arch = "x86_64",
-    target_arch = "x86",
     target_arch = "aarch64",
     target_arch = "riscv64",
 )))]
@@ -106,6 +105,8 @@ where
     phdrs: &'static [Phdr],
     /// entry
     entry: usize,
+    /// .got.plt
+    got: Option<*mut usize>,
     /// elf symbols
     symbols: SymbolData,
     /// dynamic
@@ -303,7 +304,7 @@ impl RelocatedDylib {
         mut segments: ElfSegments,
         user_data: UserData,
     ) -> Self {
-        segments.offset = segments.memory.as_ptr() as usize - base;
+        segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
         Self {
             inner: Arc::new(RelocatedInner {
                 name,

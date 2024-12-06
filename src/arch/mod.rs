@@ -4,9 +4,6 @@ cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
         mod x86_64;
         pub use x86_64::*;
-    }else if #[cfg(target_arch = "x86")]{
-        mod x86;
-        pub use x86::*;
     }else if #[cfg(target_arch = "riscv64")]{
         mod riscv64;
         pub use riscv64::*;
@@ -15,6 +12,8 @@ cfg_if::cfg_if! {
         pub use aarch64::*;
     }
 }
+
+pub const REL_NONE: u32 = 0;
 
 cfg_if::cfg_if! {
     if #[cfg(target_pointer_width = "64")]{

@@ -45,17 +45,18 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         lib
     }
 
-    fn relocate_impl<F>(mut self, libs: &[RelocatedDylib], find_symbol: F) -> Self
+    fn relocate_impl<F>(mut self, libs: &[RelocatedDylib], find: F) -> Self
     where
         F: Fn(&str) -> Option<*const ()>,
     {
         let mut relocation = core::mem::take(&mut self.relocation);
 
+        #[inline(never)]
         fn find_symdef<'a, T: ThreadLocal, U: Unwind>(
-            elf_lib: &ElfDylib<T, U>,
+            elf_lib: &'a ElfDylib<T, U>,
             libs: &'a [RelocatedDylib],
             dynsym: &'a ElfSymbol,
-            syminfo: SymbolInfo<'_>,
+            syminfo: SymbolInfo,
         ) -> Option<SymDef<'a>> {
             if dynsym.st_shndx != SHN_UNDEF {
                 Some(SymDef {
@@ -65,19 +66,14 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                     tls: elf_lib.tls.as_ref().map(|tls| unsafe { tls.module_id() }),
                 })
             } else {
-                let mut symbol = None;
-                for lib in libs.iter() {
-                    if let Some(sym) = lib.inner.symbols.get_sym(&syminfo) {
-                        symbol = Some(SymDef {
-                            sym,
-                            base: lib.base(),
-                            #[cfg(feature = "tls")]
-                            tls: lib.inner.tls,
-                        });
-                        break;
-                    }
-                }
-                symbol
+                libs.iter().find_map(|lib| {
+                    lib.inner.symbols.get_sym(&syminfo).map(|sym| SymDef {
+                        sym,
+                        base: lib.base(),
+                        #[cfg(feature = "tls")]
+                        tls: lib.inner.tls,
+                    })
+                })
             }
         }
 
@@ -87,32 +83,39 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
             S Represents the value of the symbol whose index resides in the relocation entry.
         */
 
-        // 开启lazy bind后会跳过plt相关的重定位
-        if !self.lazy {
-            if let Some(rela_array) = &mut relocation.pltrel {
+        if let Some(rela_array) = &mut relocation.pltrel {
+            // 开启lazy bind后会跳过plt相关的重定位
+            if self.lazy {
+                rela_array.relocate(|rela, _, _, _| {
+                    let r_type = rela.r_type();
+                    let r_sym = rela.r_symbol();
+                    // S
+                    // 对于.rela.plt来说通常只有这一种重定位类型
+                    assert!(r_sym != 0 && r_type == REL_JUMP_SLOT as usize);
+                    let ptr = (self.base() + rela.r_offset()) as *mut usize;
+                    // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
+                    unsafe {
+                        let origin_val = ptr.read();
+                        let new_val = origin_val + self.base();
+                        ptr.write(new_val);
+                    }
+                });
+            } else {
                 rela_array.relocate(|rela, idx, bitmap, deal_fail| {
                     let r_type = rela.r_type();
                     let r_sym = rela.r_symbol();
-                    assert!(r_sym != 0);
+                    // S
+                    // 对于.rela.plt来说通常只有这一种重定位类型
+                    assert!(r_sym != 0 && r_type == REL_JUMP_SLOT as usize);
                     let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                    let symbol = if let Some(symbol) = find_symbol(syminfo.name)
+                    if let Some(symbol) = find(syminfo.name)
                         .or(find_symdef(&self, libs, dynsym, syminfo).map(|symdef| symdef.into()))
                     {
-                        symbol
+                        self.write_val(rela.r_offset(), symbol as usize);
                     } else {
                         deal_fail(idx, bitmap);
                         return;
                     };
-                    match r_type as _ {
-                        // S
-                        // 对于.rela.plt来说通常只有这一种重定位类型
-                        REL_JUMP_SLOT => {
-                            self.write_val(rela.r_offset(), symbol as usize);
-                        }
-                        _ => {
-                            unreachable!()
-                        }
-                    }
                 });
             }
         }
@@ -121,43 +124,35 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
             rela_array.relocate(|rela, idx, bitmap, deal_fail| {
                 let r_type = rela.r_type();
                 let r_sym = rela.r_symbol();
-                let mut name = "";
-                let symdef = if r_sym != 0 {
-                    let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                    name = syminfo.name;
-                    find_symdef(&self, libs, dynsym, syminfo)
-                } else {
-                    None
-                };
-
                 match r_type as _ {
+                    // B + A
+                    REL_RELATIVE => {
+                        self.write_val(rela.r_offset(), self.segments.base() + rela.r_addend());
+                    }
                     // REL_GOT: S  REL_SYMBOLIC: S + A
                     REL_GOT | REL_SYMBOLIC => {
-                        let symbol = if let Some(symbol) =
-                            find_symbol(name).or(symdef.map(|symdef| symdef.into()))
+                        let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
+                        if let Some(symbol) = find(syminfo.name)
+                            .or(find_symdef(&self, libs, dynsym, syminfo)
+                                .map(|symdef| symdef.into()))
                         {
-                            symbol
+                            self.write_val(rela.r_offset(), symbol as usize + rela.r_addend());
                         } else {
                             deal_fail(idx, bitmap);
                             return;
                         };
-                        self.write_val(rela.r_offset(), symbol as usize + rela.r_addend());
-                    }
-                    // B + A
-                    REL_RELATIVE => {
-                        self.write_val(rela.r_offset(), self.segments.base() + rela.r_addend());
                     }
                     // ELFTLS
                     #[cfg(feature = "tls")]
                     REL_DTPMOD => {
                         if r_sym != 0 {
-                            let symdef = if let Some(symdef) = symdef {
-                                symdef
+                            let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
+                            if let Some(symdef) = find_symdef(&self, libs, dynsym, syminfo) {
+                                self.write_val(rela.r_offset(), symdef.tls.unwrap());
                             } else {
                                 deal_fail(idx, bitmap);
                                 return;
                             };
-                            self.write_val(rela.r_offset(), symdef.tls.unwrap());
                         } else {
                             self.write_val(rela.r_offset(), unsafe {
                                 self.tls.as_ref().unwrap().module_id()
@@ -166,22 +161,24 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                     }
                     #[cfg(feature = "tls")]
                     REL_DTPOFF => {
-                        let symdef = if let Some(symdef) = symdef {
-                            symdef
+                        let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
+                        if let Some(symdef) = find_symdef(&self, libs, dynsym, syminfo) {
+                            // offset in tls
+                            let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
+                                .wrapping_sub(TLS_DTV_OFFSET);
+                            self.write_val(rela.r_offset(), tls_val);
                         } else {
                             deal_fail(idx, bitmap);
                             return;
                         };
-                        // offset in tls
-                        let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
-                            .wrapping_sub(TLS_DTV_OFFSET);
-                        self.write_val(rela.r_offset(), tls_val);
                     }
-                    _ => unimplemented!(),
+                    REL_NONE | REL_JUMP_SLOT => {
+                        return;
+                    }
+                    _ => unimplemented!("symbol: {},rel type: {}", r_sym, r_type),
                 }
             });
         }
-
         self.relocation = relocation;
         self.dep_libs.extend_from_slice(libs);
         self
@@ -199,10 +196,8 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
     #[inline]
     pub fn is_finished(&self) -> bool {
         let mut finished = true;
-        if !self.lazy {
-            if let Some(array) = &self.relocation.pltrel {
-                finished = array.is_finished();
-            }
+        if let Some(array) = &self.relocation.pltrel {
+            finished = array.is_finished();
         }
         if let Some(array) = &self.relocation.dynrel {
             finished = array.is_finished();
@@ -223,11 +218,6 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                 init();
             }
         }
-        if !self.lazy {
-            if let Some(relro) = self.relro {
-                relro.relro()?;
-            }
-        }
         #[cfg(feature = "tls")]
         let tls = self.tls.map(|t| {
             let tls = unsafe { t.module_id() };
@@ -238,26 +228,36 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
             self.user_data.data_mut().push(Box::new(u));
         }
 
-        Ok(RelocatedDylib {
-            inner: Arc::new(RelocatedInner {
-                name: self.name,
-                symbols: self.symbols,
-                dynamic: self.dynamic,
-                pltrel: self
-                    .relocation
-                    .pltrel
-                    .map(|array| array.array.as_ptr())
-                    .unwrap_or(core::ptr::null()),
-                #[cfg(feature = "tls")]
-                tls,
-                segments: self.segments,
-                fini_fn: self.fini_fn,
-                fini_array_fn: self.fini_array_fn,
-                user_data: self.user_data,
-                dep_libs: self.dep_libs.into_boxed_slice(),
-                closures: self.closures.into_boxed_slice(),
-            }),
-        })
+        let inner = Arc::new(RelocatedInner {
+            name: self.name,
+            symbols: self.symbols,
+            dynamic: self.dynamic,
+            pltrel: self
+                .relocation
+                .pltrel
+                .map(|array| array.array.as_ptr())
+                .unwrap_or(core::ptr::null()),
+            #[cfg(feature = "tls")]
+            tls,
+            segments: self.segments,
+            fini_fn: self.fini_fn,
+            fini_array_fn: self.fini_array_fn,
+            user_data: self.user_data,
+            dep_libs: self.dep_libs.into_boxed_slice(),
+            closures: self.closures.into_boxed_slice(),
+        });
+
+        if self.lazy {
+            if let Some(got) = self.got {
+                prepare_lazy_bind(got, inner.as_ref() as *const RelocatedInner as usize);
+            }
+        } else {
+            if let Some(relro) = self.relro {
+                relro.relro()?;
+            }
+        }
+
+        Ok(RelocatedDylib { inner })
     }
 
     #[cold]
@@ -292,6 +292,32 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         }
         f
     }
+}
+
+#[no_mangle]
+unsafe extern "C" fn dl_fixup(dylib: &RelocatedInner, rela_idx: usize) -> usize {
+    let rela = &*dylib.pltrel.add(rela_idx);
+    let r_type = rela.r_type();
+    let r_sym = rela.r_symbol();
+    assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
+    let (_, syminfo) = dylib.symbols.rel_symbol(r_sym);
+    let symbol = dylib
+        .closures
+        .iter()
+        .find_map(|f| f(syminfo.name))
+        .or_else(|| {
+            for lib in dylib.dep_libs.iter() {
+                if let Some(sym) = lib.inner.symbols.get_sym(&syminfo) {
+                    return Some((sym.st_value as usize + lib.base()) as _);
+                }
+            }
+            None
+        })
+        .expect("lazy bind fail") as usize;
+
+    let ptr = (dylib.segments.base() + rela.r_offset()) as *mut usize;
+    ptr.write(symbol);
+    symbol
 }
 
 #[derive(Default)]

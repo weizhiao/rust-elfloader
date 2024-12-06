@@ -3,6 +3,7 @@
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 # elf_loader
 A `lightweight`, `extensible`, and `high-performance` library for loading ELF files.    
+English | [中文](README_zh.md)
 ## Usage
 It implements the general steps for loading ELF files and leaves extension interfaces, allowing users to implement their own customized loaders.
 ## Example
