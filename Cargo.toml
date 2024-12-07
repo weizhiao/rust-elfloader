@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["wzhao <1207410841@qq.com>"]
 readme = "README.md"
