@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["wzhao <1207410841@qq.com>"]
 readme = "README.md"
@@ -28,7 +28,7 @@ bitflags = "2.6.0"
 cfg-if = '1.0'
 
 [features]
-default = []
+default = ["std"]
 
 # enable std
 std = []

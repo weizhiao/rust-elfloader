@@ -70,6 +70,7 @@ impl ELFEhdr {
     }
 }
 
+/// The elf object loader
 pub struct Loader<O, M = MmapImpl>
 where
     O: ElfObject,
@@ -167,8 +168,9 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         let memsz = max_vaddr - min_vaddr;
         let prot = ElfSegments::map_prot(phdr.p_flags);
         let real_addr = min_vaddr + base;
-        let offset = phdr.p_offset as usize;
-        let filesz = phdr.p_filesz as usize;
+        let offset = phdr.p_offset as usize & MASK;
+        let align_len = phdr.p_offset as usize - offset;
+        let filesz = phdr.p_filesz as usize + align_len;
         // 将类似bss节的内存区域的值设置为0
         if addr_min != min_vaddr {
             let _ = unsafe {

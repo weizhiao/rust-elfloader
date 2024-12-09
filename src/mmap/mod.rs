@@ -1,3 +1,4 @@
+//! Map memory to address space
 cfg_if::cfg_if! {
     if #[cfg(feature = "mmap")]{
         pub(crate) mod mmap;
@@ -56,11 +57,8 @@ pub enum OffsetType {
     Addr(*const u8),
 }
 
-/// Represents an offset along with its length for memory mapping operations.
 /// This struct is used to specify the offset and length for memory-mapped regions.
-pub struct Offset {
-    /// The offset of the mapping content relative to the start address of the mapping
-    pub align_offset: usize,
+pub struct MmapOffset {
     /// The length of the memory region to be mapped.
     pub len: usize,
     /// The type of offset, which can be either a file descriptor-based offset or an address-based offset.
@@ -76,29 +74,22 @@ pub struct Offset {
 /// To use this trait, one would typically implement it for a specific type that represents a memory mapping facility.
 /// The implementations would handle the platform-specific details of memory management.
 pub trait Mmap {
-    /// Maps a memory region into the process's address space.
-    ///
-    /// This function maps a file or device into memory at the specified address with the given protection and flags.
+    /// This function maps a file or bytes into memory at the specified address with the given protection and flags.
     ///
     /// # Arguments
-    /// * `addr` - An optional starting address for the mapping.
-    /// * `len` - The length of the memory region to map.
+    /// * `addr` - An optional starting address for the mapping. The address is always aligned by page size(4096 or 65536).
+    /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096 or 65536).
     /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
     /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
-    /// * `offset` - The offset into the file or device from which to start the mapping.
-    ///
-    /// # Returns
-    /// A `Result` containing a `NonNull` pointer to the mapped memory if successful, or an error if the operation fails.
+    /// * `offset` - The offset into the file or bytes from which to start the mapping.
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-        offset: Offset,
+        offset: MmapOffset,
     ) -> Result<NonNull<c_void>>;
 
-    /// Maps an anonymous memory region into the process's address space.
-    ///
     /// This function creates a new anonymous mapping with the specified protection and flags.
     ///
     /// # Arguments
@@ -106,9 +97,6 @@ pub trait Mmap {
     /// * `len` - The length of the memory region to map.
     /// * `prot` - The protection options for the mapping.
     /// * `flags` - The flags controlling the details of the mapping.
-    ///
-    /// # Returns
-    /// A `Result` containing a `NonNull` pointer to the mapped memory if successful, or an error if the operation fails.
     unsafe fn mmap_anonymous(
         addr: usize,
         len: usize,
@@ -116,16 +104,11 @@ pub trait Mmap {
         flags: MapFlags,
     ) -> Result<NonNull<c_void>>;
 
-    /// Unmaps a memory region from the process's address space.
-    ///
     /// This function releases a previously mapped memory region.
     ///
     /// # Arguments
     /// * `addr` - A `NonNull` pointer to the start of the memory region to unmap.
     /// * `len` - The length of the memory region to unmap.
-    ///
-    /// # Returns
-    /// A `Result` that is `Ok` if the operation succeeds, or an error if it fails.
     unsafe fn munmap(addr: NonNull<c_void>, len: usize) -> Result<()>;
 
     /// Changes the protection of a memory region.
@@ -136,8 +119,5 @@ pub trait Mmap {
     /// * `addr` - A `NonNull` pointer to the start of the memory region to protect.
     /// * `len` - The length of the memory region to protect.
     /// * `prot` - The new protection options for the mapping.
-    ///
-    /// # Returns
-    /// A `Result` that is `Ok` if the operation succeeds, or an error if it fails.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
 }

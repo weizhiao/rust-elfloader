@@ -1,3 +1,4 @@
+//! The Memory mapping of elf object
 use super::mmap::{self, Mmap, ProtFlags};
 use crate::{arch::Phdr, Result};
 use core::ffi::c_void;
@@ -29,6 +30,7 @@ impl ELFRelro {
     }
 }
 
+/// The Memory mapping of elf object
 pub struct ElfSegments {
     pub(crate) memory: NonNull<c_void>,
     /// addr_min

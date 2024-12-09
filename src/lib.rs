@@ -21,7 +21,7 @@ pub mod dynamic;
 mod loader;
 pub mod mmap;
 pub mod object;
-pub mod relocation;
+mod relocation;
 pub mod segment;
 mod symbol;
 #[cfg(feature = "version")]
@@ -73,6 +73,7 @@ pub trait ThreadLocal: Sized + 'static {
     unsafe fn module_id(&self) -> usize;
 }
 
+/// User-defined data associated with the loaded ELF file
 pub struct UserData {
     data: Vec<Box<dyn Any + 'static>>,
 }
@@ -94,6 +95,7 @@ impl UserData {
     }
 }
 
+/// An unrelocated dynamic library
 pub struct ElfDylib<T, U>
 where
     T: ThreadLocal,
@@ -150,7 +152,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         self.entry + self.base()
     }
 
-    /// Get phdrs of the dynamic library
+    /// Get phdrs of the dynamic library.
     #[inline]
     pub fn phdrs(&self) -> &[Phdr] {
         self.phdrs
@@ -168,6 +170,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         self.name.to_str().unwrap()
     }
 
+    /// Gets the address of the dynamic section.
     #[inline]
     pub fn dynamic(&self) -> *const Dyn {
         self.dynamic
@@ -179,11 +182,13 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
         self.segments.base()
     }
 
+    /// Get user-defined data.
     #[inline]
     pub unsafe fn user_data_mut(&mut self) -> &mut UserData {
         &mut self.user_data
     }
 
+    /// Get user-defined data.
     #[inline]
     pub fn user_data(&self) -> &UserData {
         &self.user_data
@@ -191,7 +196,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
 }
 
 #[allow(unused)]
-pub(crate) struct RelocatedInner {
+pub struct Dylib {
     name: CString,
     symbols: SymbolData,
     dynamic: *const Dyn,
@@ -204,19 +209,111 @@ pub(crate) struct RelocatedInner {
     fini_array_fn: Option<&'static [extern "C" fn()]>,
     /// user data
     user_data: UserData,
-    /// semgents
-    segments: ElfSegments,
     /// dependency libraries
     dep_libs: Box<[RelocatedDylib]>,
     /// function closure
     closures: Box<[Box<dyn Fn(&str) -> Option<*const ()>>]>,
+    /// semgents
+    segments: ElfSegments,
 }
 
-impl Debug for RelocatedInner {
+impl Drop for Dylib {
+    fn drop(&mut self) {
+        if let Some(f) = self.fini_fn {
+            f();
+        }
+
+        if let Some(array) = self.fini_array_fn {
+            for f in array {
+                f();
+            }
+        }
+    }
+}
+
+impl Debug for Dylib {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("RelocatedLibrary")
+        f.debug_struct("Dylib")
             .field("name", &self.name)
+            .field("dep", &self.dep_libs)
             .finish()
+    }
+}
+
+impl Dylib {
+    /// Get the name of the dynamic library.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.name.to_str().unwrap()
+    }
+
+    /// Get the C-style name of the dynamic library.
+    #[inline]
+    pub fn cname(&self) -> &CStr {
+        &self.name
+    }
+
+    /// Get the base address of the dynamic library.
+    #[inline]
+    pub fn base(&self) -> usize {
+        self.segments.base()
+    }
+
+    /// Get the user data of the dynamic library.
+    #[inline]
+    pub fn user_data(&self) -> &UserData {
+        &self.user_data
+    }
+
+    #[allow(unused_variables)]
+    pub unsafe fn from_raw(
+        name: CString,
+        base: usize,
+        dynamic: ElfDynamic,
+        tls: Option<usize>,
+        mut segments: ElfSegments,
+        user_data: UserData,
+    ) -> Self {
+        segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
+        Self {
+            name,
+            symbols: SymbolData::new(&dynamic),
+            pltrel: core::ptr::null(),
+            dynamic: dynamic.dyn_ptr,
+            #[cfg(feature = "tls")]
+            tls,
+            segments,
+            fini_fn: None,
+            fini_array_fn: None,
+            user_data,
+            dep_libs: Box::new([]),
+            closures: Box::new([]),
+        }
+    }
+
+    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
+        self.symbols
+            .get_sym(&SymbolInfo::new(name))
+            .map(|sym| Symbol {
+                ptr: (self.base() + sym.st_value as usize) as _,
+                pd: PhantomData,
+            })
+            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
+    }
+
+    #[cfg(feature = "version")]
+    pub unsafe fn get_version<'lib, T>(
+        &'lib self,
+        name: &str,
+        version: &str,
+    ) -> Result<Symbol<'lib, T>> {
+        self.symbols
+            .get_sym(&SymbolInfo::new_with_version(name, version))
+            .map(|sym| Symbol {
+                ptr: (self.base() + sym.st_value as usize) as _,
+                pd: PhantomData,
+            })
+            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
     }
 }
 
@@ -237,7 +334,7 @@ impl<'lib, T> ops::Deref for Symbol<'lib, T> {
 /// A dynamic library that has been relocated
 #[derive(Clone)]
 pub struct RelocatedDylib {
-    pub(crate) inner: Arc<RelocatedInner>,
+    pub inner: Arc<Dylib>,
 }
 
 impl Debug for RelocatedDylib {
@@ -247,7 +344,6 @@ impl Debug for RelocatedDylib {
 }
 
 unsafe impl Send for RelocatedDylib {}
-unsafe impl Sync for RelocatedDylib {}
 
 impl RelocatedDylib {
     /// Get dependent libraries.
@@ -274,53 +370,25 @@ impl RelocatedDylib {
     /// Get the name of the dynamic library.
     #[inline]
     pub fn name(&self) -> &str {
-        self.inner.name.to_str().unwrap()
+        self.inner.name()
     }
 
     /// Get the C-style name of the dynamic library.
     #[inline]
     pub fn cname(&self) -> &CStr {
-        &self.inner.name
+        &self.inner.cname()
     }
 
     /// Get the base address of the dynamic library.
     #[inline]
     pub fn base(&self) -> usize {
-        self.inner.segments.base()
+        self.inner.base()
     }
 
     /// Get the user data of the dynamic library.
     #[inline]
     pub fn user_data(&self) -> &UserData {
-        &self.inner.user_data
-    }
-
-    #[allow(unused_variables)]
-    pub unsafe fn from_raw(
-        name: CString,
-        base: usize,
-        dynamic: ElfDynamic,
-        tls: Option<usize>,
-        mut segments: ElfSegments,
-        user_data: UserData,
-    ) -> Self {
-        segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
-        Self {
-            inner: Arc::new(RelocatedInner {
-                name,
-                symbols: SymbolData::new(&dynamic),
-                pltrel: core::ptr::null(),
-                dynamic: dynamic.dyn_ptr,
-                #[cfg(feature = "tls")]
-                tls,
-                segments,
-                fini_fn: None,
-                fini_array_fn: None,
-                user_data: UserData::empty(),
-                dep_libs: Box::new([]),
-                closures: Box::new([]),
-            }),
-        }
+        &self.inner.user_data()
     }
 
     /// Get a pointer to a function or static variable by symbol name.
@@ -346,15 +414,9 @@ impl RelocatedDylib {
     ///     **awesome_variable = 42.0;
     /// };
     /// ```
+    #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
-        self.inner
-            .symbols
-            .get_sym(&SymbolInfo::new(name))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
-            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
+        self.inner.get(name)
     }
 
     /// Load a versioned symbol from the dynamic library.
@@ -364,44 +426,32 @@ impl RelocatedDylib {
     /// let symbol = unsafe { lib.get_version::<fn()>>("function_name", "1.0").unwrap() };
     /// ```
     #[cfg(feature = "version")]
+    #[inline]
     pub unsafe fn get_version<'lib, T>(
         &'lib self,
         name: &str,
         version: &str,
     ) -> Result<Symbol<'lib, T>> {
-        self.inner
-            .symbols
-            .get_sym(&SymbolInfo::new_with_version(name, version))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
-            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
+        self.inner.get_version(name, version)
     }
 }
 
+/// elf_loader error types
 #[derive(Debug)]
 pub enum Error {
-    /// Returned when encountered an io error.
+    /// An error occurred while opening or reading or writing elf files.
     #[cfg(feature = "std")]
-    IOError {
-        err: std::io::Error,
-    },
-    MmapError {
-        msg: String,
-    },
-    RelocateError {
-        msg: String,
-    },
-    FindSymbolError {
-        msg: String,
-    },
-    ParseDynamicError {
-        msg: &'static str,
-    },
-    ParseEhdrError {
-        msg: String,
-    },
+    IOError { err: std::io::Error },
+    /// An error occurred while memory mapping.
+    MmapError { msg: String },
+    /// An error occurred during dynamic library relocation.
+    RelocateError { msg: String },
+    /// An error occurred while looking for a symbol.
+    FindSymbolError { msg: String },
+    /// An error occurred while parsing dynamic section.
+    ParseDynamicError { msg: &'static str },
+    /// An error occurred while parsing elf header.
+    ParseEhdrError { msg: String },
 }
 
 impl Display for Error {

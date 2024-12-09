@@ -9,12 +9,11 @@ use core::{
     ptr::NonNull,
 };
 use elf_loader::{
-    mmap::{Mmap, Offset, OffsetType},
+    mmap::{Mmap, MmapOffset, OffsetType},
     object::ElfObject,
-    segment::PAGE_SIZE,
     ThreadLocal, Unwind,
 };
-use syscall::{lseek, mmap, mprotect, munmap, open, read, MAP_ANONYMOUS, SEEK_SET};
+use syscall::{lseek, mmap, mprotect, munmap, open, read, SEEK_SET};
 
 pub struct MyFile {
     fd: i32,
@@ -31,9 +30,8 @@ impl ElfObject for MyFile {
         Ok(())
     }
 
-    fn transport(&self, offset: usize, len: usize) -> elf_loader::mmap::Offset {
-        Offset {
-            align_offset: offset - (offset & !(PAGE_SIZE - 1)),
+    fn transport(&self, offset: usize, len: usize) -> elf_loader::mmap::MmapOffset {
+        MmapOffset {
             len,
             kind: OffsetType::File {
                 fd: self.fd,
@@ -59,7 +57,7 @@ impl Mmap for MmapImpl {
         len: usize,
         prot: elf_loader::mmap::ProtFlags,
         flags: elf_loader::mmap::MapFlags,
-        offset: elf_loader::mmap::Offset,
+        offset: elf_loader::mmap::MmapOffset,
     ) -> elf_loader::Result<core::ptr::NonNull<core::ffi::c_void>> {
         match offset.kind {
             elf_loader::mmap::OffsetType::File { fd, file_offset } => {
@@ -69,8 +67,7 @@ impl Mmap for MmapImpl {
                     prot.bits(),
                     flags.bits(),
                     fd,
-                    // offset是当前段在文件中的偏移，需要按照页对齐，否则mmap会失败
-                    (file_offset & !(PAGE_SIZE - 1)) as _,
+                    file_offset as _,
                 );
                 Ok(NonNull::new_unchecked(ptr))
             }
@@ -84,14 +81,7 @@ impl Mmap for MmapImpl {
         prot: elf_loader::mmap::ProtFlags,
         flags: elf_loader::mmap::MapFlags,
     ) -> elf_loader::Result<core::ptr::NonNull<core::ffi::c_void>> {
-        let ptr = mmap(
-            addr as _,
-            len,
-            prot.bits(),
-            flags.bits() | MAP_ANONYMOUS,
-            -1,
-            0,
-        );
+        let ptr = mmap(addr as _, len, prot.bits(), flags.bits(), -1, 0);
         Ok(NonNull::new_unchecked(ptr))
     }
 

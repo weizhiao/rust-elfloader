@@ -1,3 +1,4 @@
+//! Contains content related to the CPU instruction set
 use elf::file::Class;
 
 cfg_if::cfg_if! {

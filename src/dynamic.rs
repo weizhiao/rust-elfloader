@@ -1,3 +1,4 @@
+//! Parsing `.dynamic` section
 use crate::{
     arch::{Dyn, ElfRela},
     parse_dynamic_error, Result,
@@ -6,6 +7,7 @@ use alloc::vec::Vec;
 use core::{slice::from_raw_parts, usize};
 use elf::abi::*;
 
+/// Information in the dynamic section
 pub struct ElfRawDynamic {
     pub dyn_ptr: *const Dyn,
     /// DT_GNU_HASH
@@ -208,6 +210,7 @@ impl ElfRawDynamic {
     }
 }
 
+/// Information in the dynamic section after mapping to the real address
 pub struct ElfDynamic {
     pub dyn_ptr: *const Dyn,
     pub hashtab: usize,

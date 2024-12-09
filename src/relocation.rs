@@ -1,5 +1,5 @@
 use crate::{
-    arch::*, relocate_error, symbol::SymbolInfo, ElfDylib, RelocatedDylib, RelocatedInner, Result,
+    arch::*, relocate_error, symbol::SymbolInfo, Dylib, ElfDylib, RelocatedDylib, Result,
     ThreadLocal, Unwind,
 };
 use alloc::{boxed::Box, format, string::String, sync::Arc, vec::Vec};
@@ -26,6 +26,7 @@ impl<'temp> From<SymDef<'temp>> for *const () {
 }
 
 impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
+    /// get the name of the dependent libraries
     pub fn needed_libs(&self) -> &Vec<&str> {
         &self.needed_libs
     }
@@ -228,7 +229,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
             self.user_data.data_mut().push(Box::new(u));
         }
 
-        let inner = Arc::new(RelocatedInner {
+        let inner = Arc::new(Dylib {
             name: self.name,
             symbols: self.symbols,
             dynamic: self.dynamic,
@@ -249,7 +250,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
 
         if self.lazy {
             if let Some(got) = self.got {
-                prepare_lazy_bind(got, inner.as_ref() as *const RelocatedInner as usize);
+                prepare_lazy_bind(got, inner.as_ref() as *const Dylib as usize);
             }
         } else {
             if let Some(relro) = self.relro {
@@ -295,7 +296,7 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
 }
 
 #[no_mangle]
-unsafe extern "C" fn dl_fixup(dylib: &RelocatedInner, rela_idx: usize) -> usize {
+unsafe extern "C" fn dl_fixup(dylib: &Dylib, rela_idx: usize) -> usize {
     let rela = &*dylib.pltrel.add(rela_idx);
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();

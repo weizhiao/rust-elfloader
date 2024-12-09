@@ -1,10 +1,10 @@
 use super::{MapFlags, Mmap, ProtFlags};
-use crate::segment::MASK;
 use crate::Error;
 use core::ptr::NonNull;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 use libc::{mmap, mprotect, munmap};
 
+/// An implementation of Mmap trait
 pub struct MmapImpl;
 
 impl Mmap for MmapImpl {
@@ -13,7 +13,7 @@ impl Mmap for MmapImpl {
         len: usize,
         prot: super::ProtFlags,
         flags: super::MapFlags,
-        offset: super::Offset,
+        offset: super::MmapOffset,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         match offset.kind {
             super::OffsetType::File { fd, file_offset } => {
@@ -23,8 +23,7 @@ impl Mmap for MmapImpl {
                     prot.bits(),
                     flags.bits(),
                     fd,
-                    // offset是当前段在文件中的偏移，需要按照页对齐，否则mmap会失败
-                    (file_offset & MASK) as _,
+                    file_offset as _,
                 );
                 if ptr == libc::MAP_FAILED {
                     return Err(map_error("mmap failed"));
@@ -43,8 +42,7 @@ impl Mmap for MmapImpl {
                 if ptr == libc::MAP_FAILED {
                     return Err(map_error("mmap failed"));
                 }
-                let dest =
-                    from_raw_parts_mut(ptr.cast::<u8>().add(offset.align_offset), offset.len);
+                let dest = from_raw_parts_mut(ptr.cast::<u8>(), offset.len);
                 let src = from_raw_parts(data_ptr, offset.len);
                 dest.copy_from_slice(src);
                 let res = mprotect(ptr, len, prot.bits());

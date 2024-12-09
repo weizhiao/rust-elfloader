@@ -7,6 +7,7 @@ use core::{
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
+/// An implementation of Mmap trait
 pub struct MmapImpl;
 
 impl Mmap for MmapImpl {
@@ -15,7 +16,7 @@ impl Mmap for MmapImpl {
         len: usize,
         _prot: super::ProtFlags,
         flags: super::MapFlags,
-        offset: super::Offset,
+        offset: super::MmapOffset,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         match (offset.kind, addr) {
             #[cfg(feature = "std")]
@@ -30,21 +31,14 @@ impl Mmap for MmapImpl {
                 if memory.is_null() {
                     handle_alloc_error(layout);
                 }
-                let dest = from_raw_parts_mut(memory.add(offset.align_offset), offset.len);
+                let dest = from_raw_parts_mut(memory, offset.len);
                 let mut file = std::fs::File::from_raw_fd(fd);
                 file.seek(std::io::SeekFrom::Start(file_offset as _))?;
                 file.read_exact(dest)?;
                 // 防止提前关闭file
                 core::mem::forget(file);
-                //use this set prot to test no_mmap
-                // nix::sys::mman::mprotect(
-                //     std::ptr::NonNull::new_unchecked(memory as _),
-                //     len,
-                //     nix::sys::mman::ProtFlags::PROT_EXEC
-                //         | nix::sys::mman::ProtFlags::PROT_READ
-                //         | nix::sys::mman::ProtFlags::PROT_WRITE,
-                // )
-                // .unwrap();
+                // use this set prot to test no_mmap
+                // libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
                 Ok(NonNull::new_unchecked(memory as _))
             }
             #[cfg(feature = "std")]
@@ -52,7 +46,7 @@ impl Mmap for MmapImpl {
                 use std::io::{Read, Seek};
                 use std::os::fd::FromRawFd;
                 let ptr = addr as *mut u8;
-                let dest = from_raw_parts_mut(ptr.add(offset.align_offset), offset.len);
+                let dest = from_raw_parts_mut(ptr, offset.len);
                 let mut file = std::fs::File::from_raw_fd(fd);
                 file.seek(std::io::SeekFrom::Start(file_offset as _))?;
                 file.read_exact(dest)?;
@@ -69,24 +63,16 @@ impl Mmap for MmapImpl {
                 if memory.is_null() {
                     handle_alloc_error(layout);
                 }
-                let dest = from_raw_parts_mut(memory.add(offset.align_offset), offset.len);
+                let dest = from_raw_parts_mut(memory, offset.len);
                 let src = from_raw_parts(data_ptr, offset.len);
                 dest.copy_from_slice(src);
-                //use this set prot to test no_mmap
-                // nix::sys::mman::mprotect(
-                //     std::ptr::NonNull::new_unchecked(memory as _),
-                //     len,
-                //     nix::sys::mman::ProtFlags::PROT_EXEC
-                //         | nix::sys::mman::ProtFlags::PROT_READ
-                //         | nix::sys::mman::ProtFlags::PROT_WRITE,
-                // )
-                // .unwrap();
-
+                // use this set prot to test no_mmap
+                // libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
                 Ok(NonNull::new_unchecked(memory as _))
             }
             (super::OffsetType::Addr(data_ptr), Some(addr)) => {
                 let ptr = addr as *mut u8;
-                let dest = from_raw_parts_mut(ptr.add(offset.align_offset), offset.len);
+                let dest = from_raw_parts_mut(ptr, offset.len);
                 let src = from_raw_parts(data_ptr, offset.len);
                 dest.copy_from_slice(src);
                 Ok(NonNull::new_unchecked(ptr as _))

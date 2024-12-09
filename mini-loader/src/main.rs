@@ -135,7 +135,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
     let elf_file = MyFile::new(elf_name);
     let loader = Loader::<_, MmapImpl>::new(elf_file);
-    let dylib = loader.load_dylib::<MyThreadLocal, MyUnwind>(false).unwrap();
+    let dylib = loader.load_dylib::<MyThreadLocal, MyUnwind>(None).unwrap();
     let phdrs = dylib.phdrs();
     let mut interp_dylib = None;
     for phdr in phdrs {

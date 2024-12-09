@@ -1,17 +1,21 @@
-use crate::{mmap::Offset, Result};
+//! The original elf object
+use crate::{mmap::MmapOffset, Result};
 
+/// The original elf object
 pub trait ElfObject {
+    /// Returns the elf object name
     fn file_name(self) -> CString;
+    /// Read data from the elf object
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
-    fn transport(&self, offset: usize, len: usize) -> Offset;
+    /// Transport the offset to the mapped memory. The `offset` argument is always aligned to the page size
+    fn transport(&self, offset: usize, len: usize) -> MmapOffset;
 }
 
 mod binary {
     use alloc::ffi::CString;
 
     use crate::{
-        mmap::{Offset, OffsetType},
-        segment::MASK,
+        mmap::{MmapOffset, OffsetType},
         ElfObject,
     };
 
@@ -33,10 +37,9 @@ mod binary {
             Ok(())
         }
 
-        fn transport(&self, offset: usize, len: usize) -> Offset {
-            Offset {
+        fn transport(&self, offset: usize, len: usize) -> MmapOffset {
+            MmapOffset {
                 kind: OffsetType::Addr(unsafe { self.bytes.as_ptr().add(offset) }),
-                align_offset: offset - (offset & MASK),
                 len,
             }
         }
@@ -57,8 +60,7 @@ mod file {
     };
 
     use crate::{
-        mmap::{Offset, OffsetType},
-        segment::MASK,
+        mmap::{MmapOffset, OffsetType},
         ElfObject, Result,
     };
 
@@ -84,9 +86,8 @@ mod file {
             Ok(())
         }
 
-        fn transport(&self, offset: usize, len: usize) -> Offset {
-            Offset {
-                align_offset: offset - (offset & MASK),
+        fn transport(&self, offset: usize, len: usize) -> MmapOffset {
+            MmapOffset {
                 len,
                 kind: OffsetType::File {
                     fd: self.file.as_raw_fd(),
