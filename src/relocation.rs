@@ -1,216 +1,212 @@
+//! Relocation of elf objects
 use crate::{
-    arch::*, relocate_error, symbol::SymbolInfo, Dylib, ElfDylib, RelocatedDylib, Result,
-    ThreadLocal, Unwind,
+    arch::*, relocate_error, symbol::SymbolInfo, CoreComponent, CoreComponentInner, ElfDylib,
+    RelocatedDylib, Result,
 };
-use alloc::{boxed::Box, format, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, format, sync::Arc};
+use core::{marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
 use elf::abi::*;
+
+pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
 
 #[allow(unused)]
 struct SymDef<'temp> {
     sym: &'temp ElfSymbol,
     base: usize,
-    #[cfg(feature = "tls")]
-    tls: Option<usize>,
 }
 
-impl<'temp> From<SymDef<'temp>> for *const () {
-    fn from(symdef: SymDef<'temp>) -> Self {
-        if symdef.sym.st_info & 0xf != STT_GNU_IFUNC {
-            (symdef.base + symdef.sym.st_value as usize) as _
+impl<'temp> SymDef<'temp> {
+	#[inline(always)]
+    fn convert(self) -> *const () {
+        if likely(self.sym.st_info & 0xf != STT_GNU_IFUNC) {
+            (self.base + self.sym.st_value as usize) as _
         } else {
             let ifunc: fn() -> usize =
-                unsafe { core::mem::transmute(symdef.base + symdef.sym.st_value as usize) };
+                unsafe { core::mem::transmute(self.base + self.sym.st_value as usize) };
             ifunc() as _
         }
     }
 }
 
-impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
-    /// get the name of the dependent libraries
-    pub fn needed_libs(&self) -> &Vec<&str> {
-        &self.needed_libs
+#[inline(never)]
+fn find_symdef<'a, 'scope: 'a, I>(
+    elf_lib: &'a CoreComponentInner,
+    mut libs: I,
+    dynsym: &'a ElfSymbol,
+    syminfo: &SymbolInfo,
+) -> Option<SymDef<'a>>
+where
+    I: Iterator<Item = &'scope CoreComponent>,
+{
+    if dynsym.st_info >> 4 == STB_LOCAL {
+        Some(SymDef {
+            sym: dynsym,
+            base: elf_lib.segments.base(),
+        })
+    } else {
+        libs.find_map(|lib| {
+            lib.inner.symbols.lookup_filter(&syminfo).map(|sym| SymDef {
+                sym,
+                base: lib.base(),
+            })
+        })
     }
+}
 
-    /// Relocate dynamic library with given libraries
-    pub fn relocate(self, libs: impl AsRef<[RelocatedDylib]>) -> Self {
-        self.relocate_impl(libs.as_ref(), |_| None)
-    }
-
-    /// Relocate dynamic library with given libraries and a custom symbol finder function
-    pub fn relocate_with<F>(self, libs: impl AsRef<[RelocatedDylib]>, func: F) -> Self
+impl ElfDylib {
+    /// Relocate the dynamic library with the given dynamic libraries and function closure.
+    /// # Note
+    /// * During relocation, it is preferred to look for symbols in function closures `find`.
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader
+    /// * Typically, the `scope` should also contain the current dynamic library itself,
+    /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    /// * When lazy binding, the symbol is first looked for in the global scope and then in the lazy scope
+    pub fn relocate<'scope, S, F, D>(
+        self,
+        scope: S,
+        find: &'scope F,
+        deal_unknown: D,
+        lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+    ) -> Result<RelocatedDylib<'scope>>
     where
-        F: Fn(&str) -> Option<*const ()> + 'static,
-    {
-        let mut lib = self.relocate_impl(libs.as_ref(), |name| func(name));
-        lib.closures.push(Box::new(func));
-        lib
-    }
-
-    fn relocate_impl<F>(mut self, libs: &[RelocatedDylib], find: F) -> Self
-    where
+        S: Iterator<Item = &'scope CoreComponent> + Clone,
         F: Fn(&str) -> Option<*const ()>,
+        D: Fn(&ElfRela, &ElfDylib, S) -> bool,
     {
-        let mut relocation = core::mem::take(&mut self.relocation);
-
-        #[inline(never)]
-        fn find_symdef<'a, T: ThreadLocal, U: Unwind>(
-            elf_lib: &'a ElfDylib<T, U>,
-            libs: &'a [RelocatedDylib],
-            dynsym: &'a ElfSymbol,
-            syminfo: SymbolInfo,
-        ) -> Option<SymDef<'a>> {
-            if dynsym.st_shndx != SHN_UNDEF {
-                Some(SymDef {
-                    sym: dynsym,
-                    base: elf_lib.segments.base(),
-                    #[cfg(feature = "tls")]
-                    tls: elf_lib.tls.as_ref().map(|tls| unsafe { tls.module_id() }),
-                })
-            } else {
-                libs.iter().find_map(|lib| {
-                    lib.inner.symbols.get_sym(&syminfo).map(|sym| SymDef {
-                        sym,
-                        base: lib.base(),
-                        #[cfg(feature = "tls")]
-                        tls: lib.inner.tls,
-                    })
-                })
-            }
-        }
-
         /*
             A Represents the addend used to compute the value of the relocatable field.
             B Represents the base address at which a shared object has been loaded into memory during execution.
             S Represents the value of the symbol whose index resides in the relocation entry.
         */
 
-        if let Some(rela_array) = &mut relocation.pltrel {
-            // 开启lazy bind后会跳过plt相关的重定位
-            if self.lazy {
-                rela_array.relocate(|rela, _, _, _| {
-                    let r_type = rela.r_type();
-                    let r_sym = rela.r_symbol();
-                    // S
-                    // 对于.rela.plt来说通常只有这一种重定位类型
-                    assert!(r_sym != 0 && r_type == REL_JUMP_SLOT as usize);
-                    let ptr = (self.base() + rela.r_offset()) as *mut usize;
-                    // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
-                    unsafe {
-                        let origin_val = ptr.read();
-                        let new_val = origin_val + self.base();
-                        ptr.write(new_val);
+        if let Some(rela_array) = self.relocation.relative {
+            rela_array.iter().for_each(|rela| {
+                // B + A
+                assert!(rela.r_type() == REL_RELATIVE as usize);
+                self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
+            });
+        }
+
+        if let Some(rela_array) = self.relocation.dynrel {
+            for rela in rela_array {
+                let r_type = rela.r_type() as _;
+                let r_sym = rela.r_symbol();
+
+                if unlikely(r_type == REL_RELATIVE) {
+                    self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
+                    continue;
+                } else if unlikely(r_type == REL_NONE) {
+                    continue;
+                }
+
+                match r_type {
+                    // REL_GOT: S  REL_SYMBOLIC: S + A
+                    REL_GOT | REL_SYMBOLIC => {
+                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                        find(syminfo.name)
+                            .or(
+                                find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
+                                    .map(|symdef| symdef.convert()),
+                            )
+                            .map(|symbol| self.write_val(rela.r_offset(), symbol as usize))
+                            .ok_or(relocate_error(format!(
+                                "can not relocate symbol {} in {}, rel type: {}",
+                                syminfo.name,
+                                self.name(),
+                                r_type,
+                            )))?;
                     }
-                });
-            } else {
-                rela_array.relocate(|rela, idx, bitmap, deal_fail| {
-                    let r_type = rela.r_type();
-                    let r_sym = rela.r_symbol();
-                    // S
-                    // 对于.rela.plt来说通常只有这一种重定位类型
-                    assert!(r_sym != 0 && r_type == REL_JUMP_SLOT as usize);
-                    let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                    if let Some(symbol) = find(syminfo.name)
-                        .or(find_symdef(&self, libs, dynsym, syminfo).map(|symdef| symdef.into()))
-                    {
-                        self.write_val(rela.r_offset(), symbol as usize);
-                    } else {
-                        deal_fail(idx, bitmap);
-                        return;
-                    };
-                });
+                    REL_DTPOFF => {
+                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                        find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
+                            .map(|symdef| {
+                                // offset in tls
+                                let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
+                                    .wrapping_sub(TLS_DTV_OFFSET);
+                                self.write_val(rela.r_offset(), tls_val);
+                            })
+                            .ok_or(relocate_error(format!(
+                                "can not relocate symbol {} in {}, rel type: {}",
+                                syminfo.name,
+                                self.name(),
+                                r_type,
+                            )))?;
+                    }
+                    _ => {
+                        if !deal_unknown(&rela, &self, scope.clone()) {
+                            return Err(relocate_error(format!(
+                                "unsupported relocation type: {}, symbol idx:{}",
+                                r_type, r_sym,
+                            )));
+                        }
+                    }
+                }
             }
         }
 
-        if let Some(rela_array) = &mut relocation.dynrel {
-            rela_array.relocate(|rela, idx, bitmap, deal_fail| {
-                let r_type = rela.r_type();
-                let r_sym = rela.r_symbol();
-                match r_type as _ {
-                    // B + A
-                    REL_RELATIVE => {
-                        self.write_val(rela.r_offset(), self.segments.base() + rela.r_addend());
-                    }
-                    // REL_GOT: S  REL_SYMBOLIC: S + A
-                    REL_GOT | REL_SYMBOLIC => {
-                        let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                        if let Some(symbol) = find(syminfo.name)
-                            .or(find_symdef(&self, libs, dynsym, syminfo)
-                                .map(|symdef| symdef.into()))
-                        {
-                            self.write_val(rela.r_offset(), symbol as usize + rela.r_addend());
-                        } else {
-                            deal_fail(idx, bitmap);
-                            return;
-                        };
-                    }
-                    // ELFTLS
-                    #[cfg(feature = "tls")]
-                    REL_DTPMOD => {
-                        if r_sym != 0 {
-                            let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                            if let Some(symdef) = find_symdef(&self, libs, dynsym, syminfo) {
-                                self.write_val(rela.r_offset(), symdef.tls.unwrap());
-                            } else {
-                                deal_fail(idx, bitmap);
-                                return;
-                            };
-                        } else {
-                            self.write_val(rela.r_offset(), unsafe {
-                                self.tls.as_ref().unwrap().module_id()
-                            });
+        if let Some(rela_array) = self.relocation.pltrel {
+            // 开启lazy bind后会跳过plt相关的重定位
+            if self.lazy {
+                for rela in rela_array {
+                    let r_type = rela.r_type() as u32;
+                    // S
+                    if likely(r_type == REL_JUMP_SLOT) {
+                        let ptr = (self.base() + rela.r_offset()) as *mut usize;
+                        // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
+                        unsafe {
+                            let origin_val = ptr.read();
+                            let new_val = origin_val + self.base();
+                            ptr.write(new_val);
                         }
+                    } else if unlikely(r_type == REL_IRELATIVE) {
+                        let ifunc: fn() -> usize =
+                            unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
+                        self.write_val(rela.r_offset(), ifunc());
+                    } else {
+                        unreachable!()
                     }
-                    #[cfg(feature = "tls")]
-                    REL_DTPOFF => {
-                        let (dynsym, syminfo) = self.symbols.rel_symbol(r_sym);
-                        if let Some(symdef) = find_symdef(&self, libs, dynsym, syminfo) {
-                            // offset in tls
-                            let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
-                                .wrapping_sub(TLS_DTV_OFFSET);
-                            self.write_val(rela.r_offset(), tls_val);
-                        } else {
-                            deal_fail(idx, bitmap);
-                            return;
-                        };
-                    }
-                    REL_NONE | REL_JUMP_SLOT => {
-                        return;
-                    }
-                    _ => unimplemented!("symbol: {},rel type: {}", r_sym, r_type),
                 }
-            });
+                if let Some(got) = self.got {
+                    prepare_lazy_bind(got, Arc::as_ptr(&self.core.inner) as usize);
+                }
+                // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+                let ptr =
+                    unsafe { &mut *(Arc::as_ptr(&self.core.inner) as *mut CoreComponentInner) };
+                ptr.lazy_scope = lazy_scope;
+            } else {
+                for rela in rela_array {
+                    let r_type = rela.r_type() as u32;
+                    let r_sym = rela.r_symbol();
+                    // S
+                    // 对于.rela.plt来说通常只有这两种重定位类型
+                    if likely(r_type == REL_JUMP_SLOT) {
+                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                        find(syminfo.name)
+                            .or(
+                                find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
+                                    .map(|symdef| symdef.convert()),
+                            )
+                            .map(|symbol| self.write_val(rela.r_offset(), symbol as usize))
+                            .ok_or(relocate_error(format!(
+                                "can not relocate symbol {} in {}, rel type: {}",
+                                syminfo.name,
+                                self.name(),
+                                r_type,
+                            )))?;
+                    } else if unlikely(r_type == REL_IRELATIVE) {
+                        let ifunc: fn() -> usize =
+                            unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
+                        self.write_val(rela.r_offset(), ifunc());
+                    } else {
+                        unreachable!()
+                    }
+                }
+                if let Some(relro) = self.relro {
+                    relro.relro()?;
+                }
+            }
         }
-        self.relocation = relocation;
-        self.dep_libs.extend_from_slice(libs);
-        self
-    }
 
-    #[inline(always)]
-    fn write_val(&self, offset: usize, val: usize) {
-        unsafe {
-            let rel_addr = (self.segments.base() + offset) as *mut usize;
-            rel_addr.write(val)
-        };
-    }
-
-    /// Whether there are any items that have not been relocated
-    #[inline]
-    pub fn is_finished(&self) -> bool {
-        let mut finished = true;
-        if let Some(array) = &self.relocation.pltrel {
-            finished &= array.is_finished();
-        }
-        if let Some(array) = &self.relocation.dynrel {
-            finished &= array.is_finished();
-        }
-        finished
-    }
-
-    /// Finish relocation
-    pub fn finish(mut self) -> Result<RelocatedDylib> {
-        if !self.is_finished() {
-            return Err(relocate_error(self.not_relocated()));
-        }
         if let Some(init) = self.init_fn {
             init();
         }
@@ -219,107 +215,41 @@ impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
                 init();
             }
         }
-        #[cfg(feature = "tls")]
-        let tls = self.tls.map(|t| {
-            let tls = unsafe { t.module_id() };
-            self.user_data.data_mut().push(Box::new(t));
-            tls
-        });
-        if let Some(u) = self.unwind {
-            self.user_data.data_mut().push(Box::new(u));
-        }
 
-        let inner = Arc::new(Dylib {
-            name: self.name,
-            symbols: self.symbols,
-            dynamic: self.dynamic,
-            pltrel: self
-                .relocation
-                .pltrel
-                .map(|array| array.array.as_ptr())
-                .unwrap_or(core::ptr::null()),
-            #[cfg(feature = "tls")]
-            tls,
-            segments: self.segments,
-            fini_fn: self.fini_fn,
-            fini_array_fn: self.fini_array_fn,
-            user_data: self.user_data,
-            dep_libs: self.dep_libs.into_boxed_slice(),
-            closures: self.closures.into_boxed_slice(),
-        });
-
-        if self.lazy {
-            if let Some(got) = self.got {
-                prepare_lazy_bind(got, inner.as_ref() as *const Dylib as usize);
-            }
-        } else {
-            if let Some(relro) = self.relro {
-                relro.relro()?;
-            }
-        }
-
-        Ok(RelocatedDylib { inner })
+        Ok(RelocatedDylib {
+            core: self.core,
+            _marker: PhantomData,
+        })
     }
 
-    #[cold]
-    #[inline(never)]
-    fn not_relocated(&mut self) -> String {
-        let mut f = String::new();
-        f.push_str(&format!(
-            "{}: The symbols that have not been relocated:   ",
-            self.name.to_str().unwrap()
-        ));
-        if let Some(array) = &mut self.relocation.pltrel {
-            let mut iter = BitMapIterator::new(&mut array.state);
-            while let Some((_, idx)) = iter.next() {
-                let rela = &array.array[idx];
-                let r_sym = rela.r_symbol();
-                if r_sym != 0 {
-                    let (_, syminfo) = self.symbols.rel_symbol(r_sym);
-                    f.push_str(&format!("[{}] ", syminfo.name));
-                }
-            }
-        }
-        if let Some(array) = &mut self.relocation.dynrel {
-            let mut iter = BitMapIterator::new(&mut array.state);
-            while let Some((_, idx)) = iter.next() {
-                let rela = &array.array[idx];
-                let r_sym = rela.r_symbol();
-                if r_sym != 0 {
-                    let (_, syminfo) = self.symbols.rel_symbol(r_sym);
-                    f.push_str(&format!("[{}] ", syminfo.name));
-                }
-            }
-        }
-        f
+    #[inline(always)]
+    fn write_val(&self, offset: usize, val: usize) {
+        unsafe {
+            let rel_addr = (self.core.base() + offset) as *mut usize;
+            rel_addr.write(val)
+        };
     }
 }
 
 #[no_mangle]
-unsafe extern "C" fn dl_fixup(dylib: &Dylib, rela_idx: usize) -> usize {
+unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
     let rela = &*dylib.pltrel.add(rela_idx);
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
     assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
-    let (dynsym, syminfo) = dylib.symbols.rel_symbol(r_sym);
-    let symbol = dylib
-        .closures
-        .iter()
-        .find_map(|f| f(syminfo.name))
-        .or_else(|| {
-            if dynsym.st_shndx != SHN_UNDEF {
-                Some((dynsym.st_value as usize + dylib.segments.base()) as _)
-            } else {
-                dylib.dep_libs.iter().find_map(|lib| {
-                    lib.inner
-                        .symbols
-                        .get_sym(&syminfo)
-                        .map(|sym| (sym.st_value as usize + lib.base()) as _)
-                })
-            }
-        })
-        .expect("lazy bind fail") as usize;
-
+    let (_, syminfo) = dylib.symbols.symbol_idx(r_sym);
+    let scope = GLOBAL_SCOPE.load(core::sync::atomic::Ordering::Acquire);
+    let symbol = if scope == 0 {
+        dylib.lazy_scope.as_ref().unwrap()(syminfo.name)
+    } else {
+        core::mem::transmute::<_, fn(&str) -> Option<*const ()>>(scope)(syminfo.name).or(dylib
+            .lazy_scope
+            .as_ref()
+            .unwrap()(
+            syminfo.name,
+        ))
+    }
+    .expect("lazy bind fail") as usize;
     let ptr = (dylib.segments.base() + rela.r_offset()) as *mut usize;
     ptr.write(symbol);
     symbol
@@ -327,8 +257,9 @@ unsafe extern "C" fn dl_fixup(dylib: &Dylib, rela_idx: usize) -> usize {
 
 #[derive(Default)]
 pub(crate) struct ElfRelocation {
-    pltrel: Option<ElfRelaArray>,
-    dynrel: Option<ElfRelaArray>,
+    relative: Option<&'static [ElfRela]>,
+    pltrel: Option<&'static [ElfRela]>,
+    dynrel: Option<&'static [ElfRela]>,
 }
 
 impl ElfRelocation {
@@ -336,152 +267,61 @@ impl ElfRelocation {
     pub(crate) fn new(
         pltrel: Option<&'static [ElfRela]>,
         dynrel: Option<&'static [ElfRela]>,
+        rela_count: Option<NonZeroUsize>,
     ) -> Self {
-        let pltrel = pltrel.map(|array| ElfRelaArray {
-            array,
-            state: RelocateState {
-                relocated: BitMap::new(array.len()),
-                stage: RelocateStage::Init,
-            },
-        });
-        let dynrel = dynrel.map(|array| ElfRelaArray {
-            array,
-            state: RelocateState {
-                relocated: BitMap::new(array.len()),
-                stage: RelocateStage::Init,
-            },
-        });
-        Self { pltrel, dynrel }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum RelocateStage {
-    Init,
-    Relocating,
-    Finish,
-}
-
-struct RelocateState {
-    // 位图用于记录对应的项是否已经被重定位，已经重定位的项对应的bit会设为1
-    relocated: BitMap,
-    stage: RelocateStage,
-}
-
-struct ElfRelaArray {
-    array: &'static [ElfRela],
-    state: RelocateState,
-}
-
-struct BitMapIterator<'bitmap> {
-    cur_bit: u32,
-    index: usize,
-    state: &'bitmap mut RelocateState,
-}
-
-impl<'bitmap> BitMapIterator<'bitmap> {
-    fn new(state: &'bitmap mut RelocateState) -> Self {
-        Self {
-            cur_bit: state.relocated.unit(0),
-            index: 0,
-            state,
-        }
-    }
-
-    fn next(&mut self) -> Option<(&mut RelocateState, usize)> {
-        loop {
-            let idx = self.cur_bit.trailing_ones();
-            if idx == 32 {
-                self.index += 1;
-                if self.index == self.state.relocated.unit_count() {
-                    break None;
-                }
-                self.cur_bit = self.state.relocated.unit(self.index);
+        let (relative, dynrel) = if let Some(nrelative) = rela_count {
+            unsafe {
+                (
+                    Some(&dynrel.unwrap_unchecked()[..nrelative.get()]),
+                    Some(&dynrel.unwrap_unchecked()[nrelative.get()..]),
+                )
+            }
+        } else {
+            (None, dynrel)
+        };
+        let dynrel = if let (Some(dynrel), Some(pltrel)) = (dynrel, pltrel) {
+            if unsafe { dynrel.as_ptr().add(dynrel.len()) == pltrel.as_ptr().add(pltrel.len()) } {
+                Some(&dynrel[..dynrel.len() - pltrel.len()])
             } else {
-                self.cur_bit |= 1 << idx;
-                break Some((self.state, self.index * 32 + idx as usize));
+                Some(dynrel)
             }
+        } else {
+            None
+        };
+        Self {
+            relative,
+            pltrel,
+            dynrel,
         }
+    }
+
+    #[inline]
+    pub(crate) fn pltrel(&self) -> Option<&[ElfRela]> {
+        self.pltrel
+    }
+
+    #[inline]
+    pub(crate) fn dynrel(&self) -> Option<&[ElfRela]> {
+        self.dynrel
     }
 }
 
-impl ElfRelaArray {
-    #[inline]
-    fn is_finished(&self) -> bool {
-        if self.state.stage != RelocateStage::Finish {
-            return false;
-        }
-        true
-    }
+#[inline]
+#[cold]
+fn cold() {}
 
-    fn relocate(
-        &mut self,
-        f: impl Fn(&ElfRela, usize, &mut RelocateState, fn(usize, &mut RelocateState)),
-    ) {
-        match self.state.stage {
-            RelocateStage::Init => {
-                let deal_fail = |idx: usize, state: &mut RelocateState| {
-                    state.relocated.clear(idx);
-                    state.stage = RelocateStage::Relocating;
-                };
-                self.state.stage = RelocateStage::Finish;
-                for (idx, rela) in self.array.iter().enumerate() {
-                    f(rela, idx, &mut self.state, deal_fail);
-                }
-            }
-            RelocateStage::Relocating => {
-                let deal_fail = |idx: usize, state: &mut RelocateState| {
-                    // 重定位失败
-                    state.relocated.clear(idx);
-                    state.stage = RelocateStage::Relocating;
-                };
-                self.state.stage = RelocateStage::Finish;
-                let mut iter = BitMapIterator::new(&mut self.state);
-                while let Some((state, idx)) = iter.next() {
-                    state.relocated.set(idx);
-                    f(&self.array[idx], idx, state, deal_fail);
-                }
-            }
-            RelocateStage::Finish => {}
-        }
+#[inline]
+fn likely(b: bool) -> bool {
+    if !b {
+        cold()
     }
+    b
 }
 
-struct BitMap {
-    bitmap: Vec<u32>,
-}
-
-impl BitMap {
-    #[inline]
-    fn new(size: usize) -> Self {
-        let bitmap_size = (size + 31) / 32;
-        let mut bitmap = Vec::new();
-        // 初始时全部标记为已重定位
-        bitmap.resize(bitmap_size, u32::MAX);
-        Self { bitmap }
+#[inline]
+fn unlikely(b: bool) -> bool {
+    if b {
+        cold()
     }
-
-    #[inline]
-    fn unit(&self, index: usize) -> u32 {
-        self.bitmap[index]
-    }
-
-    #[inline]
-    fn unit_count(&self) -> usize {
-        self.bitmap.len()
-    }
-
-    #[inline]
-    fn set(&mut self, bit_index: usize) {
-        let unit_index = bit_index / 32;
-        let index = bit_index % 32;
-        self.bitmap[unit_index] |= 1 << index;
-    }
-
-    #[inline]
-    fn clear(&mut self, bit_index: usize) {
-        let unit_index = bit_index / 32;
-        let index = bit_index % 32;
-        self.bitmap[unit_index] &= !(1 << index);
-    }
+    b
 }

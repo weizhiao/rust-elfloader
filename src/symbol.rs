@@ -1,3 +1,5 @@
+use elf::abi::{SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK};
+
 use crate::{arch::ElfSymbol, dynamic::ElfDynamic};
 
 #[derive(Clone)]
@@ -97,7 +99,8 @@ impl ElfStringTable {
     }
 }
 
-pub(crate) struct SymbolData {
+/// Symbol table of elf file.
+pub struct SymbolTable {
     /// .gnu.hash
     hashtab: ElfGnuHash,
     /// .dynsym
@@ -109,7 +112,8 @@ pub(crate) struct SymbolData {
     pub(crate) version: Option<super::version::ELFVersion>,
 }
 
-pub(crate) struct SymbolInfo<'a> {
+/// Symbol specific information, including symbol name and version name.
+pub struct SymbolInfo<'a> {
     pub(crate) name: &'a str,
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'a>>,
@@ -131,9 +135,15 @@ impl<'a> SymbolInfo<'a> {
             version: Some(crate::version::SymbolVersion::new(version)),
         }
     }
+
+    /// Get the name of the symbol.
+    #[inline]
+    pub fn symbol_name(&self) -> &str {
+        &self.name
+    }
 }
 
-impl SymbolData {
+impl SymbolTable {
     pub(crate) fn new(dynamic: &ElfDynamic) -> Self {
         let hashtab = unsafe { ElfGnuHash::parse(dynamic.hashtab as *const u8) };
         let symtab = dynamic.symtab as *const ElfSymbol;
@@ -145,7 +155,7 @@ impl SymbolData {
             dynamic.verdef,
             &strtab,
         );
-        SymbolData {
+        SymbolTable {
             hashtab,
             symtab,
             strtab,
@@ -158,7 +168,8 @@ impl SymbolData {
         &self.strtab
     }
 
-    pub fn get_sym(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
+    /// Use the symbol specific information to get the symbol in the symbol table
+    pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         let hash = ElfGnuHash::gnu_hash(symbol.name.as_bytes());
         let bloom_width: u32 = 8 * size_of::<usize>() as u32;
         let bloom_idx = (hash / (bloom_width)) as usize % self.hashtab.blooms.len();
@@ -207,7 +218,23 @@ impl SymbolData {
         None
     }
 
-    pub(crate) fn rel_symbol(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
+	/// Use the symbol specific information to get the symbol which can be used for relocation in the symbol table
+    #[inline]
+    pub fn lookup_filter(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
+        if let Some(sym) = self.lookup(symbol) {
+            if (sym.st_shndx != SHN_UNDEF)
+                && (1 << (sym.st_info >> 4)
+                    & (1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE)
+                    != 0)
+            {
+                return Some(sym);
+            }
+        }
+        None
+    }
+
+    /// Use the symbol index to get the symbols in the symbol table.
+    pub fn symbol_idx(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let name = unsafe { self.strtab.get(symbol.st_name as usize) };
         (

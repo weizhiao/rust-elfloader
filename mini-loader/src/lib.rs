@@ -3,7 +3,6 @@ extern crate alloc;
 
 pub mod syscall;
 
-use alloc::ffi::CString;
 use core::{
     ffi::{c_int, CStr},
     ptr::NonNull,
@@ -11,7 +10,6 @@ use core::{
 use elf_loader::{
     mmap::{Mmap, MmapOffset, OffsetType},
     object::ElfObject,
-    ThreadLocal, Unwind,
 };
 use syscall::{lseek, mmap, mprotect, munmap, open, read, SEEK_SET};
 
@@ -20,8 +18,8 @@ pub struct MyFile {
 }
 
 impl ElfObject for MyFile {
-    fn file_name(self) -> alloc::ffi::CString {
-        CString::new("").unwrap()
+    fn file_name(&self) -> &CStr {
+        c""
     }
 
     fn read(&mut self, buf: &mut [u8], offset: usize) -> elf_loader::Result<()> {
@@ -100,28 +98,5 @@ impl Mmap for MmapImpl {
     ) -> elf_loader::Result<()> {
         let _ = mprotect(addr.as_ptr(), len, prot.bits());
         Ok(())
-    }
-}
-
-pub struct MyThreadLocal;
-
-impl ThreadLocal for MyThreadLocal {
-    unsafe fn new(_phdr: &elf_loader::arch::Phdr, _base: usize) -> Option<Self> {
-        None
-    }
-
-    unsafe fn module_id(&self) -> usize {
-        0
-    }
-}
-
-pub struct MyUnwind;
-
-impl Unwind for MyUnwind {
-    unsafe fn new(
-        _phdr: &elf_loader::arch::Phdr,
-        _map_range: core::ops::Range<usize>,
-    ) -> Option<Self> {
-        None
     }
 }

@@ -1,10 +1,11 @@
 //! The original elf object
 use crate::{mmap::MmapOffset, Result};
+use core::ffi::CStr;
 
 /// The original elf object
 pub trait ElfObject {
     /// Returns the elf object name
-    fn file_name(self) -> CString;
+    fn file_name(&self) -> &CStr;
     /// Read data from the elf object
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
     /// Transport the offset to the mapped memory. The `offset` argument is always aligned to the page size
@@ -13,6 +14,7 @@ pub trait ElfObject {
 
 mod binary {
     use alloc::ffi::CString;
+    use core::ffi::CStr;
 
     use crate::{
         mmap::{MmapOffset, OffsetType},
@@ -21,13 +23,16 @@ mod binary {
 
     /// An elf file stored in memory
     pub struct ElfBinary<'a> {
-        name: &'a str,
+        name: CString,
         bytes: &'a [u8],
     }
 
     impl<'bytes> ElfBinary<'bytes> {
-        pub const fn new(name: &'bytes str, bytes: &'bytes [u8]) -> Self {
-            Self { name, bytes }
+        pub fn new(name: &'bytes str, bytes: &'bytes [u8]) -> Self {
+            Self {
+                name: CString::new(name).unwrap(),
+                bytes,
+            }
         }
     }
 
@@ -44,14 +49,15 @@ mod binary {
             }
         }
 
-        fn file_name(self) -> CString {
-            CString::new(self.name).unwrap()
+        fn file_name(&self) -> &CStr {
+            &self.name
         }
     }
 }
 
 #[cfg(feature = "std")]
 mod file {
+    use core::ffi::CStr;
     use std::{
         ffi::CString,
         fs::File,
@@ -96,13 +102,12 @@ mod file {
             }
         }
 
-        fn file_name(self) -> CString {
-            self.name
+        fn file_name(&self) -> &CStr {
+            &self.name
         }
     }
 }
 
-use alloc::ffi::CString;
 pub use binary::ElfBinary;
 #[cfg(feature = "std")]
 pub use file::ElfFile;

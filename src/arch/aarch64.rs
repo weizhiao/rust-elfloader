@@ -10,6 +10,7 @@ pub const REL_DTPMOD: u32 = R_AARCH64_TLS_DTPMOD;
 pub const REL_SYMBOLIC: u32 = R_AARCH64_ABS64;
 pub const REL_JUMP_SLOT: u32 = R_AARCH64_JUMP_SLOT;
 pub const REL_DTPOFF: u32 = R_AARCH64_TLS_DTPREL;
+pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 
 global_asm!(
     "

@@ -21,7 +21,7 @@ pub mod dynamic;
 mod loader;
 pub mod mmap;
 pub mod object;
-mod relocation;
+pub mod relocation;
 pub mod segment;
 mod symbol;
 #[cfg(feature = "version")]
@@ -32,50 +32,44 @@ use alloc::{
     ffi::CString,
     format,
     string::{String, ToString},
-    sync::Arc,
+    sync::{Arc, Weak},
     vec::Vec,
 };
 use arch::{Dyn, ElfRela, Phdr};
 use core::{
     any::Any,
-    ffi::CStr,
+    ffi::{c_void, CStr},
     fmt::{Debug, Display},
     marker::PhantomData,
-    ops::{self, Range},
+    ops,
 };
 use dynamic::ElfDynamic;
 
 use object::*;
-use relocation::ElfRelocation;
+use relocation::{ElfRelocation, GLOBAL_SCOPE};
 use segment::{ELFRelro, ElfSegments};
-use symbol::{SymbolData, SymbolInfo};
+use symbol::{SymbolInfo, SymbolTable};
 
 pub use elf::abi;
 pub use loader::Loader;
 
-impl<T: ThreadLocal, U: Unwind> Debug for ElfDylib<T, U> {
+impl Debug for ElfDylib {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ELFLibrary")
-            .field("name", &self.name)
-            .field("needed_libs", &self.needed_libs)
+        f.debug_struct("ElfLibrary")
+            .field("name", &self.core.inner.name)
+            .field("needed_libs", &self.core.inner.needed_libs)
             .finish()
     }
 }
 
-/// Handle the parts of the elf file related to the ehframe
-pub trait Unwind: Sized + 'static {
-    unsafe fn new(phdr: &Phdr, map_range: Range<usize>) -> Option<Self>;
-}
-
-/// Handles the parts of the elf file related to thread local storage
-pub trait ThreadLocal: Sized + 'static {
-    unsafe fn new(phdr: &Phdr, base: usize) -> Option<Self>;
-    unsafe fn module_id(&self) -> usize;
+struct DataItem {
+    key: u8,
+    value: Option<Box<dyn Any>>,
 }
 
 /// User-defined data associated with the loaded ELF file
 pub struct UserData {
-    data: Vec<Box<dyn Any + 'static>>,
+    data: Vec<DataItem>,
 }
 
 impl UserData {
@@ -85,51 +79,38 @@ impl UserData {
     }
 
     #[inline]
-    pub fn data_mut(&mut self) -> &mut Vec<Box<dyn Any + 'static>> {
-        &mut self.data
+    pub fn insert(&mut self, key: u8, value: Box<dyn Any>) -> Option<Box<dyn Any>> {
+        for item in self.data.iter_mut() {
+            if item.key == key {
+                let old = core::mem::take(&mut item.value);
+                item.value = Some(value);
+                return old;
+            }
+        }
+        self.data.push(DataItem {
+            key,
+            value: Some(value),
+        });
+        None
     }
 
     #[inline]
-    pub fn data(&self) -> &[Box<dyn Any>] {
-        &self.data
+    pub fn get(&self, key: u8) -> Option<&Box<dyn Any>> {
+        self.data.iter().find_map(|item| {
+            if item.key == key {
+                return item.value.as_ref();
+            }
+            None
+        })
     }
 }
 
 /// An unrelocated dynamic library
-pub struct ElfDylib<T, U>
-where
-    T: ThreadLocal,
-    U: Unwind,
-{
-    /// file name
-    name: CString,
-    /// phdr
-    phdrs: &'static [Phdr],
+pub struct ElfDylib {
     /// entry
     entry: usize,
     /// .got.plt
     got: Option<*mut usize>,
-    /// elf symbols
-    symbols: SymbolData,
-    /// dynamic
-    dynamic: *const Dyn,
-    #[cfg(feature = "tls")]
-    /// .tbss and .tdata
-    tls: Option<T>,
-    /// .eh_frame
-    unwind: Option<U>,
-    /// semgents
-    segments: ElfSegments,
-    /// .fini
-    fini_fn: Option<extern "C" fn()>,
-    /// .fini_array
-    fini_array_fn: Option<&'static [extern "C" fn()]>,
-    /// user data
-    user_data: UserData,
-    /// dependency libraries
-    dep_libs: Vec<RelocatedDylib>,
-    /// function closure
-    closures: Vec<Box<dyn Fn(&str) -> Option<*const ()>>>,
     /// rela.dyn and rela.plt
     relocation: ElfRelocation,
     /// GNU_RELRO segment
@@ -138,87 +119,128 @@ where
     init_fn: Option<extern "C" fn()>,
     /// .init_array
     init_array_fn: Option<&'static [extern "C" fn()]>,
-    /// needed libs' name
-    needed_libs: Vec<&'static str>,
     /// lazy binding
     lazy: bool,
-    _marker: PhantomData<T>,
+    /// core component
+    core: CoreComponent,
 }
 
-impl<T: ThreadLocal, U: Unwind> ElfDylib<T, U> {
-    /// Get the entry point of the dynamic library.
+impl ElfDylib {
+    /// Get the entry point of the elf object.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry + self.base()
     }
 
-    /// Get phdrs of the dynamic library.
+    /// Get phdrs of the elf object.
     #[inline]
     pub fn phdrs(&self) -> &[Phdr] {
-        self.phdrs
+        &self.core.inner.phdrs
     }
 
-    /// Get the C-style name of the dynamic library.
+    /// Get the C-style name of the elf object.
     #[inline]
     pub fn cname(&self) -> &CStr {
-        self.name.as_c_str()
+        self.core.cname()
     }
 
-    /// Get the name of the dynamic library.
+    /// Get the name of the elf object.
     #[inline]
     pub fn name(&self) -> &str {
-        self.name.to_str().unwrap()
+        self.core.name()
     }
 
-    /// Gets the address of the dynamic section.
+    /// Get the address of the dynamic section.
     #[inline]
     pub fn dynamic(&self) -> *const Dyn {
-        self.dynamic
+        self.core.dynamic()
     }
 
-    /// Get the base address of the dynamic library.
+    /// Get the base address of the elf object.
     #[inline]
     pub fn base(&self) -> usize {
-        self.segments.base()
+        self.core.base()
     }
 
-    /// Get user-defined data.
+    /// Get the memory length of the elf object map.
     #[inline]
-    pub unsafe fn user_data_mut(&mut self) -> &mut UserData {
-        &mut self.user_data
+    pub fn map_len(&self) -> usize {
+        self.core.map_len()
     }
 
-    /// Get user-defined data.
+    /// Get the symbol table.
+    #[inline]
+    pub fn symtab(&self) -> &SymbolTable {
+        &self.core.inner.symbols
+    }
+
+    /// Get rela.dyn section content
+    #[inline]
+    pub fn dyn_relocation(&self) -> Option<&[ElfRela]> {
+        self.relocation.dynrel()
+    }
+
+    /// Get rela.plt section content
+    #[inline]
+    pub fn plt_relocation(&self) -> Option<&[ElfRela]> {
+        self.relocation.pltrel()
+    }
+
+    /// Get the core component of the elf object
+    /// # Safety
+    /// The current elf object has not yet been relocated, so it is dangerous to use this
+    /// function to get `CoreComponent` in the elf object.
+    #[inline]
+    pub unsafe fn core_component(&self) -> &CoreComponent {
+        &self.core
+    }
+
+    /// Get the name of the elf object
+    #[inline]
+    pub fn needed_libs(&self) -> &[&'static str] {
+        self.core.needed_libs()
+    }
+
+    /// Get user data from the elf object.
     #[inline]
     pub fn user_data(&self) -> &UserData {
-        &self.user_data
+        self.core.user_data()
+    }
+
+    #[inline]
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
     }
 }
 
-#[allow(unused)]
-pub struct Dylib {
+struct CoreComponentInner {
+    /// file name
     name: CString,
-    symbols: SymbolData,
+    /// elf symbols
+    symbols: SymbolTable,
+    /// dynamic
     dynamic: *const Dyn,
+    /// rela.plt
     pltrel: *const ElfRela,
-    #[cfg(feature = "tls")]
-    tls: Option<usize>,
+    /// phdrs
+    phdrs: &'static [Phdr],
     /// .fini
     fini_fn: Option<extern "C" fn()>,
     /// .fini_array
     fini_array_fn: Option<&'static [extern "C" fn()]>,
+    /// needed libs' name
+    needed_libs: Box<[&'static str]>,
     /// user data
     user_data: UserData,
-    /// dependency libraries
-    dep_libs: Box<[RelocatedDylib]>,
-    /// function closure
-    closures: Box<[Box<dyn Fn(&str) -> Option<*const ()>>]>,
+    /// lazy binding scope
+    lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
     /// semgents
     segments: ElfSegments,
 }
 
-impl Drop for Dylib {
-    fn drop(&mut self) {
+impl CoreComponentInner {
+    #[inline]
+    unsafe fn call_fini(&self) {
         if let Some(f) = self.fini_fn {
             f();
         }
@@ -229,91 +251,172 @@ impl Drop for Dylib {
             }
         }
     }
+
+    #[inline]
+    unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
+        self.symbols
+            .lookup_filter(&SymbolInfo::new(name))
+            .map(|sym| Symbol {
+                ptr: (self.segments.base() + sym.st_value as usize) as _,
+                pd: PhantomData,
+            })
+            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
+    }
 }
 
-impl Debug for Dylib {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Dylib")
-            .field("name", &self.name)
-            .field("dep", &self.dep_libs)
-            .finish()
+/// `CoreComponentRef` is a version of `CoreComponent` that holds a non-owning reference to the managed allocation.
+pub struct CoreComponentRef {
+    inner: Weak<CoreComponentInner>,
+}
+
+impl CoreComponentRef {
+    /// Attempts to upgrade the Weak pointer to an Arc
+    pub fn upgrade(&self) -> Option<CoreComponent> {
+        self.inner.upgrade().map(|inner| CoreComponent { inner })
     }
 }
 
-impl Dylib {
-    /// Get the name of the dynamic library.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.name.to_str().unwrap()
+/// The core part of an elf object
+#[derive(Clone)]
+pub struct CoreComponent {
+    inner: Arc<CoreComponentInner>,
+}
+
+unsafe impl Sync for CoreComponent {}
+unsafe impl Send for CoreComponent {}
+
+impl CoreComponent {
+    /// Creates a new Weak pointer to this allocation.
+    pub fn downgrade(&self) -> CoreComponentRef {
+        CoreComponentRef {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 
-    /// Get the C-style name of the dynamic library.
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        &self.name
-    }
-
-    /// Get the base address of the dynamic library.
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.segments.base()
-    }
-
-    /// Get the user data of the dynamic library.
+    /// Get user data from the elf object.
     #[inline]
     pub fn user_data(&self) -> &UserData {
-        &self.user_data
+        &self.inner.user_data
     }
 
-    #[allow(unused_variables)]
-    pub unsafe fn from_raw(
+    /// Get the number of references to the elf object.
+    #[inline]
+    pub fn count(&self) -> usize {
+        Arc::strong_count(&self.inner)
+    }
+
+    /// Get the name of the elf object.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.inner.name.to_str().unwrap()
+    }
+
+    /// Get the C-style name of the elf object.
+    #[inline]
+    pub fn cname(&self) -> &CStr {
+        &self.inner.name
+    }
+
+    /// Get the short name of the elf object.
+    #[inline]
+    pub fn shortname(&self) -> &str {
+        self.name().split('/').last().unwrap()
+    }
+
+    /// Get the base address of the elf object.
+    #[inline]
+    pub fn base(&self) -> usize {
+        self.inner.segments.base()
+    }
+
+    /// Get the memory length of the elf object map.
+    #[inline]
+    pub fn map_len(&self) -> usize {
+        self.inner.segments.len()
+    }
+
+    /// Get the program headers of the elf object.
+    #[inline]
+    pub fn phdrs(&self) -> &[Phdr] {
+        &self.inner.phdrs
+    }
+
+    /// Get the address of the dynamic section.
+    #[inline]
+    pub fn dynamic(&self) -> *const Dyn {
+        self.inner.dynamic
+    }
+
+    /// Get the symbol table.
+    #[inline]
+    pub fn symtab(&self) -> &SymbolTable {
+        &self.inner.symbols
+    }
+
+    /// Get the name of the elf object.
+    #[inline]
+    pub fn needed_libs(&self) -> &[&'static str] {
+        &self.inner.needed_libs
+    }
+
+    /// Call the fini function, usually when the elf object is destroyed.
+    #[inline]
+    pub unsafe fn call_fini(&self) {
+        self.inner.call_fini();
+    }
+
+    unsafe fn from_raw(
         name: CString,
         base: usize,
         dynamic: ElfDynamic,
-        tls: Option<usize>,
+        phdrs: &'static [Phdr],
         mut segments: ElfSegments,
         user_data: UserData,
     ) -> Self {
         segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
         Self {
-            name,
-            symbols: SymbolData::new(&dynamic),
-            pltrel: core::ptr::null(),
-            dynamic: dynamic.dyn_ptr,
-            #[cfg(feature = "tls")]
-            tls,
-            segments,
-            fini_fn: None,
-            fini_array_fn: None,
-            user_data,
-            dep_libs: Box::new([]),
-            closures: Box::new([]),
+            inner: Arc::new(CoreComponentInner {
+                name,
+                symbols: SymbolTable::new(&dynamic),
+                pltrel: core::ptr::null(),
+                dynamic: dynamic.dyn_ptr,
+                phdrs,
+                segments,
+                fini_fn: None,
+                fini_array_fn: None,
+                needed_libs: Box::new([]),
+                user_data,
+                lazy_scope: None,
+            }),
         }
     }
 
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
-        self.symbols
-            .get_sym(&SymbolInfo::new(name))
+        self.inner.get(name)
+    }
+
+    #[cfg(feature = "version")]
+    unsafe fn get_version<'lib, T>(
+        &'lib self,
+        name: &str,
+        version: &str,
+    ) -> Result<Symbol<'lib, T>> {
+        self.inner
+            .symbols
+            .lookup_filter(&SymbolInfo::new_with_version(name, version))
             .map(|sym| Symbol {
                 ptr: (self.base() + sym.st_value as usize) as _,
                 pd: PhantomData,
             })
             .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
     }
+}
 
-    #[cfg(feature = "version")]
-    pub unsafe fn get_version<'lib, T>(
-        &'lib self,
-        name: &str,
-        version: &str,
-    ) -> Result<Symbol<'lib, T>> {
-        self.symbols
-            .get_sym(&SymbolInfo::new_with_version(name, version))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
-            .ok_or(find_symbol_error(format!("can not find symbol:{}", name)))
+impl Debug for CoreComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Dylib")
+            .field("name", &self.inner.name)
+            .finish()
     }
 }
 
@@ -331,64 +434,119 @@ impl<'lib, T> ops::Deref for Symbol<'lib, T> {
     }
 }
 
-/// A dynamic library that has been relocated
-#[derive(Clone)]
-pub struct RelocatedDylib {
-    pub inner: Arc<Dylib>,
-}
-
-impl Debug for RelocatedDylib {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.inner.fmt(f)
+impl<'lib, T> Symbol<'lib, T> {
+    pub fn into_raw(self) -> *const () {
+        self.ptr
     }
 }
 
-unsafe impl Send for RelocatedDylib {}
+/// A dynamic library that has been relocated
+#[derive(Clone)]
+pub struct RelocatedDylib<'scope> {
+    core: CoreComponent,
+    _marker: PhantomData<&'scope ()>,
+}
 
-impl RelocatedDylib {
-    /// Get dependent libraries.
-    /// # Examples
-    ///
-    /// ```no_run
-    /// if let Some(dependencies) = library.dep_libs() {
-    ///     for lib in dependencies {
-    ///         println!("Dependency: {:?}", lib);
-    ///     }
-    /// } else {
-    ///     println!("No dependencies found.");
-    /// }
-    /// ```
+impl<'scope> Debug for RelocatedDylib<'scope> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.core.fmt(f)
+    }
+}
+
+impl<'scope> RelocatedDylib<'scope> {
+    /// Get the name of the elf object.
     #[inline]
-    pub fn dep_libs(&self) -> Option<&[RelocatedDylib]> {
-        if self.inner.dep_libs.is_empty() {
-            None
-        } else {
-            Some(&self.inner.dep_libs)
+    pub fn needed_libs(&self) -> &[&'static str] {
+        self.core.needed_libs()
+    }
+
+    /// Get the name of the elf object.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.core.name()
+    }
+
+    /// Call the fini function, usually when the elf object is destroyed.
+    #[inline]
+    pub unsafe fn call_fini(&self) {
+        self.core.call_fini();
+    }
+
+    /// Get the C-style name of the elf object.
+    #[inline]
+    pub fn cname(&self) -> &CStr {
+        &self.core.cname()
+    }
+
+    /// Get the base address of the elf object.
+    #[inline]
+    pub fn base(&self) -> usize {
+        self.core.base()
+    }
+
+    /// Get the user data of the elf object.
+    #[inline]
+    pub fn user_data(&self) -> &UserData {
+        &self.core.inner.user_data
+    }
+
+    /// Get the program headers of the elf object.
+    #[inline]
+    pub fn phdrs(&self) -> &[Phdr] {
+        &self.core.phdrs()
+    }
+
+    #[inline]
+    pub fn into_ptr(self) -> *const c_void {
+        Arc::into_raw(self.core.inner) as _
+    }
+
+    #[inline]
+    pub fn as_ptr(&self) -> *const c_void {
+        Arc::as_ptr(&self.core.inner).cast()
+    }
+
+    /// Get the short name of the elf object.
+    #[inline]
+    pub fn shortname(&self) -> &str {
+        self.core.shortname()
+    }
+
+    /// Get the core component of the elf object.
+    #[inline]
+    pub fn into_core_component(self) -> CoreComponent {
+        self.core
+    }
+
+    /// Get the core component of the elf object.
+    #[inline]
+    pub fn core_component(&self) -> &CoreComponent {
+        &self.core
+    }
+
+    #[inline]
+    pub unsafe fn from_ptr(raw: *const c_void) -> Self {
+        Self {
+            core: CoreComponent {
+                inner: Arc::from_raw(raw as *const CoreComponentInner),
+            },
+            _marker: PhantomData,
         }
     }
 
-    /// Get the name of the dynamic library.
     #[inline]
-    pub fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    /// Get the C-style name of the dynamic library.
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        &self.inner.cname()
-    }
-
-    /// Get the base address of the dynamic library.
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.inner.base()
-    }
-
-    /// Get the user data of the dynamic library.
-    #[inline]
-    pub fn user_data(&self) -> &UserData {
-        &self.inner.user_data()
+    pub unsafe fn new_uncheck(
+        name: CString,
+        base: usize,
+        dynamic: ElfDynamic,
+        phdrs: &'static [Phdr],
+        segments: ElfSegments,
+        user_data: UserData,
+    ) -> Self {
+        Self {
+            core: CoreComponent::from_raw(name, base, dynamic, phdrs, segments, user_data),
+            _marker: PhantomData,
+        }
     }
 
     /// Get a pointer to a function or static variable by symbol name.
@@ -416,10 +574,10 @@ impl RelocatedDylib {
     /// ```
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Result<Symbol<'lib, T>> {
-        self.inner.get(name)
+        self.core.get(name)
     }
 
-    /// Load a versioned symbol from the dynamic library.
+    /// Load a versioned symbol from the elf object.
     ///
     /// # Examples
     /// ```
@@ -432,7 +590,7 @@ impl RelocatedDylib {
         name: &str,
         version: &str,
     ) -> Result<Symbol<'lib, T>> {
-        self.inner.get_version(name, version)
+        self.core.get_version(name, version)
     }
 }
 
@@ -452,6 +610,8 @@ pub enum Error {
     ParseDynamicError { msg: &'static str },
     /// An error occurred while parsing elf header.
     ParseEhdrError { msg: String },
+    /// An error occurred while parsing program header.
+    ParsePhdrError { msg: String },
 }
 
 impl Display for Error {
@@ -464,6 +624,7 @@ impl Display for Error {
             Error::FindSymbolError { msg } => write!(f, "{msg}"),
             Error::ParseDynamicError { msg } => write!(f, "{msg}"),
             Error::ParseEhdrError { msg } => write!(f, "{msg}"),
+            Error::ParsePhdrError { msg } => write!(f, "{msg}"),
         }
     }
 }
@@ -514,6 +675,32 @@ fn parse_ehdr_error(msg: impl ToString) -> Error {
     Error::ParseEhdrError {
         msg: msg.to_string(),
     }
+}
+
+#[cold]
+#[inline(never)]
+pub fn parse_phdr_error(msg: impl ToString) -> Error {
+    Error::ParsePhdrError {
+        msg: msg.to_string(),
+    }
+}
+
+/// Set the global scope, lazy binding will look for the symbol in the global scope.
+///
+/// # Safety
+/// This function is marked as unsafe because it directly interacts with raw pointers,
+/// and it also requires the user to ensure thread safety.  
+/// It is the caller's responsibility to ensure that the provided function `f` behaves correctly.
+///
+/// # Parameters
+/// - `f`: A function that takes a symbol name as a parameter and returns an optional raw pointer.
+///        If the symbol is found in the global scope, the function should return `Some(raw_pointer)`,
+///        otherwise, it should return `None`.
+///
+/// # Return
+/// This function does not return a value. It sets the global scope for lazy binding.
+pub unsafe fn set_global_scope(f: fn(&str) -> Option<*const ()>) {
+    GLOBAL_SCOPE.store(f as usize, core::sync::atomic::Ordering::Release);
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

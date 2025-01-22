@@ -13,6 +13,7 @@ pub const REL_DTPMOD: u32 = R_RISCV_TLS_DTPMOD64;
 pub const REL_SYMBOLIC: u32 = R_RISCV_64;
 pub const REL_JUMP_SLOT: u32 = R_RISCV_JUMP_SLOT;
 pub const REL_DTPOFF: u32 = R_RISCV_TLS_DTPREL64;
+pub const REL_IRELATIVE: u32 = R_RISCV_IRELATIVE;
 
 global_asm!(
     "

@@ -34,7 +34,5 @@ default = ["std"]
 std = []
 # enable default implementation on devices with mmap
 mmap = ["dep:libc", "std"]
-# enable this when you need to use thread local storage
-tls = []
 # activate specific versions of symbols for dynamic library loading
 version = []

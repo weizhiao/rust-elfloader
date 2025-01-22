@@ -5,16 +5,18 @@ use crate::{
     parse_dynamic_error, parse_ehdr_error,
     relocation::ElfRelocation,
     segment::{ELFRelro, ElfSegments, MASK, PAGE_SIZE},
-    symbol::SymbolData,
-    ElfDylib, ElfObject, Result, ThreadLocal, Unwind, UserData,
+    symbol::SymbolTable,
+    CoreComponent, CoreComponentInner, ElfDylib, ElfObject, Result, UserData,
 };
-use alloc::vec::Vec;
+use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
 use core::{
+    ffi::CStr,
     marker::PhantomData,
     mem::{forget, MaybeUninit},
+    ptr::null,
 };
 use elf::{
-    abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_LOAD, PT_PHDR},
+    abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_RELRO, PT_LOAD, PT_PHDR},
     endian::NativeEndian,
     file::{parse_ident, FileHeader},
 };
@@ -212,10 +214,11 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
     }
 
     /// Load a dynamic library into memory
-    pub fn load_dylib<T, U>(mut self, lazy_bind: Option<bool>) -> Result<ElfDylib<T, U>>
+    /// # Note
+    /// `hook` functions are called first when a program header is processed.
+    pub fn load_dylib<F>(mut self, lazy_bind: Option<bool>, hook: F) -> Result<ElfDylib>
     where
-        T: ThreadLocal,
-        U: Unwind,
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
     {
         let ehdr = self.load_ehdr()?;
         let (phdr_start, phdr_end) = ehdr.phdr_range();
@@ -225,25 +228,21 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         let segments = self.create_segments(&phdrs)?;
         // 获取基地址
         let base = segments.base();
-        let mut unwind = None;
-        let mut dynamics = None;
+        let mut dynamic = None;
         let mut relro = None;
         let mut phdr_mmap = None;
-        #[cfg(feature = "tls")]
-        let mut tls = None;
+        let mut user_data = UserData::empty();
+        let name = self.object.file_name().to_owned();
 
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs.iter() {
+            hook(&name, phdr, &segments, &mut user_data)?;
             match phdr.p_type {
                 // 将segment加载到内存中
                 PT_LOAD => self.load_segment(&segments, phdr)?,
                 // 解析.dynamic section
                 PT_DYNAMIC => {
-                    dynamics = Some(ElfRawDynamic::new((phdr.p_vaddr as usize + base) as _)?)
-                }
-                PT_GNU_EH_FRAME => {
-                    unwind =
-                        unsafe { U::new(phdr, segments.base()..segments.base() + segments.len()) }
+                    dynamic = Some(ElfRawDynamic::new((phdr.p_vaddr as usize + base) as _)?)
                 }
                 PT_GNU_RELRO => relro = Some(ELFRelro::new::<M>(phdr, segments.base())),
                 PT_PHDR => {
@@ -254,8 +253,6 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                         )
                     })
                 }
-                #[cfg(feature = "tls")]
-                elf::abi::PT_TLS => tls = unsafe { T::new(phdr, base) },
                 _ => {}
             }
         }
@@ -274,41 +271,40 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             }
             unreachable!()
         });
-        let dynamics = dynamics
+        let dynamic = dynamic
             .ok_or(parse_dynamic_error("elf file does not have dynamic"))?
             .finish(base);
-        let relocation = ElfRelocation::new(dynamics.pltrel, dynamics.dynrel);
-        let symbols = SymbolData::new(&dynamics);
-        let needed_libs: Vec<&'static str> = dynamics
+        let relocation = ElfRelocation::new(dynamic.pltrel, dynamic.dynrel, dynamic.rela_count);
+        let symbols = SymbolTable::new(&dynamic);
+        let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
             .iter()
-            .map(|needed_lib| unsafe { symbols.strtab().get(*needed_lib) })
+            .map(|needed_lib| unsafe { symbols.strtab().get(needed_lib.get()) })
             .collect();
-        let user_data = UserData::empty();
-        let name = self.object.file_name();
+
         let elf_lib = ElfDylib {
-            name,
             entry: entry as usize,
-            phdrs,
-            symbols,
-            dynamic: dynamics.dyn_ptr,
-            #[cfg(feature = "tls")]
-            tls,
-            unwind,
-            segments,
-            fini_fn: dynamics.fini_fn,
-            fini_array_fn: dynamics.fini_array_fn,
-            user_data,
-            dep_libs: Vec::new(),
-            closures: Vec::new(),
             relro,
             relocation,
-            init_fn: dynamics.init_fn,
-            init_array_fn: dynamics.init_array_fn,
-            needed_libs,
-            lazy: lazy_bind.unwrap_or(!dynamics.bind_now),
-            _marker: PhantomData,
-            got: dynamics.got,
+            init_fn: dynamic.init_fn,
+            init_array_fn: dynamic.init_array_fn,
+            lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
+            got: dynamic.got,
+            core: CoreComponent {
+                inner: Arc::new(CoreComponentInner {
+                    name,
+                    symbols,
+                    dynamic: dynamic.dyn_ptr,
+                    pltrel: dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()),
+                    phdrs,
+                    fini_fn: dynamic.fini_fn,
+                    fini_array_fn: dynamic.fini_array_fn,
+                    segments,
+                    needed_libs: needed_libs.into_boxed_slice(),
+                    user_data,
+                    lazy_scope: None,
+                }),
+            },
         };
         Ok(elf_lib)
     }

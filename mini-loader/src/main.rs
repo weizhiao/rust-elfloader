@@ -13,7 +13,7 @@ use elf_loader::{
     Loader,
 };
 use linked_list_allocator::LockedHeap;
-use mini_loader::{println, syscall::exit, MmapImpl, MyFile, MyThreadLocal, MyUnwind};
+use mini_loader::{println, syscall::exit, MmapImpl, MyFile};
 use syscalls::{syscall3, Sysno};
 
 const AT_NULL: u64 = 0;
@@ -135,7 +135,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
     let elf_file = MyFile::new(elf_name);
     let loader = Loader::<_, MmapImpl>::new(elf_file);
-    let dylib = loader.load_dylib::<MyThreadLocal, MyUnwind>(None).unwrap();
+    let dylib = loader.load_dylib(None, |_, _, _, _| Ok(())).unwrap();
     let phdrs = dylib.phdrs();
     let mut interp_dylib = None;
     for phdr in phdrs {
@@ -144,11 +144,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             let interp_name = CStr::from_ptr((dylib.base() + phdr.p_vaddr as usize) as _);
             let interp_file = MyFile::new(interp_name);
             let interp_loader = Loader::<_, MmapImpl>::new(interp_file);
-            interp_dylib = Some(
-                interp_loader
-                    .load_dylib::<MyThreadLocal, MyUnwind>(None)
-                    .unwrap(),
-            );
+            interp_dylib = Some(interp_loader.load_dylib(None, |_, _, _, _| Ok(())).unwrap());
             break;
         }
     }
