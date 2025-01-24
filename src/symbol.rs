@@ -1,6 +1,5 @@
-use elf::abi::{SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK};
-
 use crate::{arch::ElfSymbol, dynamic::ElfDynamic};
+use elf::abi::{SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK};
 
 #[derive(Clone)]
 struct ElfGnuHash {
@@ -136,7 +135,7 @@ impl<'a> SymbolInfo<'a> {
         }
     }
 
-    /// Get the name of the symbol.
+    /// Gets the name of the symbol.
     #[inline]
     pub fn symbol_name(&self) -> &str {
         &self.name
@@ -218,7 +217,7 @@ impl SymbolTable {
         None
     }
 
-	/// Use the symbol specific information to get the symbol which can be used for relocation in the symbol table
+    /// Use the symbol specific information to get the symbol which can be used for relocation in the symbol table
     #[inline]
     pub fn lookup_filter(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         if let Some(sym) = self.lookup(symbol) {

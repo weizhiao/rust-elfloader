@@ -16,7 +16,7 @@ struct SymDef<'temp> {
 }
 
 impl<'temp> SymDef<'temp> {
-	#[inline(always)]
+    #[inline(always)]
     fn convert(self) -> *const () {
         if likely(self.sym.st_info & 0xf != STT_GNU_IFUNC) {
             (self.base + self.sym.st_value as usize) as _
@@ -28,36 +28,11 @@ impl<'temp> SymDef<'temp> {
     }
 }
 
-#[inline(never)]
-fn find_symdef<'a, 'scope: 'a, I>(
-    elf_lib: &'a CoreComponentInner,
-    mut libs: I,
-    dynsym: &'a ElfSymbol,
-    syminfo: &SymbolInfo,
-) -> Option<SymDef<'a>>
-where
-    I: Iterator<Item = &'scope CoreComponent>,
-{
-    if dynsym.st_info >> 4 == STB_LOCAL {
-        Some(SymDef {
-            sym: dynsym,
-            base: elf_lib.segments.base(),
-        })
-    } else {
-        libs.find_map(|lib| {
-            lib.inner.symbols.lookup_filter(&syminfo).map(|sym| SymDef {
-                sym,
-                base: lib.base(),
-            })
-        })
-    }
-}
-
 impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
     /// * During relocation, it is preferred to look for symbols in function closures `find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * Typically, the `scope` should also contain the current dynamic library itself,
     /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the lazy scope
@@ -73,6 +48,30 @@ impl ElfDylib {
         F: Fn(&str) -> Option<*const ()>,
         D: Fn(&ElfRela, &ElfDylib, S) -> bool,
     {
+        fn find_symdef<'a, 'scope: 'a, I>(
+            elf_lib: &'a CoreComponentInner,
+            mut libs: I,
+            dynsym: &'a ElfSymbol,
+            syminfo: &SymbolInfo,
+        ) -> Option<SymDef<'a>>
+        where
+            I: Iterator<Item = &'scope CoreComponent>,
+        {
+            if unlikely(dynsym.st_info >> 4 == STB_LOCAL) {
+                Some(SymDef {
+                    sym: dynsym,
+                    base: elf_lib.segments.base(),
+                })
+            } else {
+                libs.find_map(|lib| {
+                    lib.inner.symbols.lookup_filter(&syminfo).map(|sym| SymDef {
+                        sym,
+                        base: lib.base(),
+                    })
+                })
+            }
+        }
+
         /*
             A Represents the addend used to compute the value of the relocatable field.
             B Represents the base address at which a shared object has been loaded into memory during execution.
@@ -80,9 +79,10 @@ impl ElfDylib {
         */
 
         if let Some(rela_array) = self.relocation.relative {
+            assert!(rela_array[0].r_type() == REL_RELATIVE as usize);
             rela_array.iter().for_each(|rela| {
                 // B + A
-                assert!(rela.r_type() == REL_RELATIVE as usize);
+                debug_assert!(rela.r_type() == REL_RELATIVE as usize);
                 self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
             });
         }
@@ -103,43 +103,37 @@ impl ElfDylib {
                     // REL_GOT: S  REL_SYMBOLIC: S + A
                     REL_GOT | REL_SYMBOLIC => {
                         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        find(syminfo.name)
-                            .or(
-                                find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
-                                    .map(|symdef| symdef.convert()),
-                            )
-                            .map(|symbol| self.write_val(rela.r_offset(), symbol as usize))
-                            .ok_or(relocate_error(format!(
-                                "can not relocate symbol {} in {}, rel type: {}",
-                                syminfo.name,
-                                self.name(),
-                                r_type,
-                            )))?;
+                        if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                            &self.core.inner,
+                            scope.clone(),
+                            dynsym,
+                            &syminfo,
+                        )
+                        .map(|symdef| symdef.convert()))
+                        {
+                            self.write_val(rela.r_offset(), symbol as usize);
+                            continue;
+                        }
                     }
                     REL_DTPOFF => {
                         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
-                            .map(|symdef| {
-                                // offset in tls
-                                let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
-                                    .wrapping_sub(TLS_DTV_OFFSET);
-                                self.write_val(rela.r_offset(), tls_val);
-                            })
-                            .ok_or(relocate_error(format!(
-                                "can not relocate symbol {} in {}, rel type: {}",
-                                syminfo.name,
-                                self.name(),
-                                r_type,
-                            )))?;
-                    }
-                    _ => {
-                        if !deal_unknown(&rela, &self, scope.clone()) {
-                            return Err(relocate_error(format!(
-                                "unsupported relocation type: {}, symbol idx:{}",
-                                r_type, r_sym,
-                            )));
+                        if let Some(symdef) =
+                            find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
+                        {
+                            // offset in tls
+                            let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
+                                .wrapping_sub(TLS_DTV_OFFSET);
+                            self.write_val(rela.r_offset(), tls_val);
+                            continue;
                         }
                     }
+                    _ => {}
+                }
+                if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
+                    return Err(relocate_error(format!(
+                        "unsupported relocation type: {}, symbol idx:{}",
+                        r_type, r_sym,
+                    )));
                 }
             }
         }
@@ -181,24 +175,28 @@ impl ElfDylib {
                     // 对于.rela.plt来说通常只有这两种重定位类型
                     if likely(r_type == REL_JUMP_SLOT) {
                         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        find(syminfo.name)
-                            .or(
-                                find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
-                                    .map(|symdef| symdef.convert()),
-                            )
-                            .map(|symbol| self.write_val(rela.r_offset(), symbol as usize))
-                            .ok_or(relocate_error(format!(
-                                "can not relocate symbol {} in {}, rel type: {}",
-                                syminfo.name,
-                                self.name(),
-                                r_type,
-                            )))?;
+                        if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                            &self.core.inner,
+                            scope.clone(),
+                            dynsym,
+                            &syminfo,
+                        )
+                        .map(|symdef| symdef.convert()))
+                        {
+                            self.write_val(rela.r_offset(), symbol as usize);
+                            continue;
+                        }
                     } else if unlikely(r_type == REL_IRELATIVE) {
                         let ifunc: fn() -> usize =
                             unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
                         self.write_val(rela.r_offset(), ifunc());
-                    } else {
-                        unreachable!()
+                        continue;
+                    }
+                    if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
+                        return Err(relocate_error(format!(
+                            "unsupported relocation type: {}, symbol idx:{}",
+                            r_type, r_sym,
+                        )));
                     }
                 }
                 if let Some(relro) = self.relro {

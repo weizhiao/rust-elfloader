@@ -290,6 +290,12 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             init_array_fn: dynamic.init_array_fn,
             lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
             got: dynamic.got,
+            rpath: dynamic
+                .rpath_off
+                .map(|rpath_off| unsafe { symbols.strtab().get(rpath_off.get()) }),
+            runpath: dynamic
+                .runpath_off
+                .map(|runpath_off| unsafe { symbols.strtab().get(runpath_off.get()) }),
             core: CoreComponent {
                 inner: Arc::new(CoreComponentInner {
                     name,

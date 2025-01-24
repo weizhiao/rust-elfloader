@@ -274,7 +274,10 @@ impl ELFVersion {
         //记录最大的verison idx
         let mut ndx_max = 0;
         if let Some((ptr, num)) = verdefs {
-            let verdef_table = VerDefTable { ptr: ptr.get() as _, num:num.get() };
+            let verdef_table = VerDefTable {
+                ptr: ptr.get() as _,
+                num: num.get(),
+            };
             for (verdef, _) in verdef_table.into_iter() {
                 if ndx_max < verdef.index() {
                     ndx_max = verdef.index();
@@ -282,7 +285,10 @@ impl ELFVersion {
             }
         }
         if let Some((ptr, num)) = verneeds {
-            let verneed_table = VerNeedTable { ptr: ptr.get() as _, num:num.get() };
+            let verneed_table = VerNeedTable {
+                ptr: ptr.get() as _,
+                num: num.get(),
+            };
             for (_, vna_iter) in verneed_table.into_iter() {
                 for aux in vna_iter {
                     if ndx_max < aux.index() {
@@ -295,7 +301,10 @@ impl ELFVersion {
         versions.reserve(ndx_max + 1);
         unsafe { versions.set_len(ndx_max + 1) };
         if let Some((ptr, num)) = verdefs {
-            let verdef_table = VerDefTable { ptr: ptr.get() as _, num:num.get() };
+            let verdef_table = VerDefTable {
+                ptr: ptr.get() as _,
+                num: num.get(),
+            };
             for (verdef, mut vd_iter) in verdef_table.into_iter() {
                 let name = unsafe { strtab.get(vd_iter.next().unwrap().vda_name as usize) };
                 versions[verdef.index()] = Version {
@@ -305,7 +314,10 @@ impl ELFVersion {
             }
         }
         if let Some((ptr, num)) = verneeds {
-            let verneed_table = VerNeedTable { ptr: ptr.get() as _, num:num.get() };
+            let verneed_table = VerNeedTable {
+                ptr: ptr.get() as _,
+                num: num.get(),
+            };
             for (_, vna_iter) in verneed_table.into_iter() {
                 for aux in vna_iter {
                     let name = unsafe { strtab.get(aux.vna_name as usize) };

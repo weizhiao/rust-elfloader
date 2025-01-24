@@ -101,7 +101,6 @@ impl ElfSegments {
         self.len
     }
 
-    /// base = memory_addr - addr_min
     #[inline]
     pub fn base(&self) -> usize {
         unsafe { self.memory.as_ptr().cast::<u8>().sub(self.offset) as usize }

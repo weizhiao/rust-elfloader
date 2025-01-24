@@ -54,6 +54,10 @@ pub struct ElfRawDynamic {
     pub verdef_num: Option<NonZeroUsize>,
     /// DT_NEEDED
     pub needed_libs: Vec<NonZeroUsize>,
+    /// DT_RPATH
+    pub rpath_off: Option<NonZeroUsize>,
+    /// DT_RUNPATH
+    pub runpath_off: Option<NonZeroUsize>,
 }
 
 impl ElfRawDynamic {
@@ -79,6 +83,8 @@ impl ElfRawDynamic {
         let mut verneed_num = None;
         let mut verdef_off = None;
         let mut verdef_num = None;
+        let mut rpath_off = None;
+        let mut runpath_off = None;
         let mut flags = 0;
         let mut needed_libs = Vec::new();
 
@@ -138,6 +144,12 @@ impl ElfRawDynamic {
                     DT_VERDEFNUM => {
                         verdef_num = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
+                    DT_RPATH => {
+                        rpath_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                    }
+                    DT_RUNPATH => {
+                        runpath_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                    }
                     DT_NULL => break,
                     _ => {}
                 }
@@ -172,6 +184,8 @@ impl ElfRawDynamic {
             verdef_off,
             verdef_num,
             rela_count,
+            rpath_off,
+            runpath_off,
         })
     }
 
@@ -246,6 +260,8 @@ impl ElfRawDynamic {
             version_idx,
             verneed,
             verdef,
+            rpath_off: self.rpath_off,
+            runpath_off: self.runpath_off,
         }
     }
 }
@@ -269,4 +285,6 @@ pub struct ElfDynamic {
     pub version_idx: Option<NonZeroUsize>,
     pub verneed: Option<(NonZeroUsize, NonZeroUsize)>,
     pub verdef: Option<(NonZeroUsize, NonZeroUsize)>,
+    pub rpath_off: Option<NonZeroUsize>,
+    pub runpath_off: Option<NonZeroUsize>,
 }

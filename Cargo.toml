@@ -28,7 +28,7 @@ bitflags = "2.6.0"
 cfg-if = '1.0'
 
 [features]
-default = ["std"]
+default = []
 
 # enable std
 std = []
