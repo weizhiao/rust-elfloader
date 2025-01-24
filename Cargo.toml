@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["wzhao <1207410841@qq.com>"]
 readme = "README.md"
@@ -8,7 +8,7 @@ repository = "https://github.com/weizhiao/elf_loader"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os", "embedded"]
 license = "Apache-2.0"
-description = "A lightweight, extensible, and high-performance library for loading ELF files."
+description = "A lightweight, extensible, and fast library for loading ELF files."
 exclude = [".gitignore"]
 
 [workspace]
