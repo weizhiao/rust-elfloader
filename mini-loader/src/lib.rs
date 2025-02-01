@@ -7,10 +7,7 @@ use core::{
     ffi::{c_int, CStr},
     ptr::NonNull,
 };
-use elf_loader::{
-    mmap::{Mmap, MmapOffset, OffsetType},
-    object::ElfObject,
-};
+use elf_loader::{mmap::Mmap, object::ElfObject};
 use syscall::{lseek, mmap, mprotect, munmap, open, read, SEEK_SET};
 
 pub struct MyFile {
@@ -28,14 +25,8 @@ impl ElfObject for MyFile {
         Ok(())
     }
 
-    fn transport(&self, offset: usize, len: usize) -> elf_loader::mmap::MmapOffset {
-        MmapOffset {
-            len,
-            kind: OffsetType::File {
-                fd: self.fd,
-                file_offset: offset,
-            },
-        }
+    fn as_fd(&self) -> Option<i32> {
+        Some(self.fd)
     }
 }
 
@@ -55,22 +46,20 @@ impl Mmap for MmapImpl {
         len: usize,
         prot: elf_loader::mmap::ProtFlags,
         flags: elf_loader::mmap::MapFlags,
-        offset: elf_loader::mmap::MmapOffset,
+        offset: usize,
+        fd: Option<i32>,
+        need_copy: &mut bool,
     ) -> elf_loader::Result<core::ptr::NonNull<core::ffi::c_void>> {
-        match offset.kind {
-            elf_loader::mmap::OffsetType::File { fd, file_offset } => {
-                let ptr = mmap(
-                    addr.unwrap_or(0) as _,
-                    len,
-                    prot.bits(),
-                    flags.bits(),
-                    fd,
-                    file_offset as _,
-                );
-                Ok(NonNull::new_unchecked(ptr))
-            }
-            elf_loader::mmap::OffsetType::Addr(_) => todo!(),
-        }
+        *need_copy = false;
+        let ptr = mmap(
+            addr.unwrap_or(0) as _,
+            len,
+            prot.bits(),
+            flags.bits(),
+            fd.unwrap(),
+            offset as _,
+        );
+        Ok(NonNull::new_unchecked(ptr))
     }
 
     unsafe fn mmap_anonymous(

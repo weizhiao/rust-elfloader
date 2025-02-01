@@ -1,7 +1,7 @@
 use crate::{
     arch::{Phdr, EHDR_SIZE, EM_ARCH, E_CLASS, PHDR_SIZE},
     dynamic::ElfRawDynamic,
-    mmap::{self, Mmap, MmapImpl},
+    mmap::{self, Mmap, MmapImpl, MmapRange},
     parse_dynamic_error, parse_ehdr_error,
     relocation::ElfRelocation,
     segment::{ELFRelro, ElfSegments, MASK, PAGE_SIZE},
@@ -120,12 +120,16 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         min_vaddr &= MASK as usize;
         let total_size = max_vaddr - min_vaddr;
         let memory = unsafe {
-            M::mmap(
+            M::mmap_segment(
                 None,
                 total_size,
                 ElfSegments::map_prot(min_prot),
                 mmap::MapFlags::MAP_PRIVATE,
-                self.object.transport(min_off, min_filesz),
+                MmapRange {
+                    offset: min_off,
+                    len: min_filesz,
+                },
+                &mut self.object,
             )?
         };
         Ok(ElfSegments {
@@ -136,7 +140,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         })
     }
 
-    fn load_segment(&self, segments: &ElfSegments, phdr: &Phdr) -> crate::Result<()> {
+    fn load_segment(&mut self, segments: &ElfSegments, phdr: &Phdr) -> crate::Result<()> {
         // 映射的起始地址与结束地址都是页对齐的
         let addr_min = segments.offset();
         let base = segments.base();
@@ -151,12 +155,16 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         // 将类似bss节的内存区域的值设置为0
         if addr_min != min_vaddr {
             let _ = unsafe {
-                M::mmap(
+                M::mmap_segment(
                     Some(real_addr),
                     memsz,
                     prot,
                     mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
-                    self.object.transport(offset, filesz),
+                    MmapRange {
+                        len: filesz,
+                        offset,
+                    },
+                    &mut self.object,
                 )?
             };
             //将类似bss节的内存区域的值设置为0

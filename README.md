@@ -5,7 +5,7 @@
 
 English | [中文](README_zh.md)  
 
-A `lightweight`, `extensible`, and `high-performance` library that can load and relocate ELF objects from memory or files.   
+A `lightweight`, `extensible`, and `high-performance` library that can load and relocate ELF objects from memory, files, or sockets.
 
 [Documentation](https://docs.rs/elf_loader/)
 # Capabilities
@@ -42,6 +42,8 @@ It should be noted that mini-loader must be compiled with the release parameter.
 # TODO
 * Support more CPU instruction sets.
 * Improve support for the DT_FLAGS flag bits.
+* Implement the ElfObject trait for TcpStream, enabling elf_loader to load dynamic libraries directly via TcpStream and achieve a "streaming" loading effect.
+* Implement asynchronous versions of the ElfObject trait and the load_dylib interface.
 * Improve comments and documentation.  
 ...
 

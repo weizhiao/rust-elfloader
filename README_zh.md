@@ -2,7 +2,7 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 # elf_loader
-一个能够从内存或文件加载并重定位elf对象的轻量化、可拓展、高性能的库。  
+一个能够从内存、文件或套接字加载并重定位elf对象的轻量化、可拓展、高性能的库。  
 
 [文档](https://docs.rs/elf_loader/)
 
@@ -37,8 +37,10 @@ $ ./mini-loader /bin/ls
 [dlopen-rs](https://crates.io/crates/dlopen-rs)也是基于`elf_loader`库实现的。它实现了dlopen的功能，可以在运行时打开动态库。
 
 # 未完成
-* 支持更多的指令集。
+* 支持更多的CPU指令集。
 * 完善对DT_FLAGS标志位的支持。
+* 为TcpStream实现trait ElfObject，使elf_loader能够直接通过TcpStream加载动态库，实现类似“流式”加载的效果。
+* 实现异步版本的ElfObject trait和load_dylib接口。
 * 完善注释和文档。  
 .....
 

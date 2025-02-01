@@ -9,7 +9,7 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::Result;
+use crate::{object::ElfObject, Result};
 use bitflags::bitflags;
 use core::{
     ffi::{c_int, c_void},
@@ -43,26 +43,12 @@ bitflags! {
     }
 }
 
-/// Represents the type of offset used for memory mapping operations.
-pub enum OffsetType {
-    /// An offset type that is based on a file descriptor and a file offset.
-    File {
-        /// The file descriptor associated with the file.
-        fd: c_int,
-        /// The offset within the file from which to start the mapping.
-        file_offset: usize,
-    },
-    /// An offset type that is based on a raw address.
-    /// Points to the starting address of the content to be mapped
-    Addr(*const u8),
-}
-
 /// This struct is used to specify the offset and length for memory-mapped regions.
-pub struct MmapOffset {
+pub struct MmapRange {
     /// The length of the memory region to be mapped.
     pub len: usize,
-    /// The type of offset, which can be either a file descriptor-based offset or an address-based offset.
-    pub kind: OffsetType,
+    /// The offset of the mapped region in the elf object. It is always aligned by page size(4096 or 65536).
+    pub offset: usize,
 }
 
 /// A trait representing low-level memory mapping operations.
@@ -81,13 +67,17 @@ pub trait Mmap {
     /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096 or 65536).
     /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
     /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
-    /// * `offset` - The offset into the file or bytes from which to start the mapping.
+    /// * `offset` - The file offset.
+    /// * `fd` - The file descriptor.
+	/// * `need_copy` - It is set to false if the mmap function can do the job of segment copying on its own, and to true otherwise.
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-        offset: MmapOffset,
+        offset: usize,
+        fd: Option<i32>,
+        need_copy: &mut bool,
     ) -> Result<NonNull<c_void>>;
 
     /// This function creates a new anonymous mapping with the specified protection and flags.
@@ -120,4 +110,39 @@ pub trait Mmap {
     /// * `len` - The length of the memory region to protect.
     /// * `prot` - The new protection options for the mapping.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
+
+    /// This function maps elf segment into memory at the specified address with the given protection and flags.
+    ///
+    /// # Arguments
+    /// * `addr` - An optional starting address for the mapping. The address is always aligned by page size(4096 or 65536).
+    /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096 or 65536).
+    /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
+    /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
+    /// * `range` - Regions within the ELF object that need to be mapped into memory.
+    /// * `object` - The original elf object.
+    unsafe fn mmap_segment(
+        addr: Option<usize>,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        range: MmapRange,
+        object: &mut dyn ElfObject,
+    ) -> Result<NonNull<c_void>> {
+        let mut need_copy = false;
+        let ptr = Self::mmap(
+            addr,
+            len,
+            prot,
+            flags,
+            range.offset,
+            object.as_fd(),
+            &mut need_copy,
+        )?;
+        if need_copy {
+            let dest = core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), range.len);
+            object.read(dest, range.offset)?;
+            Self::mprotect(ptr, len, prot)?;
+        }
+        Ok(ptr)
+    }
 }
