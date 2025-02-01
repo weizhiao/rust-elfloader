@@ -5,7 +5,7 @@
 
 English | [中文](README_zh.md)  
 
-A `lightweight`, `extensible`, and `fast` library for loading and relocating elf files.    
+A `lightweight`, `extensible`, and `high-performance` library that can load and relocate ELF objects from memory or files.   
 
 [Documentation](https://docs.rs/elf_loader/)
 # Capabilities
@@ -38,3 +38,12 @@ $ ./mini-loader /bin/ls
 It should be noted that mini-loader must be compiled with the release parameter.
 ## dlopen-rs
 [dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime.
+
+# TODO
+* Support more CPU instruction sets.
+* Improve support for the DT_FLAGS flag bits.
+* Improve comments and documentation.  
+...
+
+# Supplement
+If you encounter any issues during use, feel free to raise them on GitHub. We warmly welcome everyone to contribute code to help improve the functionality of `elf_loader`. 😊

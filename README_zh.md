@@ -2,7 +2,7 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 # elf_loader
-一个用于加载elf文件的轻量化、可拓展、高性能的库。  
+一个能够从内存或文件加载并重定位elf对象的轻量化、可拓展、高性能的库。  
 
 [文档](https://docs.rs/elf_loader/)
 
@@ -35,3 +35,12 @@ $ ./mini-loader /bin/ls
 
 ## dlopen-rs
 [dlopen-rs](https://crates.io/crates/dlopen-rs)也是基于`elf_loader`库实现的。它实现了dlopen的功能，可以在运行时打开动态库。
+
+# 未完成
+* 支持更多的指令集。
+* 完善对DT_FLAGS标志位的支持。
+* 完善注释和文档。  
+.....
+
+# 补充
+如果在使用过程中遇到问题可以在 GitHub 上提出问题，十分欢迎大家为本库提交代码一起完善`elf_loader`的功能。😊

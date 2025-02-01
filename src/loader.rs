@@ -9,29 +9,24 @@ use crate::{
     CoreComponent, CoreComponentInner, ElfDylib, ElfObject, Result, UserData,
 };
 use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
-use core::{
-    ffi::CStr,
-    marker::PhantomData,
-    mem::{forget, MaybeUninit},
-    ptr::null,
-};
+use core::{ffi::CStr, marker::PhantomData, mem::MaybeUninit, ptr::null};
 use elf::{
     abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_RELRO, PT_LOAD, PT_PHDR},
     endian::NativeEndian,
     file::{parse_ident, FileHeader},
 };
 
-pub struct ELFEhdr {
+pub struct ElfHeader {
     pub ehdr: FileHeader<NativeEndian>,
 }
 
-impl ELFEhdr {
-    pub(crate) fn new(data: &[u8]) -> Result<ELFEhdr> {
+impl ElfHeader {
+    pub(crate) fn new(data: &[u8]) -> Result<ElfHeader> {
         let ident_buf = &data[..EI_NIDENT];
         let tail_buf = &data[EI_NIDENT..EHDR_SIZE];
         let ident = parse_ident::<NativeEndian>(&ident_buf).map_err(parse_ehdr_error)?;
         let ehdr = FileHeader::parse_tail(ident, &tail_buf).map_err(parse_ehdr_error)?;
-        Ok(ELFEhdr { ehdr })
+        Ok(ElfHeader { ehdr })
     }
 
     //验证elf头
@@ -52,18 +47,22 @@ impl ELFEhdr {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn e_phnum(&self) -> usize {
         self.ehdr.e_phnum as usize
     }
 
+    #[inline]
     pub(crate) fn e_phentsize(&self) -> usize {
         self.ehdr.e_phentsize as usize
     }
 
+    #[inline]
     pub(crate) fn e_phoff(&self) -> usize {
         self.ehdr.e_phoff as usize
     }
 
+    #[inline]
     pub(crate) fn phdr_range(&self) -> (usize, usize) {
         let phdrs_size = self.e_phentsize() * self.e_phnum();
         let phdr_start = self.e_phoff();
@@ -89,30 +88,6 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             object,
             _marker: PhantomData,
         }
-    }
-
-    /// Load and validate ehdr
-    pub fn load_ehdr(&mut self) -> Result<ELFEhdr> {
-        let mut buf: MaybeUninit<[u8; EHDR_SIZE]> = MaybeUninit::uninit();
-        self.object.read(unsafe { &mut *buf.as_mut_ptr() }, 0)?;
-        let buf = unsafe { buf.assume_init() };
-        let ehdr = ELFEhdr::new(&buf)?;
-        ehdr.validate()?;
-        Ok(ehdr)
-    }
-
-    /// Parse ehdr to get phdrs
-    pub fn parse_ehdr(&mut self, ehdr: ELFEhdr) -> crate::Result<Vec<Phdr>> {
-        let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdrs_size = phdr_end - phdr_start;
-        let phdr_num = phdrs_size / PHDR_SIZE;
-        let mut phdr_buf = Vec::with_capacity(phdrs_size);
-        unsafe { phdr_buf.set_len(phdrs_size) };
-        self.object.read(&mut phdr_buf, phdr_start)?;
-        let phdrs =
-            unsafe { Vec::from_raw_parts(phdr_buf.as_mut_ptr() as *mut Phdr, phdr_num, phdr_num) };
-        forget(phdr_buf);
-        Ok(phdrs)
     }
 
     fn create_segments(&mut self, phdrs: &[Phdr]) -> crate::Result<ElfSegments> {
@@ -220,10 +195,31 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
     where
         F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
     {
-        let ehdr = self.load_ehdr()?;
+        const MAX_BUF_SIZE: usize = EHDR_SIZE + 12 * PHDR_SIZE;
+        let mut stack_buf: MaybeUninit<[u8; MAX_BUF_SIZE]> = MaybeUninit::uninit();
+        let stack_buf_ref = unsafe { &mut *stack_buf.as_mut_ptr() };
+        self.object.read(stack_buf_ref, 0)?;
+        let ehdr = ElfHeader::new(stack_buf_ref)?;
+        ehdr.validate()?;
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let entry = ehdr.ehdr.e_entry;
-        let phdrs = self.parse_ehdr(ehdr)?;
+        let phdr_num = ehdr.e_phnum();
+        let mut heap_buf = Vec::new();
+        let phdrs = if MAX_BUF_SIZE >= phdr_end {
+            unsafe {
+                core::slice::from_raw_parts(
+                    stack_buf
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(phdr_start)
+                        .cast::<Phdr>(),
+                    phdr_num,
+                )
+            }
+        } else {
+            heap_buf.resize(phdr_end - phdr_start, 0);
+            self.object.read(&mut heap_buf, phdr_start)?;
+            unsafe { core::slice::from_raw_parts(heap_buf.as_ptr().cast::<Phdr>(), phdr_num) }
+        };
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let segments = self.create_segments(&phdrs)?;
         // 获取基地址
@@ -263,7 +259,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
                 if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
                     return unsafe {
                         core::slice::from_raw_parts(
-                            (segments.base() + phdr_start - cur_range.start) as *const Phdr,
+                            (base + phdr_start - cur_range.start) as *const Phdr,
                             (cur_range.end - cur_range.start) / size_of::<Phdr>(),
                         )
                     };
@@ -273,7 +269,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
         });
         let dynamic = dynamic
             .ok_or(parse_dynamic_error("elf file does not have dynamic"))?
-            .finish(base);
+            .finish(segments.base());
         let relocation = ElfRelocation::new(dynamic.pltrel, dynamic.dynrel, dynamic.rela_count);
         let symbols = SymbolTable::new(&dynamic);
         let needed_libs: Vec<&'static str> = dynamic
@@ -283,7 +279,7 @@ impl<O: ElfObject, M: Mmap> Loader<O, M> {
             .collect();
 
         let elf_lib = ElfDylib {
-            entry: entry as usize,
+            entry: ehdr.ehdr.e_entry as usize,
             relro,
             relocation,
             init_fn: dynamic.init_fn,

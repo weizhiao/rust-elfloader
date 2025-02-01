@@ -9,7 +9,6 @@ use elf::abi::*;
 
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
 
-#[allow(unused)]
 struct SymDef<'temp> {
     sym: &'temp ElfSymbol,
     base: usize,
@@ -78,56 +77,113 @@ impl ElfDylib {
             S Represents the value of the symbol whose index resides in the relocation entry.
         */
 
-        if let Some(rela_array) = self.relocation.relative {
-            assert!(rela_array[0].r_type() == REL_RELATIVE as usize);
-            rela_array.iter().for_each(|rela| {
-                // B + A
-                debug_assert!(rela.r_type() == REL_RELATIVE as usize);
+        assert!(self.relocation.relative[0].r_type() == REL_RELATIVE as usize);
+        self.relocation.relative.into_iter().for_each(|rela| {
+            // B + A
+            debug_assert!(rela.r_type() == REL_RELATIVE as usize);
+            self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
+        });
+
+        for rela in self.relocation.dynrel {
+            let r_type = rela.r_type() as _;
+            let r_sym = rela.r_symbol();
+
+            if unlikely(r_type == REL_RELATIVE) {
                 self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
-            });
+                continue;
+            } else if unlikely(r_type == REL_NONE) {
+                continue;
+            }
+
+            match r_type {
+                // REL_GOT: S  REL_SYMBOLIC: S + A
+                REL_GOT | REL_SYMBOLIC => {
+                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                    if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                        &self.core.inner,
+                        scope.clone(),
+                        dynsym,
+                        &syminfo,
+                    )
+                    .map(|symdef| symdef.convert()))
+                    {
+                        self.write_val(rela.r_offset(), symbol as usize);
+                        continue;
+                    }
+                }
+                REL_DTPOFF => {
+                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                    if let Some(symdef) =
+                        find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
+                    {
+                        // offset in tls
+                        let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
+                            .wrapping_sub(TLS_DTV_OFFSET);
+                        self.write_val(rela.r_offset(), tls_val);
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
+                return Err(relocate_error(format!(
+                    "unsupported relocation type: {}, symbol idx:{}",
+                    r_type, r_sym,
+                )));
+            }
         }
 
-        if let Some(rela_array) = self.relocation.dynrel {
-            for rela in rela_array {
-                let r_type = rela.r_type() as _;
-                let r_sym = rela.r_symbol();
-
-                if unlikely(r_type == REL_RELATIVE) {
-                    self.write_val(rela.r_offset(), self.core.base() + rela.r_addend());
-                    continue;
-                } else if unlikely(r_type == REL_NONE) {
-                    continue;
+        // 开启lazy bind后会跳过plt相关的重定位
+        if self.lazy {
+            for rela in self.relocation.pltrel {
+                let r_type = rela.r_type() as u32;
+                // S
+                if likely(r_type == REL_JUMP_SLOT) {
+                    let ptr = (self.base() + rela.r_offset()) as *mut usize;
+                    // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
+                    unsafe {
+                        let origin_val = ptr.read();
+                        let new_val = origin_val + self.base();
+                        ptr.write(new_val);
+                    }
+                } else if unlikely(r_type == REL_IRELATIVE) {
+                    let ifunc: fn() -> usize =
+                        unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
+                    self.write_val(rela.r_offset(), ifunc());
+                } else {
+                    unreachable!()
                 }
-
-                match r_type {
-                    // REL_GOT: S  REL_SYMBOLIC: S + A
-                    REL_GOT | REL_SYMBOLIC => {
-                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        if let Some(symbol) = find(syminfo.name).or(find_symdef(
-                            &self.core.inner,
-                            scope.clone(),
-                            dynsym,
-                            &syminfo,
-                        )
-                        .map(|symdef| symdef.convert()))
-                        {
-                            self.write_val(rela.r_offset(), symbol as usize);
-                            continue;
-                        }
+            }
+            if let Some(got) = self.got {
+                prepare_lazy_bind(got, Arc::as_ptr(&self.core.inner) as usize);
+            }
+            // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+            let ptr = unsafe { &mut *(Arc::as_ptr(&self.core.inner) as *mut CoreComponentInner) };
+            ptr.lazy_scope = lazy_scope;
+        } else {
+            for rela in self.relocation.pltrel {
+                let r_type = rela.r_type() as u32;
+                let r_sym = rela.r_symbol();
+                // S
+                // 对于.rela.plt来说通常只有这两种重定位类型
+                if likely(r_type == REL_JUMP_SLOT) {
+                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+                    if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                        &self.core.inner,
+                        scope.clone(),
+                        dynsym,
+                        &syminfo,
+                    )
+                    .map(|symdef| symdef.convert()))
+                    {
+                        self.write_val(rela.r_offset(), symbol as usize);
+                        continue;
                     }
-                    REL_DTPOFF => {
-                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        if let Some(symdef) =
-                            find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
-                        {
-                            // offset in tls
-                            let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
-                                .wrapping_sub(TLS_DTV_OFFSET);
-                            self.write_val(rela.r_offset(), tls_val);
-                            continue;
-                        }
-                    }
-                    _ => {}
+                } else if unlikely(r_type == REL_IRELATIVE) {
+                    let ifunc: fn() -> usize =
+                        unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
+                    self.write_val(rela.r_offset(), ifunc());
+                    continue;
                 }
                 if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
                     return Err(relocate_error(format!(
@@ -136,72 +192,8 @@ impl ElfDylib {
                     )));
                 }
             }
-        }
-
-        if let Some(rela_array) = self.relocation.pltrel {
-            // 开启lazy bind后会跳过plt相关的重定位
-            if self.lazy {
-                for rela in rela_array {
-                    let r_type = rela.r_type() as u32;
-                    // S
-                    if likely(r_type == REL_JUMP_SLOT) {
-                        let ptr = (self.base() + rela.r_offset()) as *mut usize;
-                        // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
-                        unsafe {
-                            let origin_val = ptr.read();
-                            let new_val = origin_val + self.base();
-                            ptr.write(new_val);
-                        }
-                    } else if unlikely(r_type == REL_IRELATIVE) {
-                        let ifunc: fn() -> usize =
-                            unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
-                        self.write_val(rela.r_offset(), ifunc());
-                    } else {
-                        unreachable!()
-                    }
-                }
-                if let Some(got) = self.got {
-                    prepare_lazy_bind(got, Arc::as_ptr(&self.core.inner) as usize);
-                }
-                // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
-                let ptr =
-                    unsafe { &mut *(Arc::as_ptr(&self.core.inner) as *mut CoreComponentInner) };
-                ptr.lazy_scope = lazy_scope;
-            } else {
-                for rela in rela_array {
-                    let r_type = rela.r_type() as u32;
-                    let r_sym = rela.r_symbol();
-                    // S
-                    // 对于.rela.plt来说通常只有这两种重定位类型
-                    if likely(r_type == REL_JUMP_SLOT) {
-                        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                        if let Some(symbol) = find(syminfo.name).or(find_symdef(
-                            &self.core.inner,
-                            scope.clone(),
-                            dynsym,
-                            &syminfo,
-                        )
-                        .map(|symdef| symdef.convert()))
-                        {
-                            self.write_val(rela.r_offset(), symbol as usize);
-                            continue;
-                        }
-                    } else if unlikely(r_type == REL_IRELATIVE) {
-                        let ifunc: fn() -> usize =
-                            unsafe { core::mem::transmute(self.base() + rela.r_addend()) };
-                        self.write_val(rela.r_offset(), ifunc());
-                        continue;
-                    }
-                    if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
-                        return Err(relocate_error(format!(
-                            "unsupported relocation type: {}, symbol idx:{}",
-                            r_type, r_sym,
-                        )));
-                    }
-                }
-                if let Some(relro) = self.relro {
-                    relro.relro()?;
-                }
+            if let Some(relro) = self.relro {
+                relro.relro()?;
             }
         }
 
@@ -255,9 +247,9 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
 
 #[derive(Default)]
 pub(crate) struct ElfRelocation {
-    relative: Option<&'static [ElfRela]>,
-    pltrel: Option<&'static [ElfRela]>,
-    dynrel: Option<&'static [ElfRela]>,
+    relative: &'static [ElfRela],
+    pltrel: &'static [ElfRela],
+    dynrel: &'static [ElfRela],
 }
 
 impl ElfRelocation {
@@ -267,40 +259,23 @@ impl ElfRelocation {
         dynrel: Option<&'static [ElfRela]>,
         rela_count: Option<NonZeroUsize>,
     ) -> Self {
-        let (relative, dynrel) = if let Some(nrelative) = rela_count {
-            unsafe {
-                (
-                    Some(&dynrel.unwrap_unchecked()[..nrelative.get()]),
-                    Some(&dynrel.unwrap_unchecked()[nrelative.get()..]),
-                )
-            }
+        let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
+        let old_dynrel = dynrel.unwrap_or(&[]);
+        let relative = &old_dynrel[..nrelative];
+        let temp_dynrel = &old_dynrel[nrelative..];
+        let pltrel = pltrel.unwrap_or(&[]);
+        let dynrel = if unsafe {
+            old_dynrel.as_ptr().add(old_dynrel.len()) == pltrel.as_ptr().add(pltrel.len())
+        } {
+            &temp_dynrel[..temp_dynrel.len() - pltrel.len()]
         } else {
-            (None, dynrel)
-        };
-        let dynrel = if let (Some(dynrel), Some(pltrel)) = (dynrel, pltrel) {
-            if unsafe { dynrel.as_ptr().add(dynrel.len()) == pltrel.as_ptr().add(pltrel.len()) } {
-                Some(&dynrel[..dynrel.len() - pltrel.len()])
-            } else {
-                Some(dynrel)
-            }
-        } else {
-            None
+            temp_dynrel
         };
         Self {
             relative,
             pltrel,
             dynrel,
         }
-    }
-
-    #[inline]
-    pub(crate) fn pltrel(&self) -> Option<&[ElfRela]> {
-        self.pltrel
-    }
-
-    #[inline]
-    pub(crate) fn dynrel(&self) -> Option<&[ElfRela]> {
-        self.dynrel
     }
 }
 

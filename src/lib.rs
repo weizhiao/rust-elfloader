@@ -21,7 +21,7 @@ pub mod dynamic;
 mod loader;
 pub mod mmap;
 pub mod object;
-pub mod relocation;
+mod relocation;
 pub mod segment;
 mod symbol;
 #[cfg(feature = "version")]
@@ -175,18 +175,6 @@ impl ElfDylib {
     #[inline]
     pub fn symtab(&self) -> &SymbolTable {
         &self.core.inner.symbols
-    }
-
-    /// Gets rela.dyn section content
-    #[inline]
-    pub fn dyn_relocation(&self) -> Option<&[ElfRela]> {
-        self.relocation.dynrel()
-    }
-
-    /// Gets rela.plt section content
-    #[inline]
-    pub fn plt_relocation(&self) -> Option<&[ElfRela]> {
-        self.relocation.pltrel()
     }
 
     /// Gets the core component reference of the elf object
