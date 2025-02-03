@@ -5,7 +5,7 @@
 
 English | [中文](README_zh.md)  
 
-A `lightweight`, `extensible`, and `high-performance` library that can load and relocate ELF objects from memory, files, or sockets.
+A Rust library providing async loading interface to load and relocate ELF dynamic libraries from memory/files.
 
 [Documentation](https://docs.rs/elf_loader/)
 # Capabilities
@@ -40,11 +40,13 @@ It should be noted that mini-loader must be compiled with the release parameter.
 [dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime.
 
 # TODO
-* Support more CPU instruction sets.
-* Improve support for the DT_FLAGS flag bits.
-* Implement the ElfObject trait for TcpStream, enabling elf_loader to load dynamic libraries directly via TcpStream and achieve a "streaming" loading effect.
-* Implement asynchronous versions of the ElfObject trait and the load_dylib interface.
-* Improve comments and documentation.  
+* Support more CPU instruction sets (currently only supports AArch64, Riscv64, X86-64).
+* Improve support for DT_FLAGS flag bits.
+* Implement the ElfObject trait for TcpStream to enable elf_loader to load dynamic libraries directly via TcpStream, achieving a "streaming" loading effect.
+* Improve comments and documentation.
+* Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
+* Add support for more instruction sets in the example mini-loader.
+
 ...
 
 # Supplement

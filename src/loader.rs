@@ -251,7 +251,7 @@ struct TempData {
     relro: Option<ELFRelro>,
     dynamic: Option<ElfRawDynamic>,
     user_data: UserData,
-	segments: ElfSegments,
+    segments: ElfSegments,
 }
 
 impl TempData {
@@ -445,6 +445,9 @@ impl<M: Mmap> Loader<M> {
         temp_data.create_dylib(phdrs)
     }
 
+    /// Load a dynamic library into memory
+    /// # Note
+    /// `hook` functions are called first when a program header is processed.
     pub async fn load_dylib_async<F>(
         &self,
         mut object: impl ElfObjectAsync,

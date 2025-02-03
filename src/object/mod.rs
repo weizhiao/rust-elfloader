@@ -11,7 +11,7 @@ pub use binary::ElfBinary;
 #[cfg(feature = "std")]
 pub use file::ElfFile;
 #[cfg(feature = "std")]
-pub use socket::ElfStream;
+pub use socket::ElfTcpStream;
 
 /// The original elf object
 pub trait ElfObject {
