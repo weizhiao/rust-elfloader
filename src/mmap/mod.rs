@@ -9,7 +9,7 @@ cfg_if::cfg_if! {
     }
 }
 
-use crate::{object::ElfObject, Result};
+use crate::Result;
 use bitflags::bitflags;
 use core::{
     ffi::{c_int, c_void},
@@ -32,6 +32,7 @@ bitflags! {
 }
 
 bitflags! {
+	#[derive(Clone, Copy)]
      /// Additional parameters for [`mmap`].
      pub struct MapFlags: c_int {
         /// Create a private copy-on-write mapping. Mutually exclusive with `MAP_SHARED`.
@@ -69,7 +70,7 @@ pub trait Mmap {
     /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
     /// * `offset` - The file offset.
     /// * `fd` - The file descriptor.
-	/// * `need_copy` - It is set to false if the mmap function can do the job of segment copying on its own, and to true otherwise.
+    /// * `need_copy` - It is set to false if the mmap function can do the job of segment copying on its own, and to true otherwise.
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,
@@ -110,39 +111,4 @@ pub trait Mmap {
     /// * `len` - The length of the memory region to protect.
     /// * `prot` - The new protection options for the mapping.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
-
-    /// This function maps elf segment into memory at the specified address with the given protection and flags.
-    ///
-    /// # Arguments
-    /// * `addr` - An optional starting address for the mapping. The address is always aligned by page size(4096 or 65536).
-    /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096 or 65536).
-    /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
-    /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
-    /// * `range` - Regions within the ELF object that need to be mapped into memory.
-    /// * `object` - The original elf object.
-    unsafe fn mmap_segment(
-        addr: Option<usize>,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        range: MmapRange,
-        object: &mut dyn ElfObject,
-    ) -> Result<NonNull<c_void>> {
-        let mut need_copy = false;
-        let ptr = Self::mmap(
-            addr,
-            len,
-            prot,
-            flags,
-            range.offset,
-            object.as_fd(),
-            &mut need_copy,
-        )?;
-        if need_copy {
-            let dest = core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), range.len);
-            object.read(dest, range.offset)?;
-            Self::mprotect(ptr, len, prot)?;
-        }
-        Ok(ptr)
-    }
 }

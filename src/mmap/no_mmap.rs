@@ -13,24 +13,24 @@ impl Mmap for MmapImpl {
         _prot: super::ProtFlags,
         flags: super::MapFlags,
         _offset: usize,
-		_fd: Option<i32>,
+        _fd: Option<i32>,
         need_copy: &mut bool,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         *need_copy = true;
         if let Some(addr) = addr {
             let ptr = addr as *mut u8;
-            Ok(NonNull::new_unchecked(ptr as _))
+            Ok(unsafe { NonNull::new_unchecked(ptr as _) })
         } else {
             // 只有创建整个空间时会走这条路径
             assert!((super::MapFlags::MAP_FIXED & flags).bits() == 0);
-            let layout = Layout::from_size_align_unchecked(len, PAGE_SIZE);
-            let memory = alloc::alloc::alloc(layout);
+            let layout = unsafe { Layout::from_size_align_unchecked(len, PAGE_SIZE) };
+            let memory = unsafe { alloc::alloc::alloc(layout) };
             if memory.is_null() {
                 handle_alloc_error(layout);
             }
             // use this set prot to test no_mmap
             //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
-            Ok(NonNull::new_unchecked(memory as _))
+            Ok(unsafe { NonNull::new_unchecked(memory as _) })
         }
     }
 
@@ -41,16 +41,18 @@ impl Mmap for MmapImpl {
         _flags: super::MapFlags,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         let ptr = addr as *mut u8;
-        let dest = from_raw_parts_mut(ptr, len);
+        let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
-        Ok(NonNull::new_unchecked(ptr as _))
+        Ok(unsafe { NonNull::new_unchecked(ptr as _) })
     }
 
     unsafe fn munmap(addr: core::ptr::NonNull<core::ffi::c_void>, len: usize) -> crate::Result<()> {
-        dealloc(
-            addr.as_ptr() as _,
-            Layout::from_size_align_unchecked(len, PAGE_SIZE),
-        );
+        unsafe {
+            dealloc(
+                addr.as_ptr() as _,
+                Layout::from_size_align_unchecked(len, PAGE_SIZE),
+            )
+        };
         Ok(())
     }
 

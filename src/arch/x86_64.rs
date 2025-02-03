@@ -48,7 +48,7 @@ dl_runtime_resolve:
 
 #[inline]
 pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    extern "C" {
+    unsafe extern "C" {
         fn dl_runtime_resolve();
     }
     // 这是安全的，延迟绑定时库是存在的

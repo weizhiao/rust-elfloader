@@ -22,18 +22,20 @@ impl Mmap for MmapImpl {
             *need_copy = true;
             (flags | MapFlags::MAP_ANONYMOUS, ProtFlags::PROT_WRITE, -1)
         };
-        let ptr = mmap(
-            addr.unwrap_or(0) as _,
-            len,
-            prot.bits(),
-            flags.bits(),
-            fd,
-            offset as _,
-        );
+        let ptr = unsafe {
+            mmap(
+                addr.unwrap_or(0) as _,
+                len,
+                prot.bits(),
+                flags.bits(),
+                fd,
+                offset as _,
+            )
+        };
         if ptr == libc::MAP_FAILED {
             return Err(map_error("mmap failed"));
         }
-        Ok(NonNull::new_unchecked(ptr))
+        Ok(unsafe { NonNull::new_unchecked(ptr) })
     }
 
     unsafe fn mmap_anonymous(
@@ -42,15 +44,15 @@ impl Mmap for MmapImpl {
         prot: super::ProtFlags,
         flags: super::MapFlags,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
-        let ptr = mmap(addr as _, len, prot.bits(), flags.bits(), -1, 0);
+        let ptr = unsafe { mmap(addr as _, len, prot.bits(), flags.bits(), -1, 0) };
         if ptr == libc::MAP_FAILED {
             return Err(map_error("mmap anonymous failed"));
         }
-        Ok(NonNull::new_unchecked(ptr))
+        Ok(unsafe { NonNull::new_unchecked(ptr) })
     }
 
     unsafe fn munmap(addr: core::ptr::NonNull<core::ffi::c_void>, len: usize) -> crate::Result<()> {
-        let res = munmap(addr.as_ptr(), len);
+        let res = unsafe { munmap(addr.as_ptr(), len) };
         if res != 0 {
             return Err(map_error("munmap failed"));
         }
@@ -62,7 +64,7 @@ impl Mmap for MmapImpl {
         len: usize,
         prot: super::ProtFlags,
     ) -> crate::Result<()> {
-        let res = mprotect(addr.as_ptr(), len, prot.bits());
+        let res = unsafe { mprotect(addr.as_ptr(), len, prot.bits()) };
         if res != 0 {
             return Err(map_error("mprotect failed"));
         }

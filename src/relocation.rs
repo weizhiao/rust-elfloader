@@ -1,7 +1,7 @@
 //! Relocation of elf objects
 use crate::{
-    arch::*, relocate_error, symbol::SymbolInfo, CoreComponent, CoreComponentInner, ElfDylib,
-    RelocatedDylib, Result,
+    CoreComponent, CoreComponentInner, ElfDylib, RelocatedDylib, Result, arch::*, relocate_error,
+    symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, format, sync::Arc};
 use core::{marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
@@ -221,9 +221,9 @@ impl ElfDylib {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
-    let rela = &*dylib.pltrel.add(rela_idx);
+    let rela = unsafe { &*dylib.pltrel.add(rela_idx) };
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
     assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
@@ -232,16 +232,12 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
     let symbol = if scope == 0 {
         dylib.lazy_scope.as_ref().unwrap()(syminfo.name)
     } else {
-        core::mem::transmute::<_, fn(&str) -> Option<*const ()>>(scope)(syminfo.name).or(dylib
-            .lazy_scope
-            .as_ref()
-            .unwrap()(
-            syminfo.name,
-        ))
+        unsafe { core::mem::transmute::<_, fn(&str) -> Option<*const ()>>(scope)(syminfo.name) }
+            .or(dylib.lazy_scope.as_ref().unwrap()(syminfo.name))
     }
     .expect("lazy bind fail") as usize;
     let ptr = (dylib.segments.base() + rela.r_offset()) as *mut usize;
-    ptr.write(symbol);
+    unsafe { ptr.write(symbol) };
     symbol
 }
 

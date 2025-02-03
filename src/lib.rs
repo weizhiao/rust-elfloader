@@ -37,7 +37,7 @@ use alloc::{
 use arch::{Dyn, ElfRela, Phdr};
 use core::{
     any::Any,
-    ffi::{c_void, CStr},
+    ffi::{CStr, c_void},
     fmt::{Debug, Display},
     marker::PhantomData,
     ops,
@@ -253,7 +253,7 @@ struct CoreComponentInner {
 
 impl CoreComponentInner {
     #[inline]
-    unsafe fn call_fini(&self) {
+    fn call_fini(&self) {
         if let Some(f) = self.fini_fn {
             f();
         }
@@ -266,7 +266,7 @@ impl CoreComponentInner {
     }
 
     #[inline]
-    unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+    fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
         self.symbols
             .lookup_filter(&SymbolInfo::new(name))
             .map(|sym| Symbol {
@@ -383,7 +383,7 @@ impl CoreComponent {
         self.inner.call_fini();
     }
 
-    unsafe fn from_raw(
+    fn from_raw(
         name: CString,
         base: usize,
         dynamic: ElfDynamic,
@@ -486,7 +486,7 @@ impl<'scope> RelocatedDylib<'scope> {
     /// Call the fini function, usually when the elf object is destroyed.
     #[inline]
     pub unsafe fn call_fini(&self) {
-        self.core.call_fini();
+        unsafe { self.core.call_fini() };
     }
 
     /// Gets the C-style name of the elf object.
@@ -545,7 +545,7 @@ impl<'scope> RelocatedDylib<'scope> {
     pub unsafe fn from_ptr(raw: *const c_void) -> Self {
         Self {
             core: CoreComponent {
-                inner: Arc::from_raw(raw as *const CoreComponentInner),
+                inner: unsafe { Arc::from_raw(raw as *const CoreComponentInner) },
             },
             _marker: PhantomData,
         }
@@ -591,7 +591,7 @@ impl<'scope> RelocatedDylib<'scope> {
     /// ```
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        self.core.get(name)
+        unsafe { self.core.get(name) }
     }
 
     /// Load a versioned symbol from the elf object.
@@ -607,7 +607,7 @@ impl<'scope> RelocatedDylib<'scope> {
         name: &str,
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
-        self.core.get_version(name, version)
+        unsafe { self.core.get_version(name, version) }
     }
 }
 

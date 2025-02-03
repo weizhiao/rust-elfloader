@@ -25,16 +25,18 @@ impl ElfGnuHash {
             }
 
             #[inline]
-            unsafe fn read<T>(&mut self) -> T {
-                let value = self.ptr.cast::<T>().read();
-                self.ptr = self.ptr.add(core::mem::size_of::<T>());
-                value
+            fn read<T>(&mut self) -> T {
+                unsafe {
+                    let value = self.ptr.cast::<T>().read();
+                    self.ptr = self.ptr.add(core::mem::size_of::<T>());
+                    value
+                }
             }
 
             #[inline]
             //字节为单位
-            unsafe fn add(&mut self, count: usize) {
-                self.ptr = self.ptr.add(count);
+            fn add(&mut self, count: usize) {
+                self.ptr = unsafe { self.ptr.add(count) };
             }
 
             #[inline]
@@ -50,7 +52,7 @@ impl ElfGnuHash {
         let nbloom: u32 = reader.read();
         let nshift: u32 = reader.read();
         let blooms_ptr = reader.as_ptr() as *const usize;
-        let blooms = core::slice::from_raw_parts(blooms_ptr, nbloom as _);
+        let blooms = unsafe { core::slice::from_raw_parts(blooms_ptr, nbloom as _) };
         let bloom_size = nbloom as usize * core::mem::size_of::<usize>();
         reader.add(bloom_size);
         let buckets = reader.as_ptr() as _;
@@ -85,16 +87,18 @@ impl ElfStringTable {
         ElfStringTable { data }
     }
 
-    pub(crate) unsafe fn get(&self, offset: usize) -> &'static str {
-        let start = self.data.add(offset);
-        let mut end = start;
-        while end.read() != 0 {
-            end = end.add(1)
+    pub(crate) fn get(&self, offset: usize) -> &'static str {
+        unsafe {
+            let start = self.data.add(offset);
+            let mut end = start;
+            while end.read() != 0 {
+                end = end.add(1)
+            }
+            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                start,
+                end as usize - start as usize,
+            ))
         }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-            start,
-            end as usize - start as usize,
-        ))
     }
 }
 
@@ -197,7 +201,7 @@ impl SymbolTable {
             let chain_hash = unsafe { cur_chain.read() };
             if hash | 1 == chain_hash | 1 {
                 let cur_symbol = unsafe { &*cur_symbol_ptr };
-                let sym_name = unsafe { self.strtab.get(cur_symbol.st_name as usize) };
+                let sym_name = self.strtab.get(cur_symbol.st_name as usize);
                 #[cfg(feature = "version")]
                 if sym_name == symbol.name && self.check_match(dynsym_idx, &symbol.version) {
                     return Some(cur_symbol);
@@ -235,14 +239,11 @@ impl SymbolTable {
     /// Use the symbol index to get the symbols in the symbol table.
     pub fn symbol_idx(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
         let symbol = unsafe { &*self.symtab.add(idx) };
-        let name = unsafe { self.strtab.get(symbol.st_name as usize) };
-        (
-            symbol,
-            SymbolInfo {
-                name,
-                #[cfg(feature = "version")]
-                version: self.get_requirement(idx),
-            },
-        )
+        let name = self.strtab.get(symbol.st_name as usize);
+        (symbol, SymbolInfo {
+            name,
+            #[cfg(feature = "version")]
+            version: self.get_requirement(idx),
+        })
     }
 }
