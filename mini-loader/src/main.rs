@@ -107,17 +107,20 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
     // 通常是0，需要自行计算
     if base == 0 {
-        let phdrs = core::slice::from_raw_parts(ph, phnum as usize);
-        for phdr in phdrs {
+        let phdrs = &*core::ptr::slice_from_raw_parts(ph, phnum as usize);
+        let mut idx = 0;
+        loop {
+            let phdr = &phdrs[idx];
             if phdr.p_type == PT_DYNAMIC {
                 base = dynv as usize - phdr.p_vaddr as usize;
                 break;
             }
+            idx += 1;
         }
     }
     // 自举，mini-loader自己对自己重定位
     let rela_ptr = (rela as usize + base) as *const ElfRela;
-    let relas = core::slice::from_raw_parts(rela_ptr, rela_count as usize);
+    let relas = &*core::ptr::slice_from_raw_parts(rela_ptr, rela_count as usize);
     for rela in relas {
         if rela.r_type() != REL_RELATIVE as usize {
             print_str("unknown rela type");
