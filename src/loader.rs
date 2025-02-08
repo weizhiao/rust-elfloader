@@ -313,7 +313,7 @@ impl TempData {
                     return unsafe {
                         core::slice::from_raw_parts(
                             (self.segments.base() + phdr_start - cur_range.start) as *const Phdr,
-                            (cur_range.end - cur_range.start) / size_of::<Phdr>(),
+                            self.ehdr.e_phnum(),
                         )
                     };
                 }
