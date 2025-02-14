@@ -30,7 +30,7 @@ impl<'temp> SymDef<'temp> {
 impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
-    /// * During relocation, it is preferred to look for symbols in function closures `find`.
+    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
     /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * Typically, the `scope` should also contain the current dynamic library itself,
     /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
@@ -38,7 +38,7 @@ impl ElfDylib {
     pub fn relocate<'scope, S, F, D>(
         self,
         scope: S,
-        find: &'scope F,
+        pre_find: &'scope F,
         deal_unknown: D,
         lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
     ) -> Result<RelocatedDylib<'scope>>
@@ -99,7 +99,7 @@ impl ElfDylib {
                 // REL_GOT: S  REL_SYMBOLIC: S + A
                 REL_GOT | REL_SYMBOLIC => {
                     let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                    if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                    if let Some(symbol) = pre_find(syminfo.name).or(find_symdef(
                         &self.core.inner,
                         scope.clone(),
                         dynsym,
@@ -168,7 +168,7 @@ impl ElfDylib {
                 // 对于.rela.plt来说通常只有这两种重定位类型
                 if likely(r_type == REL_JUMP_SLOT) {
                     let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                    if let Some(symbol) = find(syminfo.name).or(find_symdef(
+                    if let Some(symbol) = pre_find(syminfo.name).or(find_symdef(
                         &self.core.inner,
                         scope.clone(),
                         dynsym,

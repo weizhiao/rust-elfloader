@@ -22,6 +22,15 @@
 # 用途
 它实现了加载elf文件的通用步骤，并留下了扩展接口，用户可以使用它实现自己的定制化loader。
 
+# 特性
+
+| 特性      |  描述  |
+| --------- | ----------------- |
+| fs        |  启用对文件系统的支持        						|
+| use-libc  |  使用libc作为后端，否则直接使用linux syscalls		|
+| mmap      |  在加载elf文件时，使用有mmap的平台上的默认实现  	| 
+| version   |  在解析符号时使用符号的版本信息     |
+
 # 示例
 ## mini-loader
 本仓库提供了一个使用`elf_loader`实现[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)的例子。miniloader可以加载pie文件，目前只支持`x86_64`。  
@@ -39,7 +48,6 @@ $ ./mini-loader /bin/ls
 # 未完成
 * 支持更多的CPU指令集（目前只支持AArch64，Riscv64，X86-64）。
 * 完善对DT_FLAGS标志位的支持。
-* 为TcpStream实现trait ElfObject，使elf_loader能够直接通过TcpStream加载动态库，实现类似“流式”加载的效果。
 * 完善注释和文档。  
 * 增加示例（比如使用异步接口加载动态库的示例）。
 * 为示例mini-loader支持更多的指令集。

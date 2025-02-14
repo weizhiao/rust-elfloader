@@ -2,16 +2,12 @@
 use crate::Result;
 use core::ffi::CStr;
 mod binary;
-#[cfg(feature = "std")]
+#[cfg(feature = "fs")]
 mod file;
-#[cfg(feature = "std")]
-mod socket;
 
 pub use binary::ElfBinary;
-#[cfg(feature = "std")]
+#[cfg(feature = "fs")]
 pub use file::ElfFile;
-#[cfg(feature = "std")]
-pub use socket::ElfTcpStream;
 
 /// The original elf object
 pub trait ElfObject {

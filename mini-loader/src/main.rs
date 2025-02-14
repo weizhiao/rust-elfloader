@@ -1,20 +1,43 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 
+use alloc::string::ToString;
 use core::{
     arch::global_asm,
-    ffi::CStr,
+    ffi::{c_int, CStr},
+    fmt,
     panic::PanicInfo,
     ptr::{addr_of_mut, null},
 };
 use elf_loader::{
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC, PT_INTERP},
     arch::{Dyn, ElfRela, Phdr, REL_RELATIVE},
+    mmap::MmapImpl,
+    object::ElfFile,
     Loader,
 };
 use linked_list_allocator::LockedHeap;
-use mini_loader::{println, syscall::exit, MmapImpl, MyFile};
-use syscalls::{syscall3, Sysno};
+use syscalls::{syscall, Sysno};
+
+#[macro_export]
+macro_rules! println {
+    ($fmt: literal $(, $($arg: tt)+)?) => {
+        $crate::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?))
+    }
+}
+
+fn print(args: fmt::Arguments) {
+    let s = &args.to_string();
+    let _ = unsafe { syscall!(Sysno::write, 1, s.as_ptr(), s.len()) }.unwrap();
+}
+
+fn exit(status: c_int) -> ! {
+    unsafe {
+        syscall!(Sysno::exit, status).unwrap();
+    }
+    unreachable!()
+}
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
@@ -136,7 +159,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     // 加载输入的elf文件
     let argv = sp.add(1);
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
-    let elf_file = MyFile::new(elf_name);
+    let elf_file = ElfFile::from_path(elf_name).unwrap();
     let loader: Loader<MmapImpl> = Loader::new();
     let dylib = loader
         .load_dylib(elf_file, None, |_, _, _, _| Ok(()))
@@ -147,7 +170,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         // 加载动态加载器ld.so，如果有的话
         if phdr.p_type == PT_INTERP {
             let interp_name = CStr::from_ptr((dylib.base() + phdr.p_vaddr as usize) as _);
-            let interp_file = MyFile::new(interp_name);
+            let interp_file = ElfFile::from_path(interp_name).unwrap();
             let interp_loader = Loader::<MmapImpl>::new();
             interp_dylib = Some(
                 interp_loader
@@ -198,5 +221,5 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
 
 #[inline]
 pub fn print_str(s: &str) {
-    let _ = unsafe { syscall3(Sysno::write, 1, s.as_ptr() as usize, s.len()) }.unwrap();
+    let _ = unsafe { syscall!(Sysno::write, 1, s.as_ptr(), s.len()) }.unwrap();
 }

@@ -25,6 +25,15 @@ With minimal features, this crate only depends on the `elf`, `cfg-if`, and `bitf
 # Usage
 It implements the general steps for loading ELF files and leaves extension interfaces, allowing users to implement their own customized loaders.
 
+# Feature
+
+| Feature      |  Description  |
+| --------- | ----------------- |
+| fs        |  Enable support for filesystems      						|
+| use-libc  |  Use libc as the backend, otherwise directly use linux syscalls		|
+| mmap      |  Use the default implementation on platforms with mmap when loading ELF files| 
+| version   |  Use the version information of symbols when resolving them.     |
+
 # Example
 ## mini-loader
 This repository provides an example of a [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) implemented using `elf_loader`. The miniloader can load PIE files and currently only supports `x86_64` .
@@ -42,7 +51,6 @@ It should be noted that mini-loader must be compiled with the release parameter.
 # TODO
 * Support more CPU instruction sets (currently only supports AArch64, Riscv64, X86-64).
 * Improve support for DT_FLAGS flag bits.
-* Implement the ElfObject trait for TcpStream to enable elf_loader to load dynamic libraries directly via TcpStream, achieving a "streaming" loading effect.
 * Improve comments and documentation.
 * Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
 * Add support for more instruction sets in the example mini-loader.

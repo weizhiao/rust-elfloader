@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 syscalls = { version = "0.6.18", default-features = false }
-elf_loader = { path = "../", default-features = false }
+elf_loader = { path = "../", features = ["fs", "mmap"] }
 linked_list_allocator = { version = "0.10.5" }

@@ -233,9 +233,7 @@ fn fill_bss<M: Mmap>(segments: &ElfSegments, phdr: &Phdr) -> Result<()> {
                     zero_mmap_addr,
                     zero_mmap_len,
                     prot,
-                    mmap::MapFlags::MAP_PRIVATE
-                        | mmap::MapFlags::MAP_FIXED
-                        | mmap::MapFlags::MAP_ANONYMOUS,
+                    mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
                 )?;
             }
         }

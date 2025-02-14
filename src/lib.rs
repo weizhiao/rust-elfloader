@@ -6,7 +6,7 @@
 //! ## Example
 //! This repository provides an example of a [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) implemented using `elf_loader`.
 //! The miniloader can load PIE files and currently only supports `x86_64`.
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 extern crate alloc;
 
 #[cfg(not(any(
@@ -615,8 +615,8 @@ impl<'scope> RelocatedDylib<'scope> {
 #[derive(Debug)]
 pub enum Error {
     /// An error occurred while opening or reading or writing elf files.
-    #[cfg(feature = "std")]
-    IOError { err: std::io::Error },
+    #[cfg(feature = "fs")]
+    IOError { msg: String },
     /// An error occurred while memory mapping.
     MmapError { msg: String },
     /// An error occurred during dynamic library relocation.
@@ -632,8 +632,8 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            #[cfg(feature = "std")]
-            Error::IOError { err } => write!(f, "{err}"),
+            #[cfg(feature = "fs")]
+            Error::IOError { msg } => write!(f, "{msg}"),
             Error::MmapError { msg } => write!(f, "{msg}"),
             Error::RelocateError { msg } => write!(f, "{msg}"),
             Error::ParseDynamicError { msg } => write!(f, "{msg}"),
@@ -643,21 +643,14 @@ impl Display for Error {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::IOError { err } => Some(err),
-            _ => None,
-        }
-    }
-}
+impl core::error::Error for Error {}
 
-#[cfg(feature = "std")]
-impl From<std::io::Error> for Error {
-    #[cold]
-    fn from(value: std::io::Error) -> Self {
-        Error::IOError { err: value }
+#[cfg(feature = "fs")]
+#[cold]
+#[inline(never)]
+fn io_error(msg: impl ToString) -> Error {
+    Error::IOError {
+        msg: msg.to_string(),
     }
 }
 
