@@ -2,7 +2,7 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 # elf_loader
-一个提供异步加载接口，能够从内存、文件加载并重定位elf动态库的Rust库。  
+一个提供异步加载接口，能够从内存、文件加载elf动态库的Rust库。  
 
 [文档](https://docs.rs/elf_loader/)
 

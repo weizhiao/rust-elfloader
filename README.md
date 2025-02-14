@@ -5,7 +5,7 @@
 
 English | [中文](README_zh.md)  
 
-A Rust library providing async loading interface to load and relocate ELF dynamic libraries from memory/files.
+The `elf_loader` crate provides an async loading interface for loading ELF dynamic libraries from both memory and files.
 
 [Documentation](https://docs.rs/elf_loader/)
 # Capabilities

@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["wzhao <1207410841@qq.com>"]
 readme = "README.md"
@@ -8,7 +8,7 @@ repository = "https://github.com/weizhiao/elf_loader"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
 license = "MIT/Apache-2.0"
-description = "A Rust library providing async loading interface to load and relocate ELF dynamic libraries from memory/files."
+description = "A pure-rust library for loading ELF dynamic libraries from both memory and files."
 exclude = [".gitignore"]
 
 [workspace]
