@@ -4,7 +4,7 @@ use crate::{
     symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, format, sync::Arc};
-use core::{marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
+use core::{ffi::c_int, marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
 use elf::abi::*;
 
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
@@ -197,13 +197,22 @@ impl ElfDylib {
             }
         }
 
-        if let Some(init) = self.init_fn {
-            init();
-        }
-        if let Some(init_array) = self.init_array_fn {
-            for init in init_array {
-                init();
-            }
+        if let Some(init_params) = self.init_params {
+            self.init_fn
+                .iter()
+                .chain(self.init_array_fn.unwrap_or(&[]).iter())
+                .for_each(|init| unsafe {
+                    core::mem::transmute::<_, extern "C" fn(c_int, usize, usize)>(*init)(
+                        init_params.argc as _,
+                        init_params.argv,
+                        init_params.envp,
+                    );
+                });
+        } else {
+            self.init_fn
+                .iter()
+                .chain(self.init_array_fn.unwrap_or(&[]).iter())
+                .for_each(|init| init());
         }
 
         Ok(RelocatedDylib {

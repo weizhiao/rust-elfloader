@@ -1,5 +1,5 @@
 use crate::{
-    CoreComponent, CoreComponentInner, ElfDylib, ElfObject, Result, UserData,
+    CoreComponent, CoreComponentInner, ElfDylib, ElfObject, InitParams, Result, UserData,
     arch::{E_CLASS, EHDR_SIZE, EM_ARCH, PHDR_SIZE, Phdr},
     dynamic::ElfRawDynamic,
     mmap::{self, MapFlags, Mmap, MmapRange, ProtFlags},
@@ -250,6 +250,7 @@ struct TempData {
     dynamic: Option<ElfRawDynamic>,
     user_data: UserData,
     segments: ElfSegments,
+    init_params: Option<InitParams>,
 }
 
 impl TempData {
@@ -258,6 +259,7 @@ impl TempData {
         name: CString,
         lazy_bind: Option<bool>,
         ehdr: ElfHeader,
+        init_params: Option<InitParams>,
     ) -> Self {
         Self {
             phdr_mmap: None,
@@ -268,6 +270,7 @@ impl TempData {
             dynamic: None,
             segments,
             user_data: UserData::empty(),
+            init_params,
         }
     }
 
@@ -333,6 +336,7 @@ impl TempData {
             entry: self.ehdr.ehdr.e_entry as usize,
             relro: self.relro,
             relocation,
+            init_params: self.init_params,
             init_fn: dynamic.init_fn,
             init_array_fn: dynamic.init_array_fn,
             lazy: self.lazy_bind.unwrap_or(!dynamic.bind_now),
@@ -363,11 +367,67 @@ impl TempData {
     }
 }
 
+struct ElfBuf {
+    stack_buf: MaybeUninit<[u8; EHDR_SIZE + 12 * PHDR_SIZE]>,
+    heap_buf: Vec<u8>,
+}
+
+impl ElfBuf {
+    const MAX_BUF_SIZE: usize = EHDR_SIZE + 12 * PHDR_SIZE;
+
+    const fn new() -> Self {
+        ElfBuf {
+            stack_buf: MaybeUninit::uninit(),
+            heap_buf: Vec::new(),
+        }
+    }
+
+    #[inline]
+    fn stack_buf(&mut self) -> &mut [u8] {
+        unsafe { &mut *self.stack_buf.as_mut_ptr() }
+    }
+
+    #[inline]
+    fn get_phdrs_from_stack(&mut self, phdr_start: usize, phdr_end: usize) -> Option<&[Phdr]> {
+        if Self::MAX_BUF_SIZE >= phdr_end {
+            unsafe {
+                Some(core::slice::from_raw_parts(
+                    self.stack_buf
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(phdr_start)
+                        .cast::<Phdr>(),
+                    (phdr_end - phdr_start) / size_of::<Phdr>(),
+                ))
+            }
+        } else {
+            self.heap_buf.resize(phdr_end - phdr_start, 0);
+            None
+        }
+    }
+
+    #[inline]
+    fn heap_buf(&mut self) -> &mut Vec<u8> {
+        &mut self.heap_buf
+    }
+
+    #[inline]
+    fn get_phdrs_from_heap(&self) -> &[Phdr] {
+        unsafe {
+            core::slice::from_raw_parts(
+                self.heap_buf.as_ptr().cast::<Phdr>(),
+                self.heap_buf.len() / size_of::<Phdr>(),
+            )
+        }
+    }
+}
+
 /// The elf object loader
 pub struct Loader<M>
 where
     M: Mmap,
 {
+    init_params: Option<InitParams>,
     _marker: PhantomData<M>,
 }
 
@@ -375,8 +435,14 @@ impl<M: Mmap> Loader<M> {
     /// Create a new loader
     pub const fn new() -> Self {
         Self {
+            init_params: None,
             _marker: PhantomData,
         }
+    }
+
+    /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
+    pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) {
+        self.init_params = Some(InitParams { argc, argv, envp });
     }
 
     /// Load a dynamic library into memory
@@ -391,30 +457,16 @@ impl<M: Mmap> Loader<M> {
     where
         F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
     {
-        const MAX_BUF_SIZE: usize = EHDR_SIZE + 12 * PHDR_SIZE;
-        let mut stack_buf: MaybeUninit<[u8; MAX_BUF_SIZE]> = MaybeUninit::uninit();
-        let stack_buf_ref = unsafe { &mut *stack_buf.as_mut_ptr() };
-        object.read(stack_buf_ref, 0)?;
-        let ehdr = ElfHeader::new(stack_buf_ref)?;
+        let mut buf = ElfBuf::new();
+        object.read(buf.stack_buf(), 0)?;
+        let ehdr = ElfHeader::new(buf.stack_buf())?;
         ehdr.validate()?;
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdr_num = ehdr.e_phnum();
-        let mut heap_buf = Vec::new();
-        let phdrs = if MAX_BUF_SIZE >= phdr_end {
-            unsafe {
-                core::slice::from_raw_parts(
-                    stack_buf
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(phdr_start)
-                        .cast::<Phdr>(),
-                    phdr_num,
-                )
-            }
+        let phdrs = if let Some(phdrs) = buf.get_phdrs_from_stack(phdr_start, phdr_end) {
+            phdrs
         } else {
-            heap_buf.resize(phdr_end - phdr_start, 0);
-            object.read(&mut heap_buf, phdr_start)?;
-            unsafe { core::slice::from_raw_parts(heap_buf.as_ptr().cast::<Phdr>(), phdr_num) }
+            object.read(buf.heap_buf(), phdr_start)?;
+            buf.get_phdrs_from_heap()
         };
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs);
@@ -425,7 +477,13 @@ impl<M: Mmap> Loader<M> {
             len: param.len,
             munmap: M::munmap,
         };
-        let mut temp_data = TempData::new(segments, object.file_name().to_owned(), lazy_bind, ehdr);
+        let mut temp_data = TempData::new(
+            segments,
+            object.file_name().to_owned(),
+            lazy_bind,
+            ehdr,
+            self.init_params,
+        );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs.iter() {
             temp_data.exec_hook(&hook, phdr)?;
@@ -455,30 +513,16 @@ impl<M: Mmap> Loader<M> {
     where
         F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
     {
-        const MAX_BUF_SIZE: usize = EHDR_SIZE + 12 * PHDR_SIZE;
-        let mut stack_buf: MaybeUninit<[u8; MAX_BUF_SIZE]> = MaybeUninit::uninit();
-        let stack_buf_ref = unsafe { &mut *stack_buf.as_mut_ptr() };
-        object.read(stack_buf_ref, 0).await?;
-        let ehdr = ElfHeader::new(stack_buf_ref)?;
+        let mut buf = ElfBuf::new();
+        object.read(buf.stack_buf(), 0).await?;
+        let ehdr = ElfHeader::new(buf.stack_buf())?;
         ehdr.validate()?;
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdr_num = ehdr.e_phnum();
-        let mut heap_buf = Vec::new();
-        let phdrs = if MAX_BUF_SIZE >= phdr_end {
-            unsafe {
-                core::slice::from_raw_parts(
-                    stack_buf
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(phdr_start)
-                        .cast::<Phdr>(),
-                    phdr_num,
-                )
-            }
+        let phdrs = if let Some(phdrs) = buf.get_phdrs_from_stack(phdr_start, phdr_end) {
+            phdrs
         } else {
-            heap_buf.resize(phdr_end - phdr_start, 0);
-            object.read(&mut heap_buf, phdr_start).await?;
-            unsafe { core::slice::from_raw_parts(heap_buf.as_ptr().cast::<Phdr>(), phdr_num) }
+            object.read(buf.heap_buf(), phdr_start).await?;
+            buf.get_phdrs_from_heap()
         };
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs);
@@ -489,7 +533,13 @@ impl<M: Mmap> Loader<M> {
             len: param.len,
             munmap: M::munmap,
         };
-        let mut temp_data = TempData::new(segments, object.file_name().to_owned(), lazy_bind, ehdr);
+        let mut temp_data = TempData::new(
+            segments,
+            object.file_name().to_owned(),
+            lazy_bind,
+            ehdr,
+            self.init_params,
+        );
 
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs.iter() {

@@ -104,6 +104,13 @@ impl UserData {
     }
 }
 
+#[derive(Clone, Copy)]
+struct InitParams {
+    argc: usize,
+    argv: usize,
+    envp: usize,
+}
+
 /// An unrelocated dynamic library
 pub struct ElfDylib {
     /// entry
@@ -114,6 +121,8 @@ pub struct ElfDylib {
     relocation: ElfRelocation,
     /// GNU_RELRO segment
     relro: Option<ELFRelro>,
+	/// init params
+    init_params: Option<InitParams>,
     /// .init
     init_fn: Option<extern "C" fn()>,
     /// .init_array
