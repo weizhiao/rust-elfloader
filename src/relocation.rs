@@ -77,7 +77,10 @@ impl ElfDylib {
             S Represents the value of the symbol whose index resides in the relocation entry.
         */
 
-        assert!(self.relocation.relative[0].r_type() == REL_RELATIVE as usize);
+        assert!(
+            !(self.relocation.relative.len() > 0
+                && self.relocation.relative[0].r_type() != REL_RELATIVE as usize)
+        );
         self.relocation.relative.into_iter().for_each(|rela| {
             // B + A
             debug_assert!(rela.r_type() == REL_RELATIVE as usize);
