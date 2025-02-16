@@ -1,7 +1,6 @@
-use core::num::NonZeroUsize;
-
 use crate::symbol::{ElfStringTable, SymbolTable};
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 use elf::abi;
 
 /// The special GNU extension section .gnu.version_d has a section type of SHT_GNU_VERDEF
@@ -306,7 +305,7 @@ impl ELFVersion {
                 num: num.get(),
             };
             for (verdef, mut vd_iter) in verdef_table.into_iter() {
-                let name = strtab.get(vd_iter.next().unwrap().vda_name as usize);
+                let name = strtab.get_str(vd_iter.next().unwrap().vda_name as usize);
                 versions[verdef.index()] = Version {
                     name,
                     hash: verdef.vd_hash,
@@ -320,7 +319,7 @@ impl ELFVersion {
             };
             for (_, vna_iter) in verneed_table.into_iter() {
                 for aux in vna_iter {
-                    let name = strtab.get(aux.vna_name as usize);
+                    let name = strtab.get_str(aux.vna_name as usize);
                     versions[aux.index()] = Version {
                         name,
                         hash: aux.vna_hash,

@@ -44,14 +44,6 @@ bitflags! {
     }
 }
 
-/// This struct is used to specify the offset and length for memory-mapped regions.
-pub struct MmapRange {
-    /// The length of the memory region to be mapped.
-    pub len: usize,
-    /// The offset of the mapped region in the elf object. It is always aligned by page size(4096 or 65536).
-    pub offset: usize,
-}
-
 /// A trait representing low-level memory mapping operations.
 ///
 /// This trait encapsulates the functionality for memory-mapped file I/O and anonymous memory mapping.

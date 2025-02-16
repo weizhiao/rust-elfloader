@@ -1,5 +1,5 @@
 //! # elf_loader
-//! A `lightweight`, `extensible`, and `high-performance` library for loading ELF files.
+//! A `safe`, `lightweight`, `extensible`, and `high-performance` library for loading ELF files.
 //! ## Usage
 //! It implements the general steps for loading ELF files and leaves extension interfaces,
 //! allowing users to implement their own customized loaders.
@@ -37,10 +37,11 @@ use alloc::{
 use arch::{Dyn, ElfRela, Phdr};
 use core::{
     any::Any,
-    ffi::{CStr, c_void},
+    ffi::CStr,
     fmt::{Debug, Display},
     marker::PhantomData,
     ops,
+    sync::atomic::{AtomicBool, Ordering},
 };
 use dynamic::ElfDynamic;
 
@@ -121,7 +122,7 @@ pub struct ElfDylib {
     relocation: ElfRelocation,
     /// GNU_RELRO segment
     relro: Option<ELFRelro>,
-	/// init params
+    /// init params
     init_params: Option<InitParams>,
     /// .init
     init_fn: Option<extern "C" fn()>,
@@ -187,20 +188,14 @@ impl ElfDylib {
     }
 
     /// Gets the core component reference of the elf object
-    /// # Safety
-    /// The current elf object has not yet been relocated, so it is dangerous to use this
-    /// function to get `CoreComponent` in the elf object.
     #[inline]
-    pub unsafe fn core_component_ref(&self) -> &CoreComponent {
+    pub fn core_component_ref(&self) -> &CoreComponent {
         &self.core
     }
 
     /// Gets the core component of the elf object
-    /// # Safety
-    /// The current elf object has not yet been relocated, so it is dangerous to use this
-    /// function to get `CoreComponent` in the elf object.
     #[inline]
-    pub unsafe fn core_component(&self) -> CoreComponent {
+    pub fn core_component(&self) -> CoreComponent {
         self.core.clone()
     }
 
@@ -214,6 +209,12 @@ impl ElfDylib {
     #[inline]
     pub fn user_data(&self) -> &UserData {
         self.core.user_data()
+    }
+
+    /// Gets mutable user data from the elf object.
+    #[inline]
+    pub fn user_data_mut(&mut self) -> Option<&mut UserData> {
+        Arc::get_mut(&mut self.core.inner).map(|inner| &mut inner.user_data)
     }
 
     /// Whether lazy binding is enabled for the current dynamic library.
@@ -236,6 +237,8 @@ impl ElfDylib {
 }
 
 struct CoreComponentInner {
+    /// is initialized
+    is_init: AtomicBool,
     /// file name
     name: CString,
     /// elf symbols
@@ -260,28 +263,14 @@ struct CoreComponentInner {
     segments: ElfSegments,
 }
 
-impl CoreComponentInner {
-    #[inline]
-    fn call_fini(&self) {
-        if let Some(f) = self.fini_fn {
-            f();
+impl Drop for CoreComponentInner {
+    fn drop(&mut self) {
+        if self.is_init.load(Ordering::Relaxed) {
+            self.fini_fn
+                .iter()
+                .chain(self.fini_array_fn.unwrap_or(&[]).iter())
+                .for_each(|fini| fini());
         }
-
-        if let Some(array) = self.fini_array_fn {
-            for f in array {
-                f();
-            }
-        }
-    }
-
-    #[inline]
-    fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        self.symbols
-            .lookup_filter(&SymbolInfo::new(name))
-            .map(|sym| Symbol {
-                ptr: (self.segments.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
     }
 }
 
@@ -307,6 +296,22 @@ unsafe impl Sync for CoreComponent {}
 unsafe impl Send for CoreComponent {}
 
 impl CoreComponent {
+    #[inline]
+    pub(crate) fn set_lazy_scope(
+        &self,
+        lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
+    ) {
+        // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+        let ptr = unsafe { &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner) };
+        ptr.lazy_scope = lazy_scope;
+    }
+
+    #[inline]
+    pub(crate) fn set_init(&self) {
+        self.inner.is_init.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
     /// Creates a new Weak pointer to this allocation.
     pub fn downgrade(&self) -> CoreComponentRef {
         CoreComponentRef {
@@ -374,22 +379,10 @@ impl CoreComponent {
         self.inner.dynamic
     }
 
-    /// Gets the symbol table.
-    #[inline]
-    pub fn symtab(&self) -> &SymbolTable {
-        &self.inner.symbols
-    }
-
     /// Gets the needed libs' name of the elf object.
     #[inline]
     pub fn needed_libs(&self) -> &[&'static str] {
         &self.inner.needed_libs
-    }
-
-    /// Call the fini function, usually when the elf object is destroyed.
-    #[inline]
-    pub unsafe fn call_fini(&self) {
-        self.inner.call_fini();
     }
 
     fn from_raw(
@@ -404,6 +397,7 @@ impl CoreComponent {
         Self {
             inner: Arc::new(CoreComponentInner {
                 name,
+                is_init: AtomicBool::new(true),
                 symbols: SymbolTable::new(&dynamic),
                 pltrel: core::ptr::null(),
                 dynamic: dynamic.dyn_ptr,
@@ -416,25 +410,6 @@ impl CoreComponent {
                 lazy_scope: None,
             }),
         }
-    }
-
-    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        self.inner.get(name)
-    }
-
-    #[cfg(feature = "version")]
-    pub unsafe fn get_version<'lib, T>(
-        &'lib self,
-        name: &str,
-        version: &str,
-    ) -> Option<Symbol<'lib, T>> {
-        self.inner
-            .symbols
-            .lookup_filter(&SymbolInfo::new_with_version(name, version))
-            .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value as usize) as _,
-                pd: PhantomData,
-            })
     }
 }
 
@@ -492,12 +467,6 @@ impl<'scope> RelocatedDylib<'scope> {
         self.core.name()
     }
 
-    /// Call the fini function, usually when the elf object is destroyed.
-    #[inline]
-    pub unsafe fn call_fini(&self) {
-        unsafe { self.core.call_fini() };
-    }
-
     /// Gets the C-style name of the elf object.
     #[inline]
     pub fn cname(&self) -> &CStr {
@@ -522,14 +491,15 @@ impl<'scope> RelocatedDylib<'scope> {
         &self.core.phdrs()
     }
 
+    /// # Safety
+    /// The current elf object has not yet been relocated, so it is dangerous to use this
+    /// function to convert `CoreComponent` to `RelocateDylib`. And lifecycle information is lost
     #[inline]
-    pub fn into_ptr(self) -> *const c_void {
-        Arc::into_raw(self.core.inner) as _
-    }
-
-    #[inline]
-    pub fn as_ptr(&self) -> *const c_void {
-        Arc::as_ptr(&self.core.inner).cast()
+    pub unsafe fn from_core_component(core: CoreComponent) -> Self {
+        RelocatedDylib {
+            core,
+            _marker: PhantomData,
+        }
     }
 
     /// Gets the short name of the elf object.
@@ -538,26 +508,31 @@ impl<'scope> RelocatedDylib<'scope> {
         self.core.shortname()
     }
 
-    /// Gets the core component of the elf object.
+    /// Gets the symbol table.
     #[inline]
-    pub fn into_core_component(self) -> CoreComponent {
-        self.core
+    pub fn symtab(&self) -> &SymbolTable {
+        &self.core.inner.symbols
     }
 
-    /// Gets the core component of the elf object.
+    /// Gets the number of strong references to the elf object.
     #[inline]
-    pub fn core_component(&self) -> &CoreComponent {
+    pub fn strong_count(&self) -> usize {
+        self.core.strong_count()
+    }
+
+    /// Gets the memory length of the elf object map.
+    #[inline]
+    pub fn map_len(&self) -> usize {
+        self.core.map_len()
+    }
+
+    /// Gets the core component reference of the elf object.
+    /// # Safety
+    /// Lifecycle information is lost, and the dependencies of the current elf object can be prematurely deallocated,
+    /// which can cause serious problems.
+    #[inline]
+    pub unsafe fn core_component_ref(&self) -> &CoreComponent {
         &self.core
-    }
-
-    #[inline]
-    pub unsafe fn from_ptr(raw: *const c_void) -> Self {
-        Self {
-            core: CoreComponent {
-                inner: unsafe { Arc::from_raw(raw as *const CoreComponentInner) },
-            },
-            _marker: PhantomData,
-        }
     }
 
     #[inline]
@@ -600,7 +575,12 @@ impl<'scope> RelocatedDylib<'scope> {
     /// ```
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        unsafe { self.core.get(name) }
+        self.symtab()
+            .lookup_filter(&SymbolInfo::from_str(name))
+            .map(|sym| Symbol {
+                ptr: (self.base() + sym.st_value()) as _,
+                pd: PhantomData,
+            })
     }
 
     /// Load a versioned symbol from the elf object.
@@ -616,7 +596,12 @@ impl<'scope> RelocatedDylib<'scope> {
         name: &str,
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
-        unsafe { self.core.get_version(name, version) }
+        self.symtab()
+            .lookup_filter(&SymbolInfo::new_with_version(name, version))
+            .map(|sym| Symbol {
+                ptr: (self.base() + sym.st_value()) as _,
+                pd: PhantomData,
+            })
     }
 }
 

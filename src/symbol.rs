@@ -1,5 +1,5 @@
 use crate::{arch::ElfSymbol, dynamic::ElfDynamic};
-use elf::abi::{SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK};
+use core::ffi::CStr;
 
 #[derive(Clone)]
 struct ElfGnuHash {
@@ -76,6 +76,23 @@ impl ElfGnuHash {
         }
         hash
     }
+
+    fn count_syms(&self) -> usize {
+        let mut nsym = 0;
+        for i in 0..self.nbucket as usize {
+            nsym = nsym.max(unsafe { self.buckets.add(i).read() as usize });
+        }
+        if nsym > 0 {
+            unsafe {
+                let mut hashval = self.chains.add(nsym - self.table_start_idx as usize + 1);
+                while hashval.read() & 1 == 0 {
+                    nsym += 1;
+                    hashval = hashval.add(1);
+                }
+            }
+        }
+        nsym + 1
+    }
 }
 
 pub(crate) struct ElfStringTable {
@@ -87,18 +104,22 @@ impl ElfStringTable {
         ElfStringTable { data }
     }
 
-    pub(crate) fn get(&self, offset: usize) -> &'static str {
+    #[inline]
+    pub(crate) fn get_cstr(&self, offset: usize) -> &'static CStr {
         unsafe {
-            let start = self.data.add(offset);
-            let mut end = start;
-            while end.read() != 0 {
-                end = end.add(1)
-            }
-            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                start,
-                end as usize - start as usize,
-            ))
+            let start = self.data.add(offset).cast();
+            CStr::from_ptr(start)
         }
+    }
+
+    #[inline]
+    pub(crate) fn convert_cstr(s: &CStr) -> &str {
+        unsafe { core::str::from_utf8_unchecked(s.to_bytes()) }
+    }
+
+    #[inline]
+    pub(crate) fn get_str(&self, offset: usize) -> &'static str {
+        Self::convert_cstr(self.get_cstr(offset))
     }
 }
 
@@ -117,15 +138,17 @@ pub struct SymbolTable {
 
 /// Symbol specific information, including symbol name and version name.
 pub struct SymbolInfo<'a> {
-    pub(crate) name: &'a str,
+    name: &'a str,
+    cname: Option<&'a CStr>,
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'a>>,
 }
 
 impl<'a> SymbolInfo<'a> {
-    pub(crate) const fn new(name: &'a str) -> Self {
+    pub(crate) const fn from_str(name: &'a str) -> Self {
         SymbolInfo {
             name,
+            cname: None,
             #[cfg(feature = "version")]
             version: None,
         }
@@ -135,14 +158,21 @@ impl<'a> SymbolInfo<'a> {
     pub(crate) fn new_with_version(name: &'a str, version: &'a str) -> Self {
         SymbolInfo {
             name,
+            cname: None,
             version: Some(crate::version::SymbolVersion::new(version)),
         }
     }
 
     /// Gets the name of the symbol.
     #[inline]
-    pub fn symbol_name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Gets the C-style name of the symbol.
+    #[inline]
+    pub fn cname(&self) -> Option<&CStr> {
+        self.cname
     }
 }
 
@@ -201,7 +231,7 @@ impl SymbolTable {
             let chain_hash = unsafe { cur_chain.read() };
             if hash | 1 == chain_hash | 1 {
                 let cur_symbol = unsafe { &*cur_symbol_ptr };
-                let sym_name = self.strtab.get(cur_symbol.st_name as usize);
+                let sym_name = self.strtab.get_str(cur_symbol.st_name());
                 #[cfg(feature = "version")]
                 if sym_name == symbol.name && self.check_match(dynsym_idx, &symbol.version) {
                     return Some(cur_symbol);
@@ -225,25 +255,29 @@ impl SymbolTable {
     #[inline]
     pub fn lookup_filter(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         if let Some(sym) = self.lookup(symbol) {
-            if (sym.st_shndx != SHN_UNDEF)
-                && (1 << (sym.st_info >> 4)
-                    & (1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE)
-                    != 0)
-            {
+            if !sym.is_undef() && sym.is_ok_bind() && sym.is_ok_type() {
                 return Some(sym);
             }
         }
         None
     }
 
+    #[inline]
     /// Use the symbol index to get the symbols in the symbol table.
     pub fn symbol_idx(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
         let symbol = unsafe { &*self.symtab.add(idx) };
-        let name = self.strtab.get(symbol.st_name as usize);
+        let cname = self.strtab.get_cstr(symbol.st_name());
+        let name = ElfStringTable::convert_cstr(&cname);
         (symbol, SymbolInfo {
             name,
+            cname: Some(&cname),
             #[cfg(feature = "version")]
             version: self.get_requirement(idx),
         })
+    }
+
+    #[inline]
+    pub fn count_syms(&self) -> usize {
+        self.hashtab.count_syms()
     }
 }

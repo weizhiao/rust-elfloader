@@ -1,6 +1,6 @@
 //! The Memory mapping of elf object
 use super::mmap::{self, Mmap, ProtFlags};
-use crate::{arch::Phdr, Result};
+use crate::{Result, arch::Phdr};
 use core::ffi::c_void;
 use core::fmt::Debug;
 use core::ptr::NonNull;
@@ -11,7 +11,7 @@ pub const PAGE_SIZE: usize = 0x10000;
 #[cfg(not(target_arch = "aarch64"))]
 pub const PAGE_SIZE: usize = 0x1000;
 
-pub(crate) const MASK: usize = !(PAGE_SIZE - 1);
+pub const MASK: usize = !(PAGE_SIZE - 1);
 
 #[allow(unused)]
 pub(crate) struct ELFRelro {
@@ -101,12 +101,13 @@ impl ElfSegments {
         self.len
     }
 
+    /// base = memory_addr - offset
     #[inline]
     pub fn base(&self) -> usize {
         unsafe { self.memory.as_ptr().cast::<u8>().sub(self.offset) as usize }
     }
 
-    /// start = memory_addr - addr_min
+    /// start = memory_addr - offset
     #[inline]
     pub(crate) fn as_mut_slice(&self) -> &'static mut [u8] {
         unsafe {

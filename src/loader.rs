@@ -2,7 +2,7 @@ use crate::{
     CoreComponent, CoreComponentInner, ElfDylib, ElfObject, InitParams, Result, UserData,
     arch::{E_CLASS, EHDR_SIZE, EM_ARCH, PHDR_SIZE, Phdr},
     dynamic::ElfRawDynamic,
-    mmap::{self, MapFlags, Mmap, MmapRange, ProtFlags},
+    mmap::{self, MapFlags, Mmap, ProtFlags},
     object::ElfObjectAsync,
     parse_dynamic_error, parse_ehdr_error,
     relocation::ElfRelocation,
@@ -15,6 +15,7 @@ use core::{
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::{NonNull, null},
+    sync::atomic::AtomicBool,
 };
 use elf::{
     abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_RELRO, PT_LOAD, PT_PHDR},
@@ -75,6 +76,14 @@ impl ElfHeader {
         let phdr_end = phdr_start + phdrs_size;
         (phdr_start, phdr_end)
     }
+}
+
+/// This struct is used to specify the offset and length for memory-mapped regions.
+struct MmapRange {
+    /// The length of the memory region to be mapped.
+    len: usize,
+    /// The offset of the mapped region in the elf object. It is always aligned by page size(4096 or 65536).
+    offset: usize,
 }
 
 struct MmapParam {
@@ -185,17 +194,20 @@ fn create_segments(phdrs: &[Phdr]) -> (MmapParam, usize) {
 
 #[inline]
 fn load_segment(segments: &ElfSegments, phdr: &Phdr) -> Option<MmapParam> {
-    // 映射的起始地址与结束地址都是页对齐的
     let addr_min = segments.offset();
     let base = segments.base();
+    // 映射的起始地址与结束地址都是页对齐的
     let min_vaddr = phdr.p_vaddr as usize & MASK;
     let max_vaddr = (phdr.p_vaddr as usize + phdr.p_memsz as usize + PAGE_SIZE - 1) & MASK;
     let memsz = max_vaddr - min_vaddr;
     let prot = ElfSegments::map_prot(phdr.p_flags);
     let real_addr = min_vaddr + base;
     let offset = phdr.p_offset as usize & MASK;
+    // 因为读取是从offset处开始的，所以为了不少从文件中读数据，这里需要加上因为对齐产生的偏差
     let align_len = phdr.p_offset as usize - offset;
     let filesz = phdr.p_filesz as usize + align_len;
+    // 这是一个优化，可以减少一次mmap调用。
+    // 映射create_segments产生的参数时会将处于最低地址处的segment也映射进去，所以这里不需要在映射它
     if addr_min != min_vaddr {
         Some(MmapParam {
             addr: Some(real_addr),
@@ -330,7 +342,7 @@ impl TempData {
         let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
             .iter()
-            .map(|needed_lib| symbols.strtab().get(needed_lib.get()))
+            .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
             .collect();
         let elf_lib = ElfDylib {
             entry: self.ehdr.ehdr.e_entry as usize,
@@ -343,12 +355,13 @@ impl TempData {
             got: dynamic.got,
             rpath: dynamic
                 .rpath_off
-                .map(|rpath_off| symbols.strtab().get(rpath_off.get())),
+                .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
             runpath: dynamic
                 .runpath_off
-                .map(|runpath_off| symbols.strtab().get(runpath_off.get())),
+                .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
             core: CoreComponent {
                 inner: Arc::new(CoreComponentInner {
+                    is_init: AtomicBool::new(false),
                     name: self.name,
                     symbols,
                     dynamic: dynamic.dyn_ptr,

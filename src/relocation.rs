@@ -1,12 +1,13 @@
 //! Relocation of elf objects
 use crate::{
-    CoreComponent, CoreComponentInner, ElfDylib, RelocatedDylib, Result, arch::*, relocate_error,
+    CoreComponentInner, ElfDylib, Error, RelocatedDylib, Result, arch::*, relocate_error,
     symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, format, sync::Arc};
 use core::{ffi::c_int, marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
 use elf::abi::*;
 
+// lazy binding 时会先从这里寻找符号
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
 
 struct SymDef<'temp> {
@@ -15,13 +16,15 @@ struct SymDef<'temp> {
 }
 
 impl<'temp> SymDef<'temp> {
+    // 获取符号的真实地址(base + st_value)
     #[inline(always)]
     fn convert(self) -> *const () {
-        if likely(self.sym.st_info & 0xf != STT_GNU_IFUNC) {
-            (self.base + self.sym.st_value as usize) as _
+        if likely(self.sym.st_type() != STT_GNU_IFUNC) {
+            (self.base + self.sym.st_value()) as _
         } else {
+            // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
             let ifunc: fn() -> usize =
-                unsafe { core::mem::transmute(self.base + self.sym.st_value as usize) };
+                unsafe { core::mem::transmute(self.base + self.sym.st_value()) };
             ifunc() as _
         }
     }
@@ -35,41 +38,62 @@ impl ElfDylib {
     /// * Typically, the `scope` should also contain the current dynamic library itself,
     /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the lazy scope
-    pub fn relocate<'scope, S, F, D>(
+    pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
         self,
         scope: S,
-        pre_find: &'scope F,
+        pre_find: &'find F,
         deal_unknown: D,
         lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
-    ) -> Result<RelocatedDylib<'scope>>
+    ) -> Result<RelocatedDylib<'lib>>
     where
-        S: Iterator<Item = &'scope CoreComponent> + Clone,
+        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
         D: Fn(&ElfRela, &ElfDylib, S) -> bool,
+        'scope: 'iter,
+        'scope: 'lib,
+        'find: 'lib,
     {
-        fn find_symdef<'a, 'scope: 'a, I>(
-            elf_lib: &'a CoreComponentInner,
+        fn find_symdef<'iter, 'temp, 'scope, I>(
+            elf_lib: &'temp ElfDylib,
             mut libs: I,
-            dynsym: &'a ElfSymbol,
+            dynsym: &'temp ElfSymbol,
             syminfo: &SymbolInfo,
-        ) -> Option<SymDef<'a>>
+        ) -> Option<SymDef<'temp>>
         where
-            I: Iterator<Item = &'scope CoreComponent>,
+            'scope: 'temp,
+            'scope: 'iter,
+            'iter: 'temp,
+            I: Iterator<Item = &'iter RelocatedDylib<'scope>>,
         {
-            if unlikely(dynsym.st_info >> 4 == STB_LOCAL) {
+            if unlikely(dynsym.is_local()) {
                 Some(SymDef {
                     sym: dynsym,
-                    base: elf_lib.segments.base(),
+                    base: elf_lib.base(),
                 })
             } else {
                 libs.find_map(|lib| {
-                    lib.inner.symbols.lookup_filter(&syminfo).map(|sym| SymDef {
+                    lib.symtab().lookup_filter(&syminfo).map(|sym| SymDef {
                         sym,
                         base: lib.base(),
                     })
                 })
             }
         }
+
+        let reloc_error = |r_type: usize, r_sym: usize| -> Error {
+            if r_sym == 0 {
+                relocate_error(format!(
+                    "relocation type: {}, no symbol",
+                    r_type,
+                ))
+            } else {
+                relocate_error(format!(
+                    "relocation type: {}, symbol name: {}",
+                    r_type,
+                    self.symtab().symbol_idx(r_sym).1.name(),
+                ))
+            }
+        };
 
         /*
             A Represents the addend used to compute the value of the relocatable field.
@@ -101,9 +125,9 @@ impl ElfDylib {
             match r_type {
                 // REL_GOT: S  REL_SYMBOLIC: S + A
                 REL_GOT | REL_SYMBOLIC => {
-                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                    if let Some(symbol) = pre_find(syminfo.name).or(find_symdef(
-                        &self.core.inner,
+                    let (dynsym, syminfo) = self.symtab().symbol_idx(r_sym);
+                    if let Some(symbol) = pre_find(syminfo.name()).or(find_symdef(
+                        &self,
                         scope.clone(),
                         dynsym,
                         &syminfo,
@@ -115,13 +139,11 @@ impl ElfDylib {
                     }
                 }
                 REL_DTPOFF => {
-                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                    if let Some(symdef) =
-                        find_symdef(&self.core.inner, scope.clone(), dynsym, &syminfo)
-                    {
+                    let (dynsym, syminfo) = self.symtab().symbol_idx(r_sym);
+                    if let Some(symdef) = find_symdef(&self, scope.clone(), dynsym, &syminfo) {
                         // offset in tls
-                        let tls_val = (symdef.sym.st_value as usize + rela.r_addend())
-                            .wrapping_sub(TLS_DTV_OFFSET);
+                        let tls_val =
+                            (symdef.sym.st_value() + rela.r_addend()).wrapping_sub(TLS_DTV_OFFSET);
                         self.write_val(rela.r_offset(), tls_val);
                         continue;
                     }
@@ -129,10 +151,7 @@ impl ElfDylib {
                 _ => {}
             }
             if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
-                return Err(relocate_error(format!(
-                    "unsupported relocation type: {}, symbol idx:{}",
-                    r_type, r_sym,
-                )));
+                return Err(reloc_error(r_type as usize, r_sym));
             }
         }
 
@@ -160,9 +179,7 @@ impl ElfDylib {
             if let Some(got) = self.got {
                 prepare_lazy_bind(got, Arc::as_ptr(&self.core.inner) as usize);
             }
-            // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
-            let ptr = unsafe { &mut *(Arc::as_ptr(&self.core.inner) as *mut CoreComponentInner) };
-            ptr.lazy_scope = lazy_scope;
+            self.core.set_lazy_scope(lazy_scope);
         } else {
             for rela in self.relocation.pltrel {
                 let r_type = rela.r_type() as u32;
@@ -170,9 +187,9 @@ impl ElfDylib {
                 // S
                 // 对于.rela.plt来说通常只有这两种重定位类型
                 if likely(r_type == REL_JUMP_SLOT) {
-                    let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-                    if let Some(symbol) = pre_find(syminfo.name).or(find_symdef(
-                        &self.core.inner,
+                    let (dynsym, syminfo) = self.symtab().symbol_idx(r_sym);
+                    if let Some(symbol) = pre_find(syminfo.name()).or(find_symdef(
+                        &self,
                         scope.clone(),
                         dynsym,
                         &syminfo,
@@ -189,10 +206,7 @@ impl ElfDylib {
                     continue;
                 }
                 if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
-                    return Err(relocate_error(format!(
-                        "unsupported relocation type: {}, symbol idx:{}",
-                        r_type, r_sym,
-                    )));
+                    return Err(reloc_error(r_type as usize, r_sym));
                 }
             }
             if let Some(relro) = self.relro {
@@ -218,6 +232,7 @@ impl ElfDylib {
                 .for_each(|init| init());
         }
 
+        self.core.set_init();
         Ok(RelocatedDylib {
             core: self.core,
             _marker: PhantomData,
@@ -242,10 +257,10 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
     let (_, syminfo) = dylib.symbols.symbol_idx(r_sym);
     let scope = GLOBAL_SCOPE.load(core::sync::atomic::Ordering::Acquire);
     let symbol = if scope == 0 {
-        dylib.lazy_scope.as_ref().unwrap()(syminfo.name)
+        dylib.lazy_scope.as_ref().unwrap()(syminfo.name())
     } else {
-        unsafe { core::mem::transmute::<_, fn(&str) -> Option<*const ()>>(scope)(syminfo.name) }
-            .or(dylib.lazy_scope.as_ref().unwrap()(syminfo.name))
+        unsafe { core::mem::transmute::<_, fn(&str) -> Option<*const ()>>(scope)(syminfo.name()) }
+            .or(dylib.lazy_scope.as_ref().unwrap()(syminfo.name()))
     }
     .expect("lazy bind fail") as usize;
     let ptr = (dylib.segments.base() + rela.r_offset()) as *mut usize;
@@ -255,8 +270,11 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
 
 #[derive(Default)]
 pub(crate) struct ElfRelocation {
+    // REL_RELATIVE
     relative: &'static [ElfRela],
+    // plt
     pltrel: &'static [ElfRela],
+    // others in dyn
     dynrel: &'static [ElfRela],
 }
 
@@ -267,6 +285,7 @@ impl ElfRelocation {
         dynrel: Option<&'static [ElfRela]>,
         rela_count: Option<NonZeroUsize>,
     ) -> Self {
+        // nrelative记录着REL_RELATIVE重定位类型的个数
         let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
         let old_dynrel = dynrel.unwrap_or(&[]);
         let relative = &old_dynrel[..nrelative];
