@@ -43,3 +43,7 @@ use-libc = ["dep:libc"]
 mmap = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
+
+[[example]]
+name = "relocate"
+required-features = ["fs", "mmap"]

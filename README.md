@@ -22,6 +22,9 @@ If you want to port this crate, you only need to implement the `Mmap` trait for 
 ### ✨ Tiny library with few dependencies ✨
 With minimal features, this crate only depends on the `elf`, `cfg-if`, and `bitflags` crates.
 
+### ✨ Compile-time checking ✨
+Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are destroyed prematurely, and whether the dynamic library containing the symbol has been destroyed.
+
 # Usage
 It implements the general steps for loading ELF files and leaves extension interfaces, allowing users to implement their own customized loaders.
 
