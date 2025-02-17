@@ -159,24 +159,18 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     // 加载输入的elf文件
     let argv = sp.add(1);
     let elf_name = CStr::from_ptr(argv.add(1).read() as _);
-    let elf_file = ElfFile::from_path(elf_name).unwrap();
+    let elf_file = ElfFile::from_path(elf_name.to_str().unwrap()).unwrap();
     let loader: Loader<MmapImpl> = Loader::new();
-    let dylib = loader
-        .load_dylib(elf_file, None, |_, _, _, _| Ok(()))
-        .unwrap();
+    let dylib = loader.easy_load_dylib(elf_file).unwrap();
     let phdrs = dylib.phdrs();
     let mut interp_dylib = None;
     for phdr in phdrs {
         // 加载动态加载器ld.so，如果有的话
         if phdr.p_type == PT_INTERP {
             let interp_name = CStr::from_ptr((dylib.base() + phdr.p_vaddr as usize) as _);
-            let interp_file = ElfFile::from_path(interp_name).unwrap();
+            let interp_file = ElfFile::from_path(interp_name.to_str().unwrap()).unwrap();
             let interp_loader = Loader::<MmapImpl>::new();
-            interp_dylib = Some(
-                interp_loader
-                    .load_dylib(interp_file, None, |_, _, _, _| Ok(()))
-                    .unwrap(),
-            );
+            interp_dylib = Some(interp_loader.easy_load_dylib(interp_file).unwrap());
             break;
         }
     }

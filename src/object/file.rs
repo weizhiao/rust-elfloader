@@ -1,6 +1,5 @@
 use crate::Result;
 use alloc::ffi::CString;
-use core::ffi::CStr;
 
 /// An elf file saved in a file
 pub struct ElfFile {
@@ -16,7 +15,7 @@ impl ElfFile {
         }
     }
 
-    pub fn from_path(path: &CStr) -> Result<Self> {
+    pub fn from_path(path: &str) -> Result<Self> {
         from_path(path)
     }
 }
@@ -25,8 +24,8 @@ impl ElfFile {
 mod imp {
     use super::ElfFile;
     use crate::{Result, io_error, object::ElfObject};
-    use alloc::borrow::ToOwned;
-    use core::ffi::CStr;
+    use alloc::ffi::CString;
+    use core::{ffi::CStr, str::FromStr};
     use libc::{O_RDONLY, SEEK_SET};
 
     impl Drop for ElfFile {
@@ -35,15 +34,13 @@ mod imp {
         }
     }
 
-    pub(crate) fn from_path(path: &CStr) -> Result<ElfFile> {
-        let fd = unsafe { libc::open(path.as_ptr(), O_RDONLY) };
+    pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
+        let name = CString::from_str(path).unwrap();
+        let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
             return Err(io_error("open failed"));
         }
-        Ok(ElfFile {
-            name: path.to_owned(),
-            fd,
-        })
+        Ok(ElfFile { name, fd })
     }
 
     fn lseek(fd: i32, offset: usize) -> Result<()> {
@@ -100,14 +97,14 @@ mod imp {
 mod imp {
     use super::ElfFile;
     use crate::{Result, io_error, object::ElfObject};
-    use alloc::borrow::ToOwned;
-    use core::ffi::CStr;
+    use alloc::{borrow::ToOwned, ffi::CString};
+    use core::{ffi::CStr, str::FromStr};
     use syscalls::Sysno;
 
-    pub(crate) fn from_path(path: &CStr) -> Result<ElfFile> {
+    pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
         const RDONLY: u32 = 0;
         Ok(ElfFile {
-            name: path.to_owned(),
+            name: CString::from_str(path).unwrap().to_owned(),
             fd: unsafe {
                 syscalls::syscall!(Sysno::open, path.as_ptr(), RDONLY, 0)
                     .map_err(|_| io_error("open failed"))?

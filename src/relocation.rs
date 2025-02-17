@@ -4,7 +4,12 @@ use crate::{
     symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, format, sync::Arc};
-use core::{ffi::c_int, marker::PhantomData, num::NonZeroUsize, sync::atomic::AtomicUsize};
+use core::{
+    ffi::c_int,
+    marker::PhantomData,
+    num::NonZeroUsize,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use elf::abi::*;
 
 // lazy binding 时会先从这里寻找符号
@@ -32,25 +37,41 @@ impl<'temp> SymDef<'temp> {
 
 impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
+        self,
+        scope: S,
+        pre_find: &'find F,
+    ) -> Result<RelocatedDylib<'lib>>
+    where
+        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        F: Fn(&str) -> Option<*const ()>,
+        'scope: 'iter,
+        'iter: 'lib,
+        'find: 'lib,
+    {
+        self.relocate(scope, pre_find, |_, _, _| false, None)
+    }
+
+    /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
     /// * During relocation, the symbol is first searched in the function closure `pre_find`.
     /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * Typically, the `scope` should also contain the current dynamic library itself,
     /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
-    /// * When lazy binding, the symbol is first looked for in the global scope and then in the lazy scope
+    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
         self,
         scope: S,
         pre_find: &'find F,
         deal_unknown: D,
-        lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+        local_lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
     ) -> Result<RelocatedDylib<'lib>>
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
         D: Fn(&ElfRela, &ElfDylib, S) -> bool,
         'scope: 'iter,
-        'scope: 'lib,
+        'iter: 'lib,
         'find: 'lib,
     {
         fn find_symdef<'iter, 'temp, 'scope, I>(
@@ -82,10 +103,7 @@ impl ElfDylib {
 
         let reloc_error = |r_type: usize, r_sym: usize| -> Error {
             if r_sym == 0 {
-                relocate_error(format!(
-                    "relocation type: {}, no symbol",
-                    r_type,
-                ))
+                relocate_error(format!("relocation type: {}, no symbol", r_type,))
             } else {
                 relocate_error(format!(
                     "relocation type: {}, symbol name: {}",
@@ -179,7 +197,13 @@ impl ElfDylib {
             if let Some(got) = self.got {
                 prepare_lazy_bind(got, Arc::as_ptr(&self.core.inner) as usize);
             }
-            self.core.set_lazy_scope(lazy_scope);
+            assert!(
+                self.relocation.pltrel.is_empty()
+                    || local_lazy_scope.is_some()
+                    || GLOBAL_SCOPE.load(Ordering::Relaxed) != 0,
+                "neither local lazy scope nor global scope is set"
+            );
+            self.core.set_lazy_scope(local_lazy_scope);
         } else {
             for rela in self.relocation.pltrel {
                 let r_type = rela.r_type() as u32;

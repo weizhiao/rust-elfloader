@@ -458,9 +458,18 @@ impl<M: Mmap> Loader<M> {
         self.init_params = Some(InitParams { argc, argv, envp });
     }
 
+	/// Load a dynamic library into memory
+    pub fn easy_load_dylib(
+        &self,
+        object: impl ElfObject,
+    ) -> Result<ElfDylib> {
+        self.load_dylib(object, None, |_, _, _, _| Ok(()))
+    }
+
     /// Load a dynamic library into memory
     /// # Note
-    /// `hook` functions are called first when a program header is processed.
+    /// * `hook` functions are called first when a program header is processed.
+	/// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
     pub fn load_dylib<F>(
         &self,
         mut object: impl ElfObject,
