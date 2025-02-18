@@ -14,7 +14,7 @@ This crate provides an elf loading interface which does not use any std
 features, so it can be used in `no_std` environments such as kernels and embedded device.
 
 ### ✨ Fast speed ✨
-This crate makes full use of some features of rust and can generate code with excellent performance.
+This crate makes full use of some features of rust and can generate code with excellent performance. The `elf_loader` is designed to achieve faster performance than `libloading`, specifically aiming to surpass the speed of the dynamic linker/loader (ld.so).
 
 ### ✨ Very easy to port and has good extensibility ✨
 If you want to port this crate, you only need to implement the `Mmap` trait for your platform. And you can use hook functions to implement additional functionality based on this crate.
@@ -82,7 +82,7 @@ $ ./mini-loader /bin/ls
 ``` 
 It should be noted that mini-loader must be compiled with the release parameter.
 ## dlopen-rs
-[dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime.
+[dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime. And it has implemented hot reloading.
 
 # TODO
 * Support more CPU instruction sets (currently only supports AArch64, Riscv64, X86-64).
@@ -90,7 +90,7 @@ It should be noted that mini-loader must be compiled with the release parameter.
 * Improve comments and documentation.
 * Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
 * Add support for more instruction sets in the example mini-loader.
-* Adding performance tests.
+* Add more performance tests and correctness tests.
 ...
 
 # Supplement

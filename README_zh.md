@@ -11,7 +11,7 @@
 此包提供了一个不使用任何 std 特性的 elf 加载接口，因此可以在内核和嵌入式设备等`no_std`环境中使用。
 
 ### ✨ 速度快 ✨
-该crate充分利用了rust的一些特性，可以生成性能优异的代码。
+该crate充分利用了rust的一些特性，可以生成性能优异的代码。elf_loader的速度要超过libloading，更准确地说应该是比ld.so更快。
 
 ### ✨ 非常容易移植，具有良好的可扩展性 ✨
 如果您想要移植此 crate，则只需为您的平台实现 `Mmap` 特征即可，并且您可以使用hook函数基于此 crate 实现其他功能。
@@ -80,7 +80,7 @@ $ ./mini-loader /bin/ls
 需要注意的是必须使用release参数编译mini-loader。
 
 ## dlopen-rs
-[dlopen-rs](https://crates.io/crates/dlopen-rs)也是基于`elf_loader`库实现的。它实现了dlopen的功能，可以在运行时打开动态库。
+[dlopen-rs](https://crates.io/crates/dlopen-rs)也是基于`elf_loader`库实现的。它实现了dlopen的功能，可以在运行时打开动态库，并且实现了热重载。
 
 # 未完成
 * 支持更多的CPU指令集（目前只支持AArch64，Riscv64，X86-64）。
@@ -88,7 +88,8 @@ $ ./mini-loader /bin/ls
 * 完善注释和文档。  
 * 增加示例（比如使用异步接口加载动态库的示例）。
 * 为示例mini-loader支持更多的指令集。
-* 增加性能测试
+* 增加更多的性能测试和正确性测试.
+* 使用portable simd进一步优化性能。
 .....
 
 # 补充

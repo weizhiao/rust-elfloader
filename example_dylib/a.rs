@@ -8,14 +8,10 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-extern "Rust" {
-    fn print(s: &str);
+#[no_mangle]
+fn a() -> i32 {
+    1
 }
 
 #[no_mangle]
-fn a() -> i32 {
-    unsafe {
-        print("call a()");
-        1
-    }
-}
+pub static HELLO: &str = "Hello!";
