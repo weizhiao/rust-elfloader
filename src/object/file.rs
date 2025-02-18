@@ -103,12 +103,13 @@ mod imp {
 
     pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
         const RDONLY: u32 = 0;
+        let name = CString::from_str(path).unwrap().to_owned();
         Ok(ElfFile {
-            name: CString::from_str(path).unwrap().to_owned(),
             fd: unsafe {
-                syscalls::syscall!(Sysno::open, path.as_ptr(), RDONLY, 0)
-                    .map_err(|_| io_error("open failed"))?
+                syscalls::syscall!(Sysno::open, name.as_ptr(), RDONLY, 0)
+                    .map_err(|err| io_error(err))?
             } as _,
+            name,
         })
     }
 
