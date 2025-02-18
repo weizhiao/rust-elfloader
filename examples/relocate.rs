@@ -1,6 +1,6 @@
+use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
 use std::path::PathBuf;
-extern crate elf_loader;
-extern crate std;
+use std::{collections::HashMap, ptr::null};
 
 const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
 const TARGET_TMPDIR: Option<&'static str> = option_env!("CARGO_TARGET_TMPDIR");
@@ -39,8 +39,6 @@ fn compile() {
 }
 
 fn main() {
-    use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
-    use std::{collections::HashMap, ptr::null};
     compile();
     let loader = Loader::<MmapImpl>::new();
     let load = |name: &str| {
@@ -48,11 +46,17 @@ fn main() {
             .easy_load_dylib(ElfFile::from_path(lib_path().join(name).to_str().unwrap()).unwrap())
             .unwrap()
     };
+
+    fn print(s: &str) {
+        println!("{}", s);
+    }
+
     let mut map = HashMap::new();
     map.insert("__gmon_start__", null());
     map.insert("__cxa_finalize", null());
     map.insert("_ITM_registerTMCloneTable", null());
     map.insert("_ITM_deregisterTMCloneTable", null());
+    map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let liba = load("liba.so");
     let libb = load("libb.so");
@@ -63,7 +67,7 @@ fn main() {
     let b = libb.easy_relocate([&a].into_iter(), &pre_find).unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
-    let c = libc.easy_relocate([&a, &b].into_iter(), &pre_find).unwrap();
+    let c = libc.easy_relocate([&b].into_iter(), &pre_find).unwrap();
     let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
 }

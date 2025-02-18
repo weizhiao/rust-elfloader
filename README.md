@@ -23,7 +23,8 @@ If you want to port this crate, you only need to implement the `Mmap` trait for 
 With minimal features, this crate only depends on the `elf`, `cfg-if`, and `bitflags` crates.
 
 ### ✨ Compile-time checking ✨
-Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are destroyed prematurely, and whether the dynamic library containing the symbol has been destroyed.
+Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely, and whether the dynamic library to which a symbol belongs has been deallocated.   
+For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs).)
 
 # Usage
 It implements the general steps for loading ELF files and leaves extension interfaces, allowing users to implement their own customized loaders.
@@ -38,6 +39,38 @@ It implements the general steps for loading ELF files and leaves extension inter
 | version   |  Use the version information of symbols when resolving them.     |
 
 # Example
+## Load a simple dynamic library
+```rust
+use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use std::{collections::HashMap, ptr::null};
+
+fn main() {
+    fn print(s: &str) {
+        println!("{}", s);
+    }
+
+	// Symbols required by dynamic library liba.so
+    let mut map = HashMap::new();
+    map.insert("__gmon_start__", null());
+    map.insert("__cxa_finalize", null());
+    map.insert("_ITM_registerTMCloneTable", null());
+    map.insert("_ITM_deregisterTMCloneTable", null());
+    map.insert("print", print as _);
+    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+	// Load dynamic library liba.so 
+	let loader = Loader::<MmapImpl>::new();
+    let liba = loader
+        .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+        .unwrap();
+	// Relocate symbols in liba.so
+    let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+	// Call function a in liba.so
+    let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
+    f();
+}
+```
+
 ## mini-loader
 This repository provides an example of a [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) implemented using `elf_loader`. The miniloader can load PIE files and currently only supports `x86_64` .
 
@@ -57,7 +90,7 @@ It should be noted that mini-loader must be compiled with the release parameter.
 * Improve comments and documentation.
 * Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
 * Add support for more instruction sets in the example mini-loader.
-
+* Adding performance tests.
 ...
 
 # Supplement

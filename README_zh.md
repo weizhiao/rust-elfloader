@@ -20,7 +20,8 @@
 在使用最少feature的情况下，本库只依赖 `elf`, `cfg-if`, 和 `bitflags` 这额外的三个库。
 
 ### ✨ 编译期检查 ✨
-利用Rust的生命周期机制，在编译期检查动态库的依赖库是否被提前销毁，以及符号所属的动态库是否已经被销毁。
+利用Rust的生命周期机制，在编译期检查动态库的依赖库是否被提前销毁，以及符号所属的动态库是否已经被销毁。  
+比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs)中验证这一点）
 
 # 用途
 它实现了加载elf文件的通用步骤，并留下了扩展接口，用户可以使用它实现自己的定制化loader。
@@ -35,6 +36,39 @@
 | version   |  在解析符号时使用符号的版本信息     |
 
 # 示例
+## 加载一个简单的动态库
+
+```rust
+use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use std::{collections::HashMap, ptr::null};
+
+fn main() {
+    fn print(s: &str) {
+        println!("{}", s);
+    }
+
+	// liba.so依赖的符号
+    let mut map = HashMap::new();
+    map.insert("__gmon_start__", null());
+    map.insert("__cxa_finalize", null());
+    map.insert("_ITM_registerTMCloneTable", null());
+    map.insert("_ITM_deregisterTMCloneTable", null());
+    map.insert("print", print as _);
+    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+	// 加载动态库liba.so
+	let loader = Loader::<MmapImpl>::new();
+    let liba = loader
+        .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+        .unwrap();
+	// 重定位liba.so中的符号
+    let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+	// 调用liba.so中的函数a
+    let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
+    f();
+}
+```
+
 ## mini-loader
 本仓库提供了一个使用`elf_loader`实现[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)的例子。miniloader可以加载pie文件，目前只支持`x86_64`。  
 
@@ -54,6 +88,7 @@ $ ./mini-loader /bin/ls
 * 完善注释和文档。  
 * 增加示例（比如使用异步接口加载动态库的示例）。
 * 为示例mini-loader支持更多的指令集。
+* 增加性能测试
 .....
 
 # 补充

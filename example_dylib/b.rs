@@ -8,11 +8,15 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-extern "C" {
+extern "Rust" {
+    fn print(s: &str);
     fn a() -> i32;
 }
 
 #[no_mangle]
 fn b() -> i32 {
-    unsafe { a() + 1 }
+    unsafe {
+        print("call b()");
+        a() + 1
+    }
 }

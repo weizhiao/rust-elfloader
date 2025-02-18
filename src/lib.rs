@@ -40,7 +40,7 @@ use core::{
     ffi::CStr,
     fmt::{Debug, Display},
     marker::PhantomData,
-    ops,
+    ops::{self, Deref},
     sync::atomic::{AtomicBool, Ordering},
 };
 use dynamic::ElfDynamic;
@@ -112,6 +112,22 @@ struct InitParams {
     envp: usize,
 }
 
+impl Deref for ElfDylib {
+    type Target = CoreComponent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl Deref for RelocatedDylib<'_> {
+    type Target = CoreComponent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
 /// An unrelocated dynamic library
 pub struct ElfDylib {
     /// entry
@@ -145,48 +161,6 @@ impl ElfDylib {
         self.entry + self.base()
     }
 
-    /// Gets phdrs of the elf object.
-    #[inline]
-    pub fn phdrs(&self) -> &[Phdr] {
-        &self.core.inner.phdrs
-    }
-
-    /// Gets the C-style name of the elf object.
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        self.core.cname()
-    }
-
-    /// Gets the name of the elf object.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.core.name()
-    }
-
-    /// Gets the address of the dynamic section.
-    #[inline]
-    pub fn dynamic(&self) -> *const Dyn {
-        self.core.dynamic()
-    }
-
-    /// Gets the base address of the elf object.
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.core.base()
-    }
-
-    /// Gets the memory length of the elf object map.
-    #[inline]
-    pub fn map_len(&self) -> usize {
-        self.core.map_len()
-    }
-
-    /// Gets the symbol table.
-    #[inline]
-    pub fn symtab(&self) -> &SymbolTable {
-        &self.core.inner.symbols
-    }
-
     /// Gets the core component reference of the elf object
     #[inline]
     pub fn core_component_ref(&self) -> &CoreComponent {
@@ -197,18 +171,6 @@ impl ElfDylib {
     #[inline]
     pub fn core_component(&self) -> CoreComponent {
         self.core.clone()
-    }
-
-    /// Gets the name of the elf object
-    #[inline]
-    pub fn needed_libs(&self) -> &[&'static str] {
-        self.core.needed_libs()
-    }
-
-    /// Gets user data from the elf object.
-    #[inline]
-    pub fn user_data(&self) -> &UserData {
-        self.core.user_data()
     }
 
     /// Gets mutable user data from the elf object.
@@ -385,6 +347,12 @@ impl CoreComponent {
         &self.inner.needed_libs
     }
 
+    /// Gets the symbol table.
+    #[inline]
+    pub fn symtab(&self) -> &SymbolTable {
+        &self.inner.symbols
+    }
+
     fn from_raw(
         name: CString,
         base: usize,
@@ -455,42 +423,6 @@ impl<'scope> Debug for RelocatedDylib<'scope> {
 }
 
 impl<'scope> RelocatedDylib<'scope> {
-    /// Gets the name of the elf object.
-    #[inline]
-    pub fn needed_libs(&self) -> &[&'static str] {
-        self.core.needed_libs()
-    }
-
-    /// Gets the name of the elf object.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.core.name()
-    }
-
-    /// Gets the C-style name of the elf object.
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        &self.core.cname()
-    }
-
-    /// Gets the base address of the elf object.
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.core.base()
-    }
-
-    /// Gets the user data of the elf object.
-    #[inline]
-    pub fn user_data(&self) -> &UserData {
-        &self.core.inner.user_data
-    }
-
-    /// Gets the program headers of the elf object.
-    #[inline]
-    pub fn phdrs(&self) -> &[Phdr] {
-        &self.core.phdrs()
-    }
-
     /// # Safety
     /// The current elf object has not yet been relocated, so it is dangerous to use this
     /// function to convert `CoreComponent` to `RelocateDylib`. And lifecycle information is lost
@@ -500,30 +432,6 @@ impl<'scope> RelocatedDylib<'scope> {
             core,
             _marker: PhantomData,
         }
-    }
-
-    /// Gets the short name of the elf object.
-    #[inline]
-    pub fn shortname(&self) -> &str {
-        self.core.shortname()
-    }
-
-    /// Gets the symbol table.
-    #[inline]
-    pub fn symtab(&self) -> &SymbolTable {
-        &self.core.inner.symbols
-    }
-
-    /// Gets the number of strong references to the elf object.
-    #[inline]
-    pub fn strong_count(&self) -> usize {
-        self.core.strong_count()
-    }
-
-    /// Gets the memory length of the elf object map.
-    #[inline]
-    pub fn map_len(&self) -> usize {
-        self.core.map_len()
     }
 
     /// Gets the core component reference of the elf object.

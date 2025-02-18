@@ -9,11 +9,14 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 extern "Rust" {
-    fn a() -> i32;
+    fn print(s: &str);
     fn b() -> i32;
 }
 
 #[no_mangle]
 fn c() -> i32 {
-    unsafe { a() + b() }
+    unsafe {
+        print("call c()");
+        b() + 1
+    }
 }

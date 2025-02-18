@@ -47,3 +47,7 @@ version = []
 [[example]]
 name = "relocate"
 required-features = ["fs", "mmap"]
+
+[[example]]
+name = "load"
+required-features = ["fs", "mmap"]

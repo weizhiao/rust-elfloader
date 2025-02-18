@@ -37,6 +37,8 @@ impl<'temp> SymDef<'temp> {
 
 impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
+    /// # Note
+    /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
         self,
         scope: S,
