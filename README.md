@@ -91,6 +91,8 @@ It should be noted that mini-loader must be compiled with the release parameter.
 * Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
 * Add support for more instruction sets in the example mini-loader.
 * Add more performance tests and correctness tests.
+* Further optimize performance using portable simd.
+* Find a dynamic library suitable for testing performance (and make sure it's large enough).  
 ...
 
 # Supplement
