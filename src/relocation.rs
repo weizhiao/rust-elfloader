@@ -5,6 +5,7 @@ use crate::{
 };
 use alloc::{boxed::Box, format, sync::Arc};
 use core::{
+    any::Any,
     ffi::c_int,
     marker::PhantomData,
     num::NonZeroUsize,
@@ -51,7 +52,7 @@ impl ElfDylib {
         'iter: 'lib,
         'find: 'lib,
     {
-        self.relocate(scope, pre_find, |_, _, _| false, None)
+        self.relocate(scope, pre_find, |_, _, _| Err(Box::new(())), None)
     }
 
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
@@ -71,7 +72,7 @@ impl ElfDylib {
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRela, &ElfDylib, S) -> bool,
+        D: Fn(&ElfRela, &ElfDylib, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -103,17 +104,34 @@ impl ElfDylib {
             }
         }
 
-        let reloc_error = |r_type: usize, r_sym: usize| -> Error {
+        #[cold]
+        fn reloc_error(
+            r_type: usize,
+            r_sym: usize,
+            custom_err: Box<dyn Any>,
+            lib: &ElfDylib,
+        ) -> Error {
             if r_sym == 0 {
-                relocate_error(format!("relocation type: {}, no symbol", r_type,))
+                relocate_error(
+                    format!(
+                        "dylib: {}, relocation type: {}, no symbol",
+                        lib.shortname(),
+                        r_type,
+                    ),
+                    custom_err,
+                )
             } else {
-                relocate_error(format!(
-                    "relocation type: {}, symbol name: {}",
-                    r_type,
-                    self.symtab().symbol_idx(r_sym).1.name(),
-                ))
+                relocate_error(
+                    format!(
+                        "dylib: {}, relocation type: {}, symbol name: {}",
+                        lib.shortname(),
+                        r_type,
+                        lib.symtab().symbol_idx(r_sym).1.name(),
+                    ),
+                    custom_err,
+                )
             }
-        };
+        }
 
         /*
             A Represents the addend used to compute the value of the relocatable field.
@@ -170,9 +188,8 @@ impl ElfDylib {
                 }
                 _ => {}
             }
-            if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
-                return Err(reloc_error(r_type as usize, r_sym));
-            }
+            deal_unknown(&rela, &self, scope.clone())
+                .map_err(|err| reloc_error(r_type as _, r_sym, err, &self))?;
         }
 
         // 开启lazy bind后会跳过plt相关的重定位
@@ -231,9 +248,8 @@ impl ElfDylib {
                     self.write_val(rela.r_offset(), ifunc());
                     continue;
                 }
-                if unlikely(!deal_unknown(&rela, &self, scope.clone())) {
-                    return Err(reloc_error(r_type as usize, r_sym));
-                }
+                deal_unknown(&rela, &self, scope.clone())
+                    .map_err(|err| reloc_error(r_type as _, r_sym, err, &self))?;
             }
             if let Some(relro) = self.relro {
                 relro.relro()?;

@@ -522,13 +522,19 @@ pub enum Error {
     /// An error occurred while memory mapping.
     MmapError { msg: String },
     /// An error occurred during dynamic library relocation.
-    RelocateError { msg: String },
+    RelocateError {
+        msg: String,
+        custom_err: Box<dyn Any>,
+    },
     /// An error occurred while parsing dynamic section.
     ParseDynamicError { msg: &'static str },
     /// An error occurred while parsing elf header.
     ParseEhdrError { msg: String },
     /// An error occurred while parsing program header.
-    ParsePhdrError { msg: String },
+    ParsePhdrError {
+        msg: String,
+        custom_err: Box<dyn Any>,
+    },
 }
 
 impl Display for Error {
@@ -537,10 +543,10 @@ impl Display for Error {
             #[cfg(feature = "fs")]
             Error::IOError { msg } => write!(f, "{msg}"),
             Error::MmapError { msg } => write!(f, "{msg}"),
-            Error::RelocateError { msg } => write!(f, "{msg}"),
+            Error::RelocateError { msg, .. } => write!(f, "{msg}"),
             Error::ParseDynamicError { msg } => write!(f, "{msg}"),
             Error::ParseEhdrError { msg } => write!(f, "{msg}"),
-            Error::ParsePhdrError { msg } => write!(f, "{msg}"),
+            Error::ParsePhdrError { msg, .. } => write!(f, "{msg}"),
         }
     }
 }
@@ -558,9 +564,10 @@ fn io_error(msg: impl ToString) -> Error {
 
 #[cold]
 #[inline(never)]
-fn relocate_error(msg: impl ToString) -> Error {
+fn relocate_error(msg: impl ToString, custom_err: Box<dyn Any>) -> Error {
     Error::RelocateError {
         msg: msg.to_string(),
+        custom_err,
     }
 }
 
@@ -580,9 +587,10 @@ fn parse_ehdr_error(msg: impl ToString) -> Error {
 
 #[cold]
 #[inline(never)]
-pub fn parse_phdr_error(msg: impl ToString) -> Error {
+fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any>) -> Error {
     Error::ParsePhdrError {
         msg: msg.to_string(),
+        custom_err,
     }
 }
 

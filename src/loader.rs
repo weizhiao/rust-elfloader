@@ -4,13 +4,14 @@ use crate::{
     dynamic::ElfRawDynamic,
     mmap::{self, MapFlags, Mmap, ProtFlags},
     object::ElfObjectAsync,
-    parse_dynamic_error, parse_ehdr_error,
+    parse_dynamic_error, parse_ehdr_error, parse_phdr_error,
     relocation::ElfRelocation,
     segment::{ELFRelro, ElfSegments, MASK, PAGE_SIZE},
     symbol::SymbolTable,
 };
-use alloc::{borrow::ToOwned, ffi::CString, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, sync::Arc, vec::Vec};
 use core::{
+    any::Any,
     ffi::{CStr, c_void},
     marker::PhantomData,
     mem::MaybeUninit,
@@ -288,9 +289,17 @@ impl TempData {
 
     fn exec_hook<F>(&mut self, hook: &F, phdr: &Phdr) -> Result<()>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
     {
-        hook(&self.name, phdr, &self.segments, &mut self.user_data)?;
+        hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
+            parse_phdr_error(
+                format!(
+                    "failed to execute the hook function on dylib: {}",
+                    self.name.to_str().unwrap()
+                ),
+                err,
+            )
+        })?;
         Ok(())
     }
 
@@ -458,18 +467,15 @@ impl<M: Mmap> Loader<M> {
         self.init_params = Some(InitParams { argc, argv, envp });
     }
 
-	/// Load a dynamic library into memory
-    pub fn easy_load_dylib(
-        &self,
-        object: impl ElfObject,
-    ) -> Result<ElfDylib> {
+    /// Load a dynamic library into memory
+    pub fn easy_load_dylib(&self, object: impl ElfObject) -> Result<ElfDylib> {
         self.load_dylib(object, None, |_, _, _, _| Ok(()))
     }
 
     /// Load a dynamic library into memory
     /// # Note
     /// * `hook` functions are called first when a program header is processed.
-	/// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
     pub fn load_dylib<F>(
         &self,
         mut object: impl ElfObject,
@@ -477,7 +483,7 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfDylib>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
     {
         let mut buf = ElfBuf::new();
         object.read(buf.stack_buf(), 0)?;
@@ -533,7 +539,7 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfDylib>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> Result<()>,
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
     {
         let mut buf = ElfBuf::new();
         object.read(buf.stack_buf(), 0).await?;
