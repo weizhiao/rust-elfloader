@@ -72,15 +72,9 @@ fn main() {
 ```
 
 ## mini-loader
-This repository provides an example of a [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) implemented using `elf_loader`. The miniloader can load PIE files and currently only supports `x86_64` .
+[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) is implemented based on the `elf_loader` library.  mini-loader can load and execute ELF PIE format files.
 
-Load `ls`:
 
-```shell
-$ cargo build --release -p mini-loader --target=x86_64-unknown-none
-$ ./mini-loader /bin/ls
-``` 
-It should be noted that mini-loader must be compiled with the release parameter.
 ## dlopen-rs
 [dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime. And it has implemented hot reloading.
 

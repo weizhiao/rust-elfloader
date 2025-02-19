@@ -1,9 +1,19 @@
 [package]
 name = "mini-loader"
-version = "0.1.0"
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+description = "The mini-loader is capable of loading and executing ELF PIE format files."
+version = "1.0.0"
+keywords = ["elf", "unix", "loader"]
+categories = ["no-std", "os"]
 
 [dependencies]
-syscalls = { version = "0.6.18", default-features = false }
-elf_loader = { path = "../", features = ["fs", "mmap"] }
+syscalls = { workspace = true }
+elf_loader = { path = "../", version = "0.8.0", features = ["fs", "mmap"] }
 linked_list_allocator = { version = "0.10.5" }
+
+[[bin]]
+name = "mini-loader"

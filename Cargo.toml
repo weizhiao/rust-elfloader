@@ -1,18 +1,27 @@
 [package]
 name = "elf_loader"
 version = "0.8.0"
-edition = "2024"
-authors = ["wzhao <1207410841@qq.com>"]
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 readme = "README.md"
-repository = "https://github.com/weizhiao/elf_loader"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
-license = "MIT/Apache-2.0"
 description = "A pure-rust library for loading ELF dynamic libraries from both memory and files."
 exclude = [".gitignore"]
 
+[workspace.package]
+authors = ["wzhao <1207410841@qq.com>"]
+edition = "2024"
+repository = "https://github.com/weizhiao/elf_loader"
+license = "MIT/Apache-2.0"
+
 [workspace]
 members = ["mini-loader"]
+
+[workspace.dependencies]
+syscalls = { version = "0.6.18", default-features = false }
 
 [dependencies.libc]
 version = "0.2.169"
@@ -20,8 +29,7 @@ default-features = false
 optional = true
 
 [dependencies.syscalls]
-version = "0.6.18"
-default-features = false
+workspace = true
 optional = true
 
 [dependencies.elf]
