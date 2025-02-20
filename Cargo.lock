@@ -186,7 +186,7 @@ checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
 
 [[package]]
 name = "elf_loader"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -298,7 +298,7 @@ checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "mini-loader"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "elf_loader",
  "linked_list_allocator",
