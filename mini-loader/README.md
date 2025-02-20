@@ -1,6 +1,6 @@
 # mini-loader
 
-The mini-loader is capable of loading and executing ELF PIE format files.
+The mini-loader is capable of loading and executing ELF files, including `Executable file` and `Position-Independent Executable file`
 
 ## Note
 Currently only support `x86_64` .

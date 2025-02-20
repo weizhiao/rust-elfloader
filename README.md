@@ -1,33 +1,41 @@
 [![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
+[![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 # elf_loader
 
 English | [中文](README_zh.md)  
 
-The `elf_loader` crate provides an async loading interface for loading ELF dynamic libraries from both memory and files.
+`elf_loader` can load various forms of ELF files from memory or files, including `Executable file`, `Shared object file`, and `Position-Independent Executable file`.
 
 [Documentation](https://docs.rs/elf_loader/)
+
+# Usage
+`elf_loader` can load various ELF files and provides interfaces for extended functionality. It can be used in the following areas:
+* Use it as an ELF file loader in operating system kernels
+* Use it to implement a Rust version of the dynamic linker
+* Use it to load ELF dynamic libraries on embedded devices
+
 # Capabilities
 ### ✨ Works in `no_std` environments ✨
-This crate provides an elf loading interface which does not use any std
-features, so it can be used in `no_std` environments such as kernels and embedded device.
+This library does not depend on Rust `std`, nor does it depend on `libc` (although you can enable it to use libc via a feature), so it can be used in `no_std` environments such as kernels and embedded devices.
 
 ### ✨ Fast speed ✨
-This crate makes full use of some features of rust and can generate code with excellent performance. The `elf_loader` is designed to achieve faster performance than `libloading`, specifically aiming to surpass the speed of the dynamic linker/loader (ld.so).
+This library draws on the strengths of `musl` and `glibc`'s `ld.so` implementation and fully utilizes some features of Rust (such as static dispatch), allowing it to generate `high-performance` code. [dlopen-rs](https://crates.io/crates/dlopen-rs) based on `elf_loader` has better performance than `libloading`.
 
 ### ✨ Very easy to port and has good extensibility ✨
-If you want to port this crate, you only need to implement the `Mmap` trait for your platform. And you can use hook functions to implement additional functionality based on this crate.
+If you want to port `elf_loader`, you only need to implement the `Mmap` and `ElfObject` traits for your platform. When implementing the `Mmap` trait, you can refer to the default implementation provided by `elf_loader`: [mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap). In addition, you can use the `hook` functions provided by this library to extend the functionality of `elf_loader` to implement any other features you want. When using the `hook` functions, you can refer to: [hook](https://github.com/weizhiao/dlopen-rs/blob/main/src/loader/mod.rs) in `dlopen-rs`.
 
 ### ✨ Tiny library with few dependencies ✨
 With minimal features, this crate only depends on the `elf`, `cfg-if`, and `bitflags` crates.
 
-### ✨ Compile-time checking ✨
-Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely, and whether the dynamic library to which a symbol belongs has been deallocated.   
-For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs).)
+### ✨ Provides asynchronous interfaces ✨
+`elf_loader` provides asynchronous interfaces for loading ELF files, which can achieve higher performance in scenarios where ELF files are loaded concurrently.   
+However, you need to implement the `Mmap` and `ElfObjectAsync` traits according to your application scenario. For example, instead of using `mmap` to directly map ELF files, you can use a combination of `mmap` and file reading (`mmap` creates memory space, and then the content of the ELF file is read into the space created by `mmap`) to load ELF files, thus fully utilizing the advantages brought by the asynchronous interface.
 
-# Usage
-It implements the general steps for loading ELF files and leaves extension interfaces, allowing users to implement their own customized loaders.
+### ✨ Compile-time checking ✨
+Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely.   
+For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs).)
 
 # Feature
 
@@ -72,22 +80,18 @@ fn main() {
 ```
 
 ## mini-loader
-[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) is implemented based on the `elf_loader` library.  mini-loader can load and execute ELF PIE format files.
-
-
-## dlopen-rs
-[dlopen-rs](https://crates.io/crates/dlopen-rs) is also implemented based on the `elf_loader` library. It implements the functionality of dlopen, allowing dynamic libraries to be opened at runtime. And it has implemented hot reloading.
+[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) is implemented based on the `elf_loader` library. mini-loader can load and execute elf files, and currently only supports `x86_64`.
 
 # TODO
-* Support more CPU instruction sets (currently only supports AArch64, Riscv64, X86-64).
-* Improve support for DT_FLAGS flag bits.
+* Support more CPU instruction sets (currently only supports `AArch64`, `Riscv64`, `X86-64`).
+* Improve support for `DT_FLAGS` flag bits.
 * Improve comments and documentation.
-* Add examples (e.g., an example of loading dynamic libraries using an asynchronous interface).
 * Add support for more instruction sets in the example mini-loader.
 * Add more performance tests and correctness tests.
-* Further optimize performance using portable simd.
-* Find a dynamic library suitable for testing performance (and make sure it's large enough).  
+* Further optimize performance using portable simd.  
 ...
 
 # Supplement
-If you encounter any issues during use, feel free to raise them on GitHub. We warmly welcome everyone to contribute code to help improve the functionality of `elf_loader`. 😊
+You can report any issues you encounter while using this library on GitHub, and we warmly welcome everyone to submit code to improve the functionality of `elf_loader`. 😊
+
+

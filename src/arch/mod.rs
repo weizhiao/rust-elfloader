@@ -1,4 +1,6 @@
 //! Contains content related to the CPU instruction set
+use core::ops::Deref;
+
 use elf::{
     abi::{
         SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
@@ -53,7 +55,7 @@ cfg_if::cfg_if! {
     }
 }
 
-#[repr(C)]
+#[repr(transparent)]
 pub struct ElfRela {
     rela: Rela,
 }
@@ -80,7 +82,7 @@ impl ElfRela {
     }
 }
 
-#[repr(C)]
+#[repr(transparent)]
 pub struct ElfSymbol {
     sym: Sym,
 }
@@ -118,7 +120,7 @@ impl ElfSymbol {
         self.sym.st_size as usize
     }
 
-	#[inline]
+    #[inline]
     pub fn st_other(&self) -> u8 {
         self.sym.st_other
     }
@@ -141,5 +143,36 @@ impl ElfSymbol {
     #[inline]
     pub fn is_local(&self) -> bool {
         self.st_bind() == STB_LOCAL
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct ElfPhdr {
+    phdr: Phdr,
+}
+
+impl Deref for ElfPhdr {
+    type Target = Phdr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.phdr
+    }
+}
+
+impl Clone for ElfPhdr {
+    fn clone(&self) -> Self {
+        Self {
+            phdr: Phdr {
+                p_type: self.phdr.p_type,
+                p_flags: self.phdr.p_flags,
+                p_align: self.phdr.p_align,
+                p_offset: self.phdr.p_offset,
+                p_vaddr: self.phdr.p_vaddr,
+                p_paddr: self.phdr.p_paddr,
+                p_filesz: self.phdr.p_filesz,
+                p_memsz: self.phdr.p_memsz,
+            },
+        }
     }
 }

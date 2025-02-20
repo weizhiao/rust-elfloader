@@ -1,10 +1,16 @@
 //! Parsing `.dynamic` section
 use crate::{
+    Result,
     arch::{Dyn, ElfRela},
-    parse_dynamic_error, Result,
+    parse_dynamic_error,
 };
 use alloc::vec::Vec;
-use core::{num::NonZeroUsize, slice::from_raw_parts, usize};
+use core::{
+    num::NonZeroUsize,
+    ptr::{NonNull, null_mut},
+    slice::from_raw_parts,
+    usize,
+};
 use elf::abi::*;
 
 /// Information in the dynamic section
@@ -248,7 +254,11 @@ impl ElfRawDynamic {
             symtab: self.symtab_off + base,
             strtab: self.strtab_off + base,
             bind_now: self.flags & DF_BIND_NOW as usize != 0,
-            got: self.got_off.map(|off| (base + off.get()) as *mut usize),
+            got: NonNull::new(
+                self.got_off
+                    .map(|off| (base + off.get()) as *mut usize)
+                    .unwrap_or(null_mut()),
+            ),
             init_fn,
             init_array_fn,
             fini_fn,
@@ -273,7 +283,7 @@ pub struct ElfDynamic {
     pub symtab: usize,
     pub strtab: usize,
     pub bind_now: bool,
-    pub got: Option<*mut usize>,
+    pub got: Option<NonNull<usize>>,
     pub init_fn: Option<extern "C" fn()>,
     pub init_array_fn: Option<&'static [extern "C" fn()]>,
     pub fini_fn: Option<extern "C" fn()>,

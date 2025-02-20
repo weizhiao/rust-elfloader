@@ -8,7 +8,7 @@ license.workspace = true
 readme = "README.md"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
-description = "A pure-rust library for loading ELF dynamic libraries from both memory and files."
+description = "A pure-rust library for loading ELF files from both memory and files."
 exclude = [".gitignore"]
 
 [workspace.package]
@@ -50,7 +50,7 @@ harness = false
 required-features = ["fs", "mmap"]
 
 [features]
-default = []
+default = ["fs","mmap"]
 
 # Enable support for filesystems
 fs = ["dep:syscalls"]

@@ -40,8 +40,8 @@ fn compile() {
 
 fn main() {
     compile();
-    let loader = Loader::<MmapImpl>::new();
-    let load = |name: &str| {
+    let mut loader = Loader::<MmapImpl>::new();
+    let mut load = |name: &str| {
         loader
             .easy_load_dylib(ElfFile::from_path(lib_path().join(name).to_str().unwrap()).unwrap())
             .unwrap()

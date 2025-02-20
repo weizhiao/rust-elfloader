@@ -1,30 +1,39 @@
 [![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
+[![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 # elf_loader
-一个提供异步加载接口，能够从内存、文件加载elf动态库的Rust库。  
+`elf_loader`能够从内存、文件加载各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
 [文档](https://docs.rs/elf_loader/)
 
+# 用途
+`elf_loader`能够加载各种elf文件，并留下了扩展功能的接口。它能够被使用在以下地方：
+* 在操作系统内核中使用它作为elf文件的加载器
+* 使用它实现Rust版本的动态链接器
+* 在嵌入式设备上使用它加载elf动态库  
+......
+
 # 特性
 ### ✨ 可以在 `no_std` 环境中工作 ✨
-此包提供了一个不使用任何 std 特性的 elf 加载接口，因此可以在内核和嵌入式设备等`no_std`环境中使用。
+本库不依赖Rust `std`，也不依赖`libc`（虽然你可以通过feature让它使用libc），因此可以在内核和嵌入式设备等`no_std`环境中使用。
 
 ### ✨ 速度快 ✨
-该crate充分利用了rust的一些特性，可以生成性能优异的代码。elf_loader的速度要超过libloading，更准确地说应该是比ld.so更快。
+本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。基于`elf_loader`的[dlopen-rs](https://crates.io/crates/dlopen-rs)性能比`libloading`更好。
 
 ### ✨ 非常容易移植，具有良好的可扩展性 ✨
-如果您想要移植此 crate，则只需为您的平台实现 `Mmap` 特征即可，并且您可以使用hook函数基于此 crate 实现其他功能。
+如果你想要移植`elf_loader`，你只需为你的平台实现 `Mmap`和`ElfObject` trait。在实现`Mmap` trait时可以参考`elf_loader`提供的默认实现：[mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap)。  
+此外你可以使用本库提供的`hook`函数来拓展`elf_loader`的功能实现其他任何你想要的功能，在使用`hook`函数时可以参考`dlopen-rs`里的：[hook](https://github.com/weizhiao/dlopen-rs/blob/main/src/loader/mod.rs)。
 
 ### ✨ 轻量化 ✨
 在使用最少feature的情况下，本库只依赖 `elf`, `cfg-if`, 和 `bitflags` 这额外的三个库。
 
-### ✨ 编译期检查 ✨
-利用Rust的生命周期机制，在编译期检查动态库的依赖库是否被提前销毁，以及符号所属的动态库是否已经被销毁。  
-比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs)中验证这一点）
+### ✨ 提供异步接口 ✨
+`elf_loader`提供了加载elf文件的异步接口，这使得它在某些并发加载elf文件的场景下有更高的性能上限。不过你需要根据自己的应用场景实现 `Mmap`和`ElfObjectAsync` trait。比如不使用mmap来直接映射elf文件，转而使用mmap+文件读取的方式（mmap创建内存空间再通过文件读取将elf文件的内容读取到mmap创建的空间中）来加载elf文件，这样就能充分利用异步接口带来的优势。
 
-# 用途
-它实现了加载elf文件的通用步骤，并留下了扩展接口，用户可以使用它实现自己的定制化loader。
+### ✨ 编译期检查 ✨
+利用Rust的生命周期机制，在编译期检查elf文件的依赖库是否被提前销毁，大大提高了安全性。  
+比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs)中验证这一点）
 
 # 特性
 
@@ -70,21 +79,16 @@ fn main() {
 ```
 
 ## mini-loader
-[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)是基于`elf_loader`库实现的。mini-loader可以加载pie文件，目前只支持`x86_64`。  
-
-## dlopen-rs
-[dlopen-rs](https://crates.io/crates/dlopen-rs)也是基于`elf_loader`库实现的。它实现了dlopen的功能，可以在运行时打开动态库，并且实现了热重载。
+[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)是基于`elf_loader`库实现的。mini-loader可以加载并执行elf文件，目前只支持`x86_64`。  
 
 # 未完成
 * 支持更多的CPU指令集（目前只支持AArch64，Riscv64，X86-64）。
 * 完善对DT_FLAGS标志位的支持。
 * 完善注释和文档。  
-* 增加示例（比如使用异步接口加载动态库的示例）。
 * 为示例mini-loader支持更多的指令集。
-* 增加更多的性能测试和正确性测试.
+* 增加测试.
 * 使用portable simd进一步优化性能。
-* 找到一个适合测试性能的动态库（要足够大）  
 ......
 
 # 补充
-如果在使用过程中遇到问题可以在 GitHub 上提出问题，十分欢迎大家为本库提交代码一起完善`elf_loader`的功能。😊
+你可以在 GitHub 上提出你在使用过程中遇到的任何问题，此外十分欢迎大家为本库提交代码一起完善`elf_loader`的功能。😊

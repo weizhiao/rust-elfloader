@@ -15,7 +15,7 @@ fn main() {
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     // Load dynamic library liba.so
-    let loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::<MmapImpl>::new();
     let liba = loader
         .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
         .unwrap();

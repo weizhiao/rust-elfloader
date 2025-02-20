@@ -106,15 +106,4 @@ impl ElfSegments {
     pub fn base(&self) -> usize {
         unsafe { self.memory.as_ptr().cast::<u8>().sub(self.offset) as usize }
     }
-
-    /// start = memory_addr - offset
-    #[inline]
-    pub(crate) fn as_mut_slice(&self) -> &'static mut [u8] {
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                self.memory.as_ptr().cast::<u8>().sub(self.offset),
-                self.len,
-            )
-        }
-    }
 }

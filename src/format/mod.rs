@@ -1,0 +1,569 @@
+pub(crate) mod dylib;
+pub(crate) mod exec;
+
+use crate::{
+    ELFRelro, ElfRelocation, Loader, Result,
+    arch::{Dyn, ElfPhdr, ElfRela, Phdr},
+    dynamic::ElfDynamic,
+    loader::Builder,
+    mmap::Mmap,
+    object::{ElfObject, ElfObjectAsync},
+    parse_dynamic_error,
+    segment::ElfSegments,
+    symbol::SymbolTable,
+};
+use alloc::{
+    boxed::Box,
+    ffi::CString,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
+use core::{
+    any::Any,
+    ffi::{CStr, c_int},
+    fmt::Debug,
+    marker::PhantomData,
+    ops::Deref,
+    ptr::{NonNull, null},
+    sync::atomic::{AtomicBool, Ordering},
+};
+use dylib::ElfDylib;
+use exec::ElfExec;
+
+struct DataItem {
+    key: u8,
+    value: Option<Box<dyn Any>>,
+}
+
+/// User-defined data associated with the loaded ELF file
+pub struct UserData {
+    data: Vec<DataItem>,
+}
+
+impl UserData {
+    #[inline]
+    pub const fn empty() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    #[inline]
+    pub fn insert(&mut self, key: u8, value: Box<dyn Any>) -> Option<Box<dyn Any>> {
+        for item in self.data.iter_mut() {
+            if item.key == key {
+                let old = core::mem::take(&mut item.value);
+                item.value = Some(value);
+                return old;
+            }
+        }
+        self.data.push(DataItem {
+            key,
+            value: Some(value),
+        });
+        None
+    }
+
+    #[inline]
+    pub fn get(&self, key: u8) -> Option<&Box<dyn Any>> {
+        self.data.iter().find_map(|item| {
+            if item.key == key {
+                return item.value.as_ref();
+            }
+            None
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InitParams {
+    pub argc: usize,
+    pub argv: usize,
+    pub envp: usize,
+}
+
+pub(crate) struct ElfInit {
+    init_param: Option<InitParams>,
+    /// .init
+    init_fn: Option<extern "C" fn()>,
+    /// .init_array
+    init_array_fn: Option<&'static [extern "C" fn()]>,
+}
+
+impl ElfInit {
+    #[inline]
+    pub(crate) fn call_init(self) {
+        if let Some(init_params) = self.init_param {
+            self.init_fn
+                .iter()
+                .chain(self.init_array_fn.unwrap_or(&[]).iter())
+                .for_each(|init| unsafe {
+                    core::mem::transmute::<_, extern "C" fn(c_int, usize, usize)>(*init)(
+                        init_params.argc as _,
+                        init_params.argv,
+                        init_params.envp,
+                    );
+                });
+        } else {
+            self.init_fn
+                .iter()
+                .chain(self.init_array_fn.unwrap_or(&[]).iter())
+                .for_each(|init| init());
+        }
+    }
+}
+
+impl Deref for Relocated<'_> {
+    type Target = CoreComponent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+pub enum Elf {
+    Dylib(ElfDylib),
+    Exec(ElfExec),
+}
+
+impl Deref for Elf {
+    type Target = ElfCommonPart;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Elf::Dylib(elf_dylib) => &elf_dylib,
+            Elf::Exec(elf_exec) => &elf_exec,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Relocated<'scope> {
+    pub core: CoreComponent,
+    pub _marker: PhantomData<&'scope ()>,
+}
+
+pub(crate) struct CoreComponentInner {
+    /// is initialized
+    is_init: AtomicBool,
+    /// file name
+    name: CString,
+    /// elf symbols
+    pub(crate) symbols: Option<SymbolTable>,
+    /// dynamic
+    dynamic: Option<NonNull<Dyn>>,
+    /// rela.plt
+    pub(crate) pltrel: Option<NonNull<ElfRela>>,
+    /// phdrs
+    phdrs: &'static [ElfPhdr],
+    /// .fini
+    fini_fn: Option<extern "C" fn()>,
+    /// .fini_array
+    fini_array_fn: Option<&'static [extern "C" fn()]>,
+    /// needed libs' name
+    needed_libs: Box<[&'static str]>,
+    /// user data
+    user_data: UserData,
+    /// lazy binding scope
+    pub(crate) lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
+    /// semgents
+    pub(crate) segments: ElfSegments,
+}
+
+impl Drop for CoreComponentInner {
+    fn drop(&mut self) {
+        if self.is_init.load(Ordering::Relaxed) {
+            self.fini_fn
+                .iter()
+                .chain(self.fini_array_fn.unwrap_or(&[]).iter())
+                .for_each(|fini| fini());
+        }
+    }
+}
+
+/// `CoreComponentRef` is a version of `CoreComponent` that holds a non-owning reference to the managed allocation.
+pub struct CoreComponentRef {
+    inner: Weak<CoreComponentInner>,
+}
+
+impl CoreComponentRef {
+    /// Attempts to upgrade the Weak pointer to an Arc
+    pub fn upgrade(&self) -> Option<CoreComponent> {
+        self.inner.upgrade().map(|inner| CoreComponent { inner })
+    }
+}
+
+/// The core part of an elf object
+#[derive(Clone)]
+pub struct CoreComponent {
+    pub(crate) inner: Arc<CoreComponentInner>,
+}
+
+unsafe impl Sync for CoreComponent {}
+unsafe impl Send for CoreComponent {}
+
+impl CoreComponent {
+    #[inline]
+    pub(crate) fn set_lazy_scope(
+        &self,
+        lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
+    ) {
+        // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+        let ptr = unsafe { &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner) };
+        ptr.lazy_scope = lazy_scope;
+    }
+
+    #[inline]
+    pub(crate) fn set_init(&self) {
+        self.inner.is_init.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
+    /// Creates a new Weak pointer to this allocation.
+    pub fn downgrade(&self) -> CoreComponentRef {
+        CoreComponentRef {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
+    /// Gets user data from the elf object.
+    #[inline]
+    pub fn user_data(&self) -> &UserData {
+        &self.inner.user_data
+    }
+
+    /// Gets the number of strong references to the elf object.
+    #[inline]
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.inner)
+    }
+
+    /// Gets the number of weak references to the elf object.
+    #[inline]
+    pub fn weak_count(&self) -> usize {
+        Arc::weak_count(&self.inner)
+    }
+
+    /// Gets the name of the elf object.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.inner.name.to_str().unwrap()
+    }
+
+    /// Gets the C-style name of the elf object.
+    #[inline]
+    pub fn cname(&self) -> &CStr {
+        &self.inner.name
+    }
+
+    /// Gets the short name of the elf object.
+    #[inline]
+    pub fn shortname(&self) -> &str {
+        self.name().split('/').last().unwrap()
+    }
+
+    /// Gets the base address of the elf object.
+    #[inline]
+    pub fn base(&self) -> usize {
+        self.inner.segments.base()
+    }
+
+    /// Gets the memory length of the elf object map.
+    #[inline]
+    pub fn map_len(&self) -> usize {
+        self.inner.segments.len()
+    }
+
+    /// Gets the program headers of the elf object.
+    #[inline]
+    pub fn phdrs(&self) -> &[ElfPhdr] {
+        &self.inner.phdrs
+    }
+
+    /// Gets the address of the dynamic section.
+    #[inline]
+    pub fn dynamic(&self) -> Option<NonNull<Dyn>> {
+        self.inner.dynamic
+    }
+
+    /// Gets the needed libs' name of the elf object.
+    #[inline]
+    pub fn needed_libs(&self) -> &[&str] {
+        &self.inner.needed_libs
+    }
+
+    /// Gets the symbol table.
+    #[inline]
+    pub fn symtab(&self) -> Option<&SymbolTable> {
+        self.inner.symbols.as_ref()
+    }
+
+    fn from_raw(
+        name: CString,
+        base: usize,
+        dynamic: ElfDynamic,
+        phdrs: &'static [ElfPhdr],
+        mut segments: ElfSegments,
+        user_data: UserData,
+    ) -> Self {
+        segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
+        Self {
+            inner: Arc::new(CoreComponentInner {
+                name,
+                is_init: AtomicBool::new(true),
+                symbols: Some(SymbolTable::new(&dynamic)),
+                pltrel: None,
+                dynamic: NonNull::new(dynamic.dyn_ptr as _),
+                phdrs,
+                segments,
+                fini_fn: None,
+                fini_array_fn: None,
+                needed_libs: Box::new([]),
+                user_data,
+                lazy_scope: None,
+            }),
+        }
+    }
+}
+
+impl Debug for CoreComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Dylib")
+            .field("name", &self.inner.name)
+            .finish()
+    }
+}
+
+impl Deref for ElfCommonPart {
+    type Target = CoreComponent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+pub struct ElfCommonPart {
+    /// entry
+    entry: usize,
+    /// .got.plt
+    pub(crate) got: Option<NonNull<usize>>,
+    /// rela.dyn and rela.plt
+    pub(crate) relocation: ElfRelocation,
+    /// GNU_RELRO segment
+    pub(crate) relro: Option<ELFRelro>,
+    /// init
+    pub(crate) init: ElfInit,
+    /// lazy binding
+    lazy: bool,
+    /// DT_RPATH
+    rpath: Option<&'static str>,
+    /// DT_RUNPATH
+    runpath: Option<&'static str>,
+    /// PT_INTERP
+    interp: Option<&'static str>,
+    /// core component
+    pub(crate) core: CoreComponent,
+}
+
+impl ElfCommonPart {
+    /// Gets the entry point of the elf object.
+    #[inline]
+    pub fn entry(&self) -> usize {
+        self.entry + self.base()
+    }
+
+    /// Gets the core component reference of the elf object
+    #[inline]
+    pub fn core_component_ref(&self) -> &CoreComponent {
+        &self.core
+    }
+
+    /// Gets the core component of the elf object
+    #[inline]
+    pub fn core_component(&self) -> CoreComponent {
+        self.core.clone()
+    }
+
+    /// Whether lazy binding is enabled for the current elf object.
+    #[inline]
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+
+    /// Gets the DT_RPATH value.
+    #[inline]
+    pub fn rpath(&self) -> Option<&str> {
+        self.rpath
+    }
+
+    /// Gets the DT_RUNPATH value.
+    #[inline]
+    pub fn runpath(&self) -> Option<&str> {
+        self.runpath
+    }
+
+    /// Gets the PT_INTERP value.
+    #[inline]
+    pub fn interp(&self) -> Option<&str> {
+        self.interp
+    }
+}
+
+impl Builder {
+    pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ElfCommonPart> {
+        let common = if let Some(dynamic) = self.dynamic.map(|d| d.finish(self.segments.base())) {
+            let (phdr_start, phdr_end) = self.ehdr.phdr_range();
+            // 获取映射到内存中的Phdr
+            let phdrs = self.phdr_mmap.unwrap_or_else(|| {
+                for phdr in phdrs {
+                    let cur_range =
+                        phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
+                    if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                        return unsafe {
+                            core::slice::from_raw_parts(
+                                (self.segments.base() + phdr_start - cur_range.start)
+                                    as *const ElfPhdr,
+                                self.ehdr.e_phnum(),
+                            )
+                        };
+                    }
+                }
+                unreachable!()
+            });
+
+            let relocation = ElfRelocation::new(dynamic.pltrel, dynamic.dynrel, dynamic.rela_count);
+            let symbols = SymbolTable::new(&dynamic);
+            let needed_libs: Vec<&'static str> = dynamic
+                .needed_libs
+                .iter()
+                .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
+                .collect();
+            ElfCommonPart {
+                entry: self.ehdr.e_entry as usize,
+                relro: self.relro,
+                relocation,
+                init: ElfInit {
+                    init_param: self.init_params,
+                    init_fn: dynamic.init_fn,
+                    init_array_fn: dynamic.init_array_fn,
+                },
+                interp: self.interp,
+                lazy: self.lazy_bind.unwrap_or(!dynamic.bind_now),
+                got: dynamic.got,
+                rpath: dynamic
+                    .rpath_off
+                    .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
+                runpath: dynamic
+                    .runpath_off
+                    .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
+                core: CoreComponent {
+                    inner: Arc::new(CoreComponentInner {
+                        is_init: AtomicBool::new(false),
+                        name: self.name,
+                        symbols: Some(symbols),
+                        dynamic: NonNull::new(dynamic.dyn_ptr as _),
+                        pltrel: NonNull::new(dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _),
+                        phdrs,
+                        fini_fn: dynamic.fini_fn,
+                        fini_array_fn: dynamic.fini_array_fn,
+                        segments: self.segments,
+                        needed_libs: needed_libs.into_boxed_slice(),
+                        user_data: self.user_data,
+                        lazy_scope: None,
+                    }),
+                },
+            }
+        } else {
+            if is_dylib {
+                return Err(parse_dynamic_error("dylib does not have dynamic"));
+            }
+            let relocation = ElfRelocation::new(None, None, None);
+            ElfCommonPart {
+                entry: self.ehdr.e_entry as usize,
+                relro: self.relro,
+                relocation,
+                init: ElfInit {
+                    init_param: self.init_params,
+                    init_fn: None,
+                    init_array_fn: None,
+                },
+                interp: self.interp,
+                lazy: self.lazy_bind.unwrap_or(false),
+                got: None,
+                rpath: None,
+                runpath: None,
+                core: CoreComponent {
+                    inner: Arc::new(CoreComponentInner {
+                        is_init: AtomicBool::new(false),
+                        name: self.name,
+                        symbols: None,
+                        dynamic: None,
+                        pltrel: None,
+                        phdrs: &[],
+                        fini_fn: None,
+                        fini_array_fn: None,
+                        segments: self.segments,
+                        needed_libs: Box::new([]),
+                        user_data: self.user_data,
+                        lazy_scope: None,
+                    }),
+                },
+            }
+        };
+        Ok(common)
+    }
+
+    pub(crate) fn create_elf(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<Elf> {
+        let elf = if is_dylib {
+            Elf::Dylib(self.create_dylib(phdrs)?)
+        } else {
+            Elf::Exec(self.create_exec(phdrs)?)
+        };
+        Ok(elf)
+    }
+}
+
+impl<M: Mmap> Loader<M> {
+    /// Load a elf file into memory
+    pub fn easy_load(&mut self, object: impl ElfObject) -> Result<Elf> {
+        self.load(object, None, |_, _, _, _| Ok(()))
+    }
+
+    /// Load a elf file into memory
+    /// # Note
+    /// * `hook` functions are called first when a program header is processed.
+    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    pub fn load<F>(
+        &mut self,
+        mut object: impl ElfObject,
+        lazy_bind: Option<bool>,
+        hook: F,
+    ) -> Result<Elf>
+    where
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+    {
+        let ehdr = self.read_ehdr(&mut object)?;
+        let is_dylib = ehdr.is_dylib();
+        self.load_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
+            builder.create_elf(phdrs, is_dylib)
+        })
+    }
+
+    /// Load a elf file into memory
+    /// # Note
+    /// `hook` functions are called first when a program header is processed.
+    pub async fn load_async<F>(
+        &mut self,
+        mut object: impl ElfObjectAsync,
+        lazy_bind: Option<bool>,
+        hook: F,
+    ) -> Result<Elf>
+    where
+        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+    {
+        let ehdr = self.read_ehdr(&mut object)?;
+        let is_dylib = ehdr.is_dylib();
+        self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
+            builder.create_elf(phdrs, is_dylib)
+        })
+        .await
+    }
+}

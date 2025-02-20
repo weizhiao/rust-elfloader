@@ -14,7 +14,7 @@ fn load_benchmark(c: &mut Criterion) {
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     c.bench_function("elf_loader:new", |b| {
         b.iter(|| {
-            let loader = Loader::<MmapImpl>::new();
+            let mut loader = Loader::<MmapImpl>::new();
             let liba = loader
                 .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
                 .unwrap();
@@ -36,7 +36,7 @@ fn get_symbol_benchmark(c: &mut Criterion) {
     map.insert("_ITM_registerTMCloneTable", null());
     map.insert("_ITM_deregisterTMCloneTable", null());
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    let loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::<MmapImpl>::new();
     let liba = loader
         .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
         .unwrap();
