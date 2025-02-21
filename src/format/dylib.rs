@@ -30,7 +30,7 @@ impl Deref for ElfDylib {
 
 impl Debug for ElfDylib {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ElfLibrary")
+        f.debug_struct("ElfDylib")
             .field("name", &self.common.inner.name)
             .field("needed_libs", &self.common.inner.needed_libs)
             .finish()
@@ -148,7 +148,7 @@ impl<M: Mmap> Loader<M> {
         F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
     {
         let ehdr = self.read_ehdr(&mut object)?;
-		if !ehdr.is_dylib() {
+        if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
         self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
@@ -221,7 +221,7 @@ impl RelocatedDylib<'_> {
     /// Gets the symbol table.
     #[inline]
     pub fn symtab(&self) -> &SymbolTable {
-        self.core.symtab().unwrap()
+        unsafe { self.core.symtab().unwrap_unchecked() }
     }
 
     /// Gets a pointer to a function or static variable by symbol name.

@@ -91,7 +91,7 @@ where
         if r_sym == 0 {
             relocate_error(
                 format!(
-                    "dylib: {}, relocation type: {}, no symbol",
+                    "file: {}, relocation type: {}, no symbol",
                     lib.shortname(),
                     r_type,
                 ),
@@ -100,7 +100,7 @@ where
         } else {
             relocate_error(
                 format!(
-                    "dylib: {}, relocation type: {}, symbol name: {}",
+                    "file: {}, relocation type: {}, symbol name: {}",
                     lib.shortname(),
                     r_type,
                     lib.symtab().unwrap().symbol_idx(r_sym).1.name(),

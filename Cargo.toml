@@ -64,9 +64,9 @@ mmap = ["dep:syscalls"]
 version = []
 
 [[example]]
-name = "relocate"
+name = "relocate_dylib"
 required-features = ["fs", "mmap"]
 
 [[example]]
-name = "load"
+name = "load_dylib"
 required-features = ["fs", "mmap"]

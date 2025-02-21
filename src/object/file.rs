@@ -126,9 +126,9 @@ mod imp {
             const SEEK_START: u32 = 0;
             unsafe {
                 syscalls::syscall!(Sysno::lseek, self.fd, offset, SEEK_START)
-                    .map_err(|_| io_error("lseek failed"))?;
+                    .map_err(|err| io_error(err))?;
                 let size = syscalls::syscall!(Sysno::read, self.fd, buf.as_mut_ptr(), buf.len())
-                    .map_err(|_| io_error("read failed"))?;
+                    .map_err(|err| io_error(err))?;
                 assert!(size == buf.len());
             }
             Ok(())

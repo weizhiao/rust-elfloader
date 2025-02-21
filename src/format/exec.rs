@@ -27,7 +27,7 @@ impl Deref for ElfExec {
 
 impl Debug for ElfExec {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ElfLibrary")
+        f.debug_struct("ElfExec")
             .field("name", &self.core.inner.name)
             .field("needed_libs", &self.core.inner.needed_libs)
             .finish()
@@ -76,6 +76,7 @@ impl ElfExec {
     {
         if self.relocation.is_empty() {
             return Ok(RelocatedExec {
+                entry: self.entry,
                 core: Relocated {
                     core: self.common.core,
                     _marker: PhantomData,
@@ -101,6 +102,7 @@ impl ElfExec {
         let wrapper =
             |rela: &ElfRela, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
         Ok(RelocatedExec {
+            entry: self.entry,
             core: relocate_impl(self.common, helper, pre_find, wrapper, local_lazy_scope)?,
         })
     }
@@ -167,7 +169,15 @@ impl<M: Mmap> Loader<M> {
 /// A executable file that has been relocated
 #[derive(Clone)]
 pub struct RelocatedExec<'scope> {
+    entry: usize,
     core: Relocated<'scope>,
+}
+
+impl RelocatedExec<'_> {
+    #[inline]
+    pub fn entry(&self) -> usize {
+        self.entry
+    }
 }
 
 impl Debug for RelocatedExec<'_> {

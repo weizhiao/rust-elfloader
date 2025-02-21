@@ -422,7 +422,7 @@ impl<M: Mmap> Loader<M> {
         self.init_params = Some(InitParams { argc, argv, envp });
     }
 
-    pub fn read_ehdr(&mut self, object: &mut dyn ElfObject) -> Result<ElfHeader> {
+    pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
         object.read(self.buf.stack_buf(), 0)?;
         let id = self.id + 1;
         self.id += 1;
@@ -431,7 +431,7 @@ impl<M: Mmap> Loader<M> {
 
     pub fn read_phdr(
         &mut self,
-        object: &mut dyn ElfObject,
+        object: &mut impl ElfObject,
         ehdr: &ElfHeader,
     ) -> Result<&[ElfPhdr]> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();

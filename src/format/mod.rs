@@ -27,8 +27,8 @@ use core::{
     ptr::{NonNull, null},
     sync::atomic::{AtomicBool, Ordering},
 };
-use dylib::ElfDylib;
-use exec::ElfExec;
+use dylib::{ElfDylib, RelocatedDylib};
+use exec::{ElfExec, RelocatedExec};
 
 struct DataItem {
     key: u8,
@@ -119,9 +119,36 @@ impl Deref for Relocated<'_> {
     }
 }
 
+/// An unrelocated elf file
+#[derive(Debug)]
 pub enum Elf {
     Dylib(ElfDylib),
     Exec(ElfExec),
+}
+
+/// A elf file that has been relocated
+#[derive(Debug, Clone)]
+pub enum RelocatedElf<'scope> {
+    Dylib(RelocatedDylib<'scope>),
+    Exec(RelocatedExec<'scope>),
+}
+
+impl<'scope> RelocatedElf<'scope> {
+    #[inline]
+    pub fn into_dylib(self) -> Option<RelocatedDylib<'scope>> {
+        match self {
+            RelocatedElf::Dylib(dylib) => Some(dylib),
+            RelocatedElf::Exec(_) => None,
+        }
+    }
+
+    #[inline]
+    pub fn into_exec(self) -> Option<RelocatedExec<'scope>> {
+        match self {
+            RelocatedElf::Dylib(_) => None,
+            RelocatedElf::Exec(exec) => Some(exec),
+        }
+    }
 }
 
 impl Deref for Elf {
@@ -135,10 +162,68 @@ impl Deref for Elf {
     }
 }
 
+impl Elf {
+    /// Relocate the elf file with the given dynamic libraries and function closure.
+    /// # Note
+    /// During relocation, the symbol is first searched in the function closure `pre_find`.
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
+        self,
+        scope: S,
+        pre_find: &'find F,
+    ) -> Result<RelocatedElf<'lib>>
+    where
+        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        F: Fn(&str) -> Option<*const ()>,
+        'scope: 'iter,
+        'iter: 'lib,
+        'find: 'lib,
+    {
+        self.relocate(scope, pre_find, |_, _, _| Err(Box::new(())), None)
+    }
+
+    /// Relocate the elf file with the given dynamic libraries and function closure.
+    /// # Note
+    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
+    /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
+    pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
+        self,
+        scope: S,
+        pre_find: &'find F,
+        deal_unknown: D,
+        local_lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+    ) -> Result<RelocatedElf<'lib>>
+    where
+        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        F: Fn(&str) -> Option<*const ()>,
+        D: Fn(&ElfRela, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
+        'scope: 'iter,
+        'iter: 'lib,
+        'find: 'lib,
+    {
+        let relocated_elf = match self {
+            Elf::Dylib(elf_dylib) => RelocatedElf::Dylib(elf_dylib.relocate(
+                scope,
+                pre_find,
+                deal_unknown,
+                local_lazy_scope,
+            )?),
+            Elf::Exec(elf_exec) => RelocatedElf::Exec(elf_exec.relocate(
+                scope,
+                pre_find,
+                deal_unknown,
+                local_lazy_scope,
+            )?),
+        };
+        Ok(relocated_elf)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Relocated<'scope> {
-    pub core: CoreComponent,
-    pub _marker: PhantomData<&'scope ()>,
+    pub(crate) core: CoreComponent,
+    pub(crate) _marker: PhantomData<&'scope ()>,
 }
 
 pub(crate) struct CoreComponentInner {
