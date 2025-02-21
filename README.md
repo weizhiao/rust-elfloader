@@ -20,7 +20,7 @@ English | [中文](README_zh.md)
 
 # Capabilities
 ### ✨ Works in `no_std` environments ✨
-This library does not depend on Rust `std`, nor does it depend on `libc` (although you can enable it to use libc via a feature), so it can be used in `no_std` environments such as kernels and embedded devices.
+`elf_loader` does not depend on Rust `std`, nor does it enforce `libc` and OS dependencies, so it can be used in `no_std` environments such as kernel and embedded devices.
 
 ### ✨ Fast speed ✨
 This library draws on the strengths of `musl` and `glibc`'s `ld.so` implementation and fully utilizes some features of Rust (such as static dispatch), allowing it to generate `high-performance` code. [dlopen-rs](https://crates.io/crates/dlopen-rs) based on `elf_loader` has better performance than `libloading`.
@@ -44,9 +44,11 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 | Feature      |  Description  |
 | --------- | ----------------- |
 | fs        |  Enable support for filesystems      						|
-| use-libc  |  Use libc as the backend, otherwise directly use linux syscalls		|
+| use-libc  |  This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls`		|
 | mmap      |  Use the default implementation on platforms with mmap when loading ELF files| 
 | version   |  Use the version information of symbols when resolving them.     |
+
+Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating system.
 
 # Example
 ## Load a simple dynamic library
@@ -97,6 +99,5 @@ fn main() {
 Rust 1.85 or higher.
 
 # Supplement
-You can report any issues you encounter while using this library on GitHub, and we warmly welcome everyone to submit code to improve the functionality of `elf_loader`. 😊
-
-
+If you encounter any issues while using it, you can raise an issue on GitHub. Additionally, we warmly welcome any friends interested in the `elf_loader` to contribute code (improving `elf_loader` itself, adding examples, and fixing issues in the documentation are all welcome). If you find `elf_loader` helpful, feel free to give it a star.
+😊

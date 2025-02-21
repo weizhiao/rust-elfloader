@@ -15,9 +15,9 @@
 * 在嵌入式设备上使用它加载elf动态库  
 ......
 
-# 特性
+# 优势
 ### ✨ 可以在 `no_std` 环境中工作 ✨
-本库不依赖Rust `std`，也不依赖`libc`（虽然你可以通过feature让它使用libc），因此可以在内核和嵌入式设备等`no_std`环境中使用。
+`elf_loader`不依赖Rust `std`，也不强制依赖`libc`和操作系统，因此它可以在内核和嵌入式设备等`no_std`环境中使用。
 
 ### ✨ 速度快 ✨
 本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。基于`elf_loader`的[dlopen-rs](https://crates.io/crates/dlopen-rs)性能比`libloading`更好。
@@ -36,14 +36,16 @@
 利用Rust的生命周期机制，在编译期检查elf文件的依赖库是否被提前销毁，大大提高了安全性。  
 比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs)中验证这一点）
 
-# 特性
+# Feature
 
 | 特性      |  描述  |
 | --------- | ----------------- |
 | fs        |  启用对文件系统的支持        						|
-| use-libc  |  使用libc作为后端，否则直接使用linux syscalls		|
+| use-libc  |  该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端，否则直接使用`linux syscalls`		|
 | mmap      |  在加载elf文件时，使用有mmap的平台上的默认实现  	| 
 | version   |  在解析符号时使用符号的版本信息     |
+
+在没有操作系统的情况下请关闭`fs`，`use-libc`和`mmap`这三个feature。
 
 # 示例
 ## 加载一个简单的动态库
@@ -95,4 +97,4 @@ fn main() {
 Rust 1.85.0及以上
 
 # 补充
-你可以在 GitHub 上提出你在使用过程中遇到的任何问题，此外十分欢迎大家为本库提交代码一起完善`elf_loader`的功能。😊
+如果你在使用时遇到任何问题，都可以在github上提出issue，此外十分欢迎任何对elf加载器感兴趣的朋友贡献代码（改进elf_loader本身，增加样例，修改文档中存在的问题都可以）。如果觉得elf_loader对你有帮助的话不妨点个star吧。😊
