@@ -2,6 +2,8 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
+[![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
+
 # elf_loader
 
 English | [中文](README_zh.md)  
@@ -90,6 +92,9 @@ fn main() {
 * Add more performance tests and correctness tests.
 * Further optimize performance using portable simd.  
 ...
+
+# Minimum Supported Rust Version
+Rust 1.85 or higher.
 
 # Supplement
 You can report any issues you encounter while using this library on GitHub, and we warmly welcome everyone to submit code to improve the functionality of `elf_loader`. 😊

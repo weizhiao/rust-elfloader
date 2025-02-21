@@ -2,6 +2,7 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
+[![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
 # elf_loader
 `elf_loader`能够从内存、文件加载各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
@@ -66,7 +67,7 @@ fn main() {
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
 	// 加载动态库liba.so
-	let loader = Loader::<MmapImpl>::new();
+	let mut loader = Loader::<MmapImpl>::new();
     let liba = loader
         .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
         .unwrap();
@@ -89,6 +90,9 @@ fn main() {
 * 增加测试.
 * 使用portable simd进一步优化性能。
 ......
+
+# 最低编译器版本支持
+Rust 1.85.0及以上
 
 # 补充
 你可以在 GitHub 上提出你在使用过程中遇到的任何问题，此外十分欢迎大家为本库提交代码一起完善`elf_loader`的功能。😊

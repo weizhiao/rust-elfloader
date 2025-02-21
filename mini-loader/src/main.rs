@@ -11,7 +11,11 @@ use core::{
     ptr::{addr_of_mut, null},
 };
 use elf_loader::{
-    abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC}, arch::{Dyn, ElfPhdr, ElfRela, Phdr, REL_RELATIVE}, mmap::MmapImpl, object::ElfFile, Loader
+    Loader,
+    abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
+    arch::{Dyn, ElfPhdr, ElfRela, Phdr, REL_RELATIVE},
+    mmap::MmapImpl,
+    object::ElfFile,
 };
 use linked_list_allocator::LockedHeap;
 use syscalls::{Sysno, syscall};
@@ -62,8 +66,33 @@ fn panic(info: &PanicInfo) -> ! {
     exit(-1);
 }
 
-global_asm!(include_str!("start.S"));
-global_asm!(include_str!("trampoline.S"));
+global_asm!(
+    "    
+	.text
+	.globl	_start
+	.hidden	_start
+	.type	_start,@function
+_start:
+	mov	rdi, rsp
+.weak _DYNAMIC
+.hidden _DYNAMIC
+	lea rsi, [rip + _DYNAMIC]
+	call rust_main
+	hlt"
+);
+
+global_asm!(
+    "	
+	.text
+	.align	4
+	.globl	trampoline
+	.type	trampoline,@function
+trampoline:
+	mov	rsp, rsi
+	jmp	rdi
+	/* Should not reach. */
+	hlt"
+);
 
 #[repr(C)]
 struct Aux {

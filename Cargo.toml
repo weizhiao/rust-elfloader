@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
@@ -16,6 +17,7 @@ authors = ["wzhao <1207410841@qq.com>"]
 edition = "2024"
 repository = "https://github.com/weizhiao/elf_loader"
 license = "MIT/Apache-2.0"
+rust-version = "1.85.0"
 
 [workspace]
 members = ["mini-loader"]
