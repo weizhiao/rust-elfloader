@@ -12,6 +12,7 @@ pub const REL_JUMP_SLOT: u32 = R_AARCH64_JUMP_SLOT;
 pub const REL_DTPOFF: u32 = R_AARCH64_TLS_DTPREL;
 pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 pub const REL_COPY: u32 = R_AARCH64_COPY;
+pub const REL_TPOFF:u32 = R_AARCH64_TLS_TPREL;
 
 global_asm!(
     "
