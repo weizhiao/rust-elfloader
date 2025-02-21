@@ -3,17 +3,17 @@ use core::ffi::CStr;
 
 #[derive(Clone)]
 struct ElfGnuHash {
-    pub nbucket: u32,
-    pub table_start_idx: u32,
-    pub nshift: u32,
-    pub blooms: &'static [usize],
-    pub buckets: *const u32,
-    pub chains: *const u32,
+    nbucket: u32,
+    table_start_idx: u32,
+    nshift: u32,
+    blooms: &'static [usize],
+    buckets: *const u32,
+    chains: *const u32,
 }
 
 impl ElfGnuHash {
     #[inline]
-    pub(crate) unsafe fn parse(ptr: *const u8) -> ElfGnuHash {
+    pub(crate) fn parse(ptr: *const u8) -> ElfGnuHash {
         struct Reader {
             ptr: *const u8,
         }
@@ -137,15 +137,15 @@ pub struct SymbolTable {
 }
 
 /// Symbol specific information, including symbol name and version name.
-pub struct SymbolInfo<'a> {
-    name: &'a str,
-    cname: Option<&'a CStr>,
+pub struct SymbolInfo<'symtab> {
+    name: &'symtab str,
+    cname: Option<&'symtab CStr>,
     #[cfg(feature = "version")]
-    version: Option<super::version::SymbolVersion<'a>>,
+    version: Option<super::version::SymbolVersion<'symtab>>,
 }
 
-impl<'a> SymbolInfo<'a> {
-    pub(crate) const fn from_str(name: &'a str) -> Self {
+impl<'symtab> SymbolInfo<'symtab> {
+    pub(crate) const fn from_str(name: &'symtab str) -> Self {
         SymbolInfo {
             name,
             cname: None,
@@ -155,7 +155,7 @@ impl<'a> SymbolInfo<'a> {
     }
 
     #[cfg(feature = "version")]
-    pub(crate) fn new_with_version(name: &'a str, version: &'a str) -> Self {
+    pub(crate) fn new_with_version(name: &'symtab str, version: &'symtab str) -> Self {
         SymbolInfo {
             name,
             cname: None,
@@ -178,7 +178,7 @@ impl<'a> SymbolInfo<'a> {
 
 impl SymbolTable {
     pub(crate) fn new(dynamic: &ElfDynamic) -> Self {
-        let hashtab = unsafe { ElfGnuHash::parse(dynamic.hashtab as *const u8) };
+        let hashtab = ElfGnuHash::parse(dynamic.hashtab as *const u8);
         let symtab = dynamic.symtab as *const ElfSymbol;
         let strtab = ElfStringTable::new(dynamic.strtab as *const u8);
         #[cfg(feature = "version")]
@@ -264,16 +264,22 @@ impl SymbolTable {
 
     #[inline]
     /// Use the symbol index to get the symbols in the symbol table.
-    pub fn symbol_idx(&self, idx: usize) -> (&ElfSymbol, SymbolInfo) {
+    pub fn symbol_idx<'symtab>(
+        &'symtab self,
+        idx: usize,
+    ) -> (&'symtab ElfSymbol, SymbolInfo<'symtab>) {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let cname = self.strtab.get_cstr(symbol.st_name());
         let name = ElfStringTable::convert_cstr(&cname);
-        (symbol, SymbolInfo {
-            name,
-            cname: Some(&cname),
-            #[cfg(feature = "version")]
-            version: self.get_requirement(idx),
-        })
+        (
+            symbol,
+            SymbolInfo {
+                name,
+                cname: Some(&cname),
+                #[cfg(feature = "version")]
+                version: self.get_requirement(idx),
+            },
+        )
     }
 
     #[inline]
