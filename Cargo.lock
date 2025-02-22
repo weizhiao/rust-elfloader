@@ -186,7 +186,7 @@ checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
 
 [[package]]
 name = "elf_loader"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -194,6 +194,7 @@ dependencies = [
  "elf",
  "libc",
  "libloading",
+ "log",
  "syscalls",
 ]
 

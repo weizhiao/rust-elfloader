@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.9.0"
+version = "0.9.1"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -38,6 +38,11 @@ optional = true
 version = "0.7.4"
 default-features = false
 
+[dependencies.log]
+version = "0.4.22"
+default-features = false
+optional = true
+
 [dependencies]
 bitflags = "2.8.0"
 cfg-if = '1.0'
@@ -52,7 +57,7 @@ harness = false
 required-features = ["fs", "mmap"]
 
 [features]
-default = ["fs", "mmap"]
+default = ["fs", "mmap", "log"]
 
 # Enable support for filesystems
 fs = ["dep:syscalls"]
@@ -62,6 +67,8 @@ use-libc = ["dep:libc"]
 mmap = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
+# Enable logging.
+log = ["dep:log"]
 
 [[example]]
 name = "relocate_dylib"

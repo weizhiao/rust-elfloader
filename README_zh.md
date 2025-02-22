@@ -44,6 +44,7 @@
 | use-libc  |  该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端，否则直接使用`linux syscalls`		|
 | mmap      |  在加载elf文件时，使用有mmap的平台上的默认实现  	| 
 | version   |  在解析符号时使用符号的版本信息     |
+| log   |  启用日志     |
 
 在没有操作系统的情况下请关闭`fs`，`use-libc`和`mmap`这三个feature。
 

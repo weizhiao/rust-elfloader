@@ -48,6 +48,8 @@ impl<'temp> SymDef<'temp> {
 pub(crate) struct RelocateHelper<'core> {
     pub base: usize,
     pub symtab: &'core SymbolTable,
+	#[cfg(feature = "log")]
+    pub lib_name: &'core str,
 }
 
 // 在此之前检查是否需要relocate
@@ -131,7 +133,7 @@ pub(crate) struct ElfRelocation {
 }
 
 fn find_symdef<'iter, 'temp>(
-    base: usize,
+    core: &'temp CoreComponent,
     libs: &[RelocateHelper<'iter>],
     dynsym: &'temp ElfSymbol,
     syminfo: &SymbolInfo,
@@ -142,21 +144,33 @@ where
     if unlikely(dynsym.is_local()) {
         Some(SymDef {
             sym: Some(dynsym),
-            base,
+            base: core.base(),
         })
     } else {
         libs.iter()
             .find_map(|lib| {
-                lib.symtab.lookup_filter(&syminfo).map(|sym| SymDef {
-                    sym: Some(sym),
-                    base: lib.base,
+                lib.symtab.lookup_filter(&syminfo).map(|sym| {
+					#[cfg(feature = "log")]
+                    log::trace!(
+                        "binding file [{}] to [{}]: symbol [{}]",
+                        core.name(),
+                        lib.lib_name,
+                        syminfo.name()
+                    );
+                    SymDef {
+                        sym: Some(sym),
+                        base: lib.base,
+                    }
                 })
             })
             .or_else(|| {
                 // 弱符号 + WEAK 用 0 填充rela offset
                 if dynsym.is_weak() && dynsym.is_undef() {
                     assert!(dynsym.st_value() == 0);
-                    Some(SymDef { sym: None, base })
+                    Some(SymDef {
+                        sym: None,
+                        base: core.base(),
+                    })
                 } else {
                     None
                 }
@@ -241,7 +255,7 @@ impl ElfRelocation {
             if likely(r_type == REL_JUMP_SLOT) {
                 let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                 if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                    find_symdef(base, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
+                    find_symdef(core, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
                 }) {
                     write_val(base, rela.r_offset(), symbol as usize);
                     continue;
@@ -328,7 +342,7 @@ impl ElfRelocation {
                 REL_GOT | REL_SYMBOLIC => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                     if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                        find_symdef(base, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
+                        find_symdef(core, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
                     }) {
                         write_val(base, rela.r_offset(), symbol as usize);
                         continue;
@@ -336,7 +350,7 @@ impl ElfRelocation {
                 }
                 REL_DTPOFF => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-                    if let Some(symdef) = find_symdef(base, &scope, dynsym, &syminfo) {
+                    if let Some(symdef) = find_symdef(core, &scope, dynsym, &syminfo) {
                         // offset in tls
                         let tls_val = (symdef.sym.unwrap().st_value() + rela.r_addend())
                             .wrapping_sub(TLS_DTV_OFFSET);
@@ -346,7 +360,7 @@ impl ElfRelocation {
                 }
                 REL_COPY => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-                    if let Some(symbol) = find_symdef(base, &scope, dynsym, &syminfo) {
+                    if let Some(symbol) = find_symdef(core, &scope, dynsym, &syminfo) {
                         let len = symbol.sym.unwrap().st_size();
                         let dest = unsafe {
                             core::slice::from_raw_parts_mut(

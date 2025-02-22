@@ -47,6 +47,7 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 | use-libc  |  This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls`		|
 | mmap      |  Use the default implementation on platforms with mmap when loading ELF files| 
 | version   |  Use the version information of symbols when resolving them.     |
+| log   |  Enable logging     |
 
 Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating system.
 

@@ -88,6 +88,8 @@ impl ElfDylib {
             .map(|lib| RelocateHelper {
                 base: lib.base(),
                 symtab: lib.symtab(),
+				#[cfg(feature = "log")]
+				lib_name: lib.name(),
             })
             .collect();
         let scope_clone = scope.clone();

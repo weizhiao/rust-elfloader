@@ -89,6 +89,8 @@ impl ElfExec {
                 core::mem::transmute(RelocateHelper {
                     base: self.base(),
                     symtab,
+                    #[cfg(feature = "log")]
+                    lib_name: self.name(),
                 })
             });
         }
@@ -96,6 +98,8 @@ impl ElfExec {
             helper.push(RelocateHelper {
                 base: lib.base(),
                 symtab: lib.symtab(),
+                #[cfg(feature = "log")]
+                lib_name: lib.name(),
             })
         });
         let scope_clone = scope.clone();
