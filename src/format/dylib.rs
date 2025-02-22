@@ -6,13 +6,12 @@ use crate::{
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{RelocateHelper, relocate_impl},
+    relocation::{RelocateHelper, SymDef, relocate_impl},
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, ffi::CString, sync::Arc};
 use core::{any::Any, ffi::CStr, fmt::Debug, marker::PhantomData, ops::Deref};
-
 use super::{ElfCommonPart, Relocated};
 
 /// An unrelocated dynamic library
@@ -262,7 +261,11 @@ impl RelocatedDylib<'_> {
         self.symtab()
             .lookup_filter(&SymbolInfo::from_str(name))
             .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value()) as _,
+                ptr: SymDef {
+                    sym: Some(sym),
+                    base: self.base(),
+                }
+                .convert() as _,
                 pd: PhantomData,
             })
     }
@@ -270,8 +273,13 @@ impl RelocatedDylib<'_> {
     /// Load a versioned symbol from the elf object.
     ///
     /// # Examples
-    /// ```
-    /// let symbol = unsafe { lib.get_version::<fn()>>("function_name", "1.0").unwrap() };
+    /// ```no_run
+    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
+    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # let lib = loader
+    /// #     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
+    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
     /// ```
     #[cfg(feature = "version")]
     #[inline]
@@ -283,7 +291,11 @@ impl RelocatedDylib<'_> {
         self.symtab()
             .lookup_filter(&SymbolInfo::new_with_version(name, version))
             .map(|sym| Symbol {
-                ptr: (self.base() + sym.st_value()) as _,
+                ptr: SymDef {
+                    sym: Some(sym),
+                    base: self.base(),
+                }
+                .convert() as _,
                 pd: PhantomData,
             })
     }

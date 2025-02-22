@@ -1,6 +1,6 @@
 use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::{collections::HashMap, ptr::null};
 
 const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
 const TARGET_TMPDIR: Option<&'static str> = option_env!("CARGO_TARGET_TMPDIR");
@@ -52,10 +52,6 @@ fn main() {
     }
 
     let mut map = HashMap::new();
-    map.insert("__gmon_start__", null());
-    map.insert("__cxa_finalize", null());
-    map.insert("_ITM_registerTMCloneTable", null());
-    map.insert("_ITM_deregisterTMCloneTable", null());
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let liba = load("liba.so");

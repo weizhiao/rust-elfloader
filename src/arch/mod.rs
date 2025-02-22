@@ -144,6 +144,11 @@ impl ElfSymbol {
     pub fn is_local(&self) -> bool {
         self.st_bind() == STB_LOCAL
     }
+
+    #[inline]
+    pub fn is_weak(&self) -> bool {
+        self.st_bind() == STB_WEAK
+    }
 }
 
 #[derive(Debug)]

@@ -1,5 +1,5 @@
 use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
-use std::{collections::HashMap, ptr::null};
+use std::collections::HashMap;
 
 fn main() {
     fn print(s: &str) {
@@ -8,10 +8,6 @@ fn main() {
 
     // Symbols required by dynamic library liba.so
     let mut map = HashMap::new();
-    map.insert("__gmon_start__", null());
-    map.insert("__cxa_finalize", null());
-    map.insert("_ITM_registerTMCloneTable", null());
-    map.insert("_ITM_deregisterTMCloneTable", null());
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     // Load dynamic library liba.so
