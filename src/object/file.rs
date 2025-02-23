@@ -104,13 +104,18 @@ mod imp {
     pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
         const RDONLY: u32 = 0;
         let name = CString::from_str(path).unwrap().to_owned();
-        Ok(ElfFile {
-            fd: unsafe {
-                syscalls::syscall!(Sysno::open, name.as_ptr(), RDONLY, 0)
-                    .map_err(|err| io_error(err))?
-            } as _,
-            name,
-        })
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
+        let fd = unsafe {
+            syscalls::syscall!(Sysno::open, name.as_ptr(), RDONLY, 0)
+                .map_err(|err| io_error(err))?
+        };
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        let fd = unsafe {
+            const AT_FDCWD: core::ffi::c_int = -100;
+            syscalls::syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0)
+                .map_err(|err| io_error(err))?
+        };
+        Ok(ElfFile { fd: fd as _, name })
     }
 
     impl Drop for ElfFile {
