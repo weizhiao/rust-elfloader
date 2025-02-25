@@ -101,6 +101,37 @@ impl ElfSegments {
         self.len
     }
 
+    /// len以byte为单位
+    #[inline]
+    pub(crate) fn get_slice<T>(&self, start: usize, len: usize) -> &[T] {
+        unsafe {
+            // 保证切片在可映射的elf段内
+            debug_assert!(start + len - self.offset <= self.len);
+            core::slice::from_raw_parts(self.get_ptr::<T>(start), len / size_of::<T>())
+        }
+    }
+
+    /// len以byte为单位
+    pub(crate) fn get_slice_mut<T>(&self, start: usize, len: usize) -> &mut [T] {
+        unsafe {
+            // 保证切片在可映射的elf段内
+            debug_assert!(start + len - self.offset <= self.len);
+            core::slice::from_raw_parts_mut(self.get_mut_ptr::<T>(start), len / size_of::<T>())
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_ptr<T>(&self, offset: usize) -> *const T {
+        // 保证offset在可映射的elf段内
+        debug_assert!(offset - self.offset < self.len);
+        (self.base() + offset) as *const T
+    }
+
+    #[inline]
+    pub(crate) fn get_mut_ptr<T>(&self, offset: usize) -> *mut T {
+        self.get_ptr::<T>(offset) as *mut T
+    }
+
     /// base = memory_addr - offset
     #[inline]
     pub fn base(&self) -> usize {

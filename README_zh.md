@@ -3,6 +3,7 @@
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 [![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
+[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/cole14/rust-elf/actions)
 # elf_loader
 `elf_loader`能够从内存、文件加载各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
@@ -25,9 +26,6 @@
 ### ✨ 非常容易移植，具有良好的可扩展性 ✨
 如果你想要移植`elf_loader`，你只需为你的平台实现 `Mmap`和`ElfObject` trait。在实现`Mmap` trait时可以参考`elf_loader`提供的默认实现：[mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap)。  
 此外你可以使用本库提供的`hook`函数来拓展`elf_loader`的功能实现其他任何你想要的功能，在使用`hook`函数时可以参考`dlopen-rs`里的：[hook](https://github.com/weizhiao/dlopen-rs/blob/main/src/loader/mod.rs)。
-
-### ✨ 轻量化 ✨
-在使用最少feature的情况下，本库只依赖 `elf`, `cfg-if`, 和 `bitflags` 这额外的三个库。
 
 ### ✨ 提供异步接口 ✨
 `elf_loader`提供了加载elf文件的异步接口，这使得它在某些并发加载elf文件的场景下有更高的性能上限。不过你需要根据自己的应用场景实现 `Mmap`和`ElfObjectAsync` trait。比如不使用mmap来直接映射elf文件，转而使用mmap+文件读取的方式（mmap创建内存空间再通过文件读取将elf文件的内容读取到mmap创建的空间中）来加载elf文件，这样就能充分利用异步接口带来的优势。

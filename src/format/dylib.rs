@@ -1,6 +1,7 @@
+use super::{ElfCommonPart, Relocated};
 use crate::{
     CoreComponent, Loader, Result, UserData,
-    arch::{ElfPhdr, ElfRela, Phdr},
+    arch::{ElfPhdr, ElfRela},
     dynamic::ElfDynamic,
     loader::Builder,
     mmap::Mmap,
@@ -12,7 +13,6 @@ use crate::{
 };
 use alloc::{boxed::Box, ffi::CString, sync::Arc};
 use core::{any::Any, ffi::CStr, fmt::Debug, marker::PhantomData, ops::Deref};
-use super::{ElfCommonPart, Relocated};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
@@ -88,8 +88,8 @@ impl ElfDylib {
             .map(|lib| RelocateHelper {
                 base: lib.base(),
                 symtab: lib.symtab(),
-				#[cfg(feature = "log")]
-				lib_name: lib.name(),
+                #[cfg(feature = "log")]
+                lib_name: lib.name(),
             })
             .collect();
         let scope_clone = scope.clone();
@@ -125,9 +125,14 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfDylib>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
@@ -146,9 +151,14 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfDylib>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }

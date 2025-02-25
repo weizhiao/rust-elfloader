@@ -48,7 +48,7 @@ impl<'temp> SymDef<'temp> {
 pub(crate) struct RelocateHelper<'core> {
     pub base: usize,
     pub symtab: &'core SymbolTable,
-	#[cfg(feature = "log")]
+    #[cfg(feature = "log")]
     pub lib_name: &'core str,
 }
 
@@ -150,7 +150,7 @@ where
         libs.iter()
             .find_map(|lib| {
                 lib.symtab.lookup_filter(&syminfo).map(|sym| {
-					#[cfg(feature = "log")]
+                    #[cfg(feature = "log")]
                     log::trace!(
                         "binding file [{}] to [{}]: symbol [{}]",
                         core.name(),
@@ -329,14 +329,6 @@ impl ElfRelocation {
         for rela in self.dynrel {
             let r_type = rela.r_type() as _;
             let r_sym = rela.r_symbol();
-
-            if unlikely(r_type == REL_RELATIVE) {
-                write_val(base, rela.r_offset(), base + rela.r_addend());
-                continue;
-            } else if unlikely(r_type == REL_NONE) {
-                continue;
-            }
-
             match r_type {
                 // REL_GOT: S  REL_SYMBOLIC: S + A
                 REL_GOT | REL_SYMBOLIC => {
@@ -362,23 +354,21 @@ impl ElfRelocation {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                     if let Some(symbol) = find_symdef(core, &scope, dynsym, &syminfo) {
                         let len = symbol.sym.unwrap().st_size();
-                        let dest = unsafe {
-                            core::slice::from_raw_parts_mut(
-                                (base + rela.r_offset()) as *mut u8,
-                                len,
-                            )
-                        };
-                        let src = unsafe {
-                            core::slice::from_raw_parts(
-                                (base + symbol.sym.unwrap().st_value()) as *const u8,
-                                len,
-                            )
-                        };
+                        let dest = core.segments().get_slice_mut::<u8>(rela.r_offset(), len);
+                        let src = core
+                            .segments()
+                            .get_slice(symbol.sym.unwrap().st_value(), len);
                         dest.copy_from_slice(src);
                         continue;
                     }
                 }
                 _ => {}
+            }
+            if unlikely(r_type == REL_RELATIVE) {
+                write_val(base, rela.r_offset(), base + rela.r_addend());
+                continue;
+            } else if unlikely(r_type == REL_NONE) {
+                continue;
             }
             deal_unknown(&rela, &core)
                 .map_err(|err| reloc_error(r_type as _, r_sym, err, &core))?;

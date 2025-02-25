@@ -1,7 +1,7 @@
 use super::{ElfCommonPart, Relocated};
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result, UserData,
-    arch::{ElfPhdr, ElfRela, Phdr},
+    arch::{ElfPhdr, ElfRela},
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
@@ -136,9 +136,14 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfExec>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
@@ -157,9 +162,14 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<ElfExec>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }

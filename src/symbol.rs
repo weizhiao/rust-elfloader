@@ -1,12 +1,17 @@
 use crate::{arch::ElfSymbol, dynamic::ElfDynamic};
 use core::ffi::CStr;
 
-#[derive(Clone)]
-struct ElfGnuHash {
+#[repr(C)]
+struct ElfGnuHeader {
     nbucket: u32,
-    table_start_idx: u32,
+    symbias: u32,
+    nbloom: u32,
     nshift: u32,
-    blooms: &'static [usize],
+}
+
+struct ElfGnuHash {
+    header: ElfGnuHeader,
+    blooms: *const usize,
     buckets: *const u32,
     chains: *const u32,
 }
@@ -14,57 +19,21 @@ struct ElfGnuHash {
 impl ElfGnuHash {
     #[inline]
     pub(crate) fn parse(ptr: *const u8) -> ElfGnuHash {
-        struct Reader {
-            ptr: *const u8,
-        }
+        const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
+        let mut bytes = [0u8; HEADER_SIZE];
+        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
+        let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
+        let bloom_size = header.nbloom as usize * size_of::<usize>();
+        let bucket_size = header.nbucket as usize * size_of::<u32>();
 
-        impl Reader {
-            #[inline]
-            fn new(ptr: *const u8) -> Reader {
-                Reader { ptr }
-            }
-
-            #[inline]
-            fn read<T>(&mut self) -> T {
-                unsafe {
-                    let value = self.ptr.cast::<T>().read();
-                    self.ptr = self.ptr.add(core::mem::size_of::<T>());
-                    value
-                }
-            }
-
-            #[inline]
-            //字节为单位
-            fn add(&mut self, count: usize) {
-                self.ptr = unsafe { self.ptr.add(count) };
-            }
-
-            #[inline]
-            fn as_ptr(&self) -> *const u8 {
-                self.ptr
-            }
-        }
-
-        let mut reader = Reader::new(ptr);
-
-        let nbucket: u32 = reader.read();
-        let table_start_idx: u32 = reader.read();
-        let nbloom: u32 = reader.read();
-        let nshift: u32 = reader.read();
-        let blooms_ptr = reader.as_ptr() as *const usize;
-        let blooms = unsafe { core::slice::from_raw_parts(blooms_ptr, nbloom as _) };
-        let bloom_size = nbloom as usize * core::mem::size_of::<usize>();
-        reader.add(bloom_size);
-        let buckets = reader.as_ptr() as _;
-        reader.add(nbucket as usize * core::mem::size_of::<u32>());
-        let chains = reader.as_ptr() as _;
+        let blooms = unsafe { ptr.add(HEADER_SIZE) };
+        let buckets = unsafe { blooms.add(bloom_size) };
+        let chains = unsafe { buckets.add(bucket_size) };
         ElfGnuHash {
-            nbucket,
-            blooms,
-            nshift,
-            table_start_idx,
-            buckets,
-            chains,
+            header,
+            blooms: blooms.cast(),
+            buckets: buckets.cast(),
+            chains: chains.cast(),
         }
     }
 
@@ -79,12 +48,12 @@ impl ElfGnuHash {
 
     fn count_syms(&self) -> usize {
         let mut nsym = 0;
-        for i in 0..self.nbucket as usize {
+        for i in 0..self.header.nbucket as usize {
             nsym = nsym.max(unsafe { self.buckets.add(i).read() as usize });
         }
         if nsym > 0 {
             unsafe {
-                let mut hashval = self.chains.add(nsym - self.table_start_idx as usize + 1);
+                let mut hashval = self.chains.add(nsym - self.header.symbias as usize + 1);
                 while hashval.read() & 1 == 0 {
                     nsym += 1;
                     hashval = hashval.add(1);
@@ -205,20 +174,20 @@ impl SymbolTable {
     pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         let hash = ElfGnuHash::gnu_hash(symbol.name.as_bytes());
         let bloom_width: u32 = 8 * size_of::<usize>() as u32;
-        let bloom_idx = (hash / (bloom_width)) as usize % self.hashtab.blooms.len();
-        let filter = self.hashtab.blooms[bloom_idx] as u64;
+        let bloom_idx = (hash / (bloom_width)) as usize % self.hashtab.header.nbloom as usize;
+        let filter = unsafe { self.hashtab.blooms.add(bloom_idx).read() } as u64;
         if filter & (1 << (hash % bloom_width)) == 0 {
             return None;
         }
-        let hash2 = hash >> self.hashtab.nshift;
+        let hash2 = hash >> self.hashtab.header.nshift;
         if filter & (1 << (hash2 % bloom_width)) == 0 {
             return None;
         }
-        let table_start_idx = self.hashtab.table_start_idx as usize;
+        let table_start_idx = self.hashtab.header.symbias as usize;
         let chain_start_idx = unsafe {
             self.hashtab
                 .buckets
-                .add((hash as usize) % self.hashtab.nbucket as usize)
+                .add((hash as usize) % self.hashtab.header.nbucket as usize)
                 .read()
         } as usize;
         if chain_start_idx == 0 {
@@ -271,15 +240,12 @@ impl SymbolTable {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let cname = self.strtab.get_cstr(symbol.st_name());
         let name = ElfStringTable::convert_cstr(&cname);
-        (
-            symbol,
-            SymbolInfo {
-                name,
-                cname: Some(&cname),
-                #[cfg(feature = "version")]
-                version: self.get_requirement(idx),
-            },
-        )
+        (symbol, SymbolInfo {
+            name,
+            cname: Some(&cname),
+            #[cfg(feature = "version")]
+            version: self.get_requirement(idx),
+        })
     }
 
     #[inline]

@@ -1,6 +1,6 @@
 use crate::{
     ElfObject, Result, UserData,
-    arch::{E_CLASS, EHDR_SIZE, EM_ARCH, ElfPhdr, PHDR_SIZE, Phdr},
+    arch::{E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, PHDR_SIZE, Phdr},
     dynamic::ElfRawDynamic,
     format::InitParams,
     mmap::{self, MapFlags, Mmap, ProtFlags},
@@ -17,19 +17,41 @@ use core::{
     ops::Deref,
     ptr::NonNull,
 };
-use elf::{
-    abi::{EI_NIDENT, ET_DYN, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR},
-    endian::NativeEndian,
-    file::{FileHeader, parse_ident},
+use elf::abi::{
+    EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP,
+    PT_LOAD, PT_PHDR,
 };
 
+#[repr(transparent)]
 pub struct ElfHeader {
-    ehdr: FileHeader<NativeEndian>,
-    id: u32,
+    ehdr: Ehdr,
+}
+
+impl Clone for ElfHeader {
+    fn clone(&self) -> Self {
+        Self {
+            ehdr: Ehdr {
+                e_ident: self.e_ident,
+                e_type: self.e_type,
+                e_machine: self.e_machine,
+                e_version: self.e_version,
+                e_entry: self.e_entry,
+                e_phoff: self.e_phoff,
+                e_shoff: self.e_shoff,
+                e_flags: self.e_flags,
+                e_ehsize: self.e_ehsize,
+                e_phentsize: self.e_phentsize,
+                e_phnum: self.e_phnum,
+                e_shentsize: self.e_shentsize,
+                e_shnum: self.e_shnum,
+                e_shstrndx: self.e_shstrndx,
+            },
+        }
+    }
 }
 
 impl Deref for ElfHeader {
-    type Target = FileHeader<NativeEndian>;
+    type Target = Ehdr;
 
     fn deref(&self) -> &Self::Target {
         &self.ehdr
@@ -37,23 +59,32 @@ impl Deref for ElfHeader {
 }
 
 impl ElfHeader {
-    pub(crate) fn new(data: &[u8], id: u32) -> Result<Self> {
-        let ident_buf = &data[..EI_NIDENT];
-        let tail_buf = &data[EI_NIDENT..EHDR_SIZE];
-        let ident = parse_ident::<NativeEndian>(&ident_buf).map_err(parse_ehdr_error)?;
-        let ehdr = FileHeader::parse_tail(ident, &tail_buf).map_err(parse_ehdr_error)?;
-        if ehdr.e_machine != EM_ARCH {
-            return Err(parse_ehdr_error("file arch mismatch"));
-        }
-        if ehdr.class != E_CLASS {
-            return Err(parse_ehdr_error("file class mismatch"));
-        }
-        Ok(ElfHeader { ehdr, id })
+    pub(crate) fn new(data: &[u8]) -> Result<&Self> {
+        debug_assert!(data.len() >= EHDR_SIZE);
+        let ehdr: &ElfHeader = unsafe { &*(data.as_ptr().cast()) };
+        ehdr.vaildate()?;
+        Ok(ehdr)
     }
 
     #[inline]
     pub fn is_dylib(&self) -> bool {
         self.ehdr.e_type == ET_DYN
+    }
+
+    pub(crate) fn vaildate(&self) -> Result<()> {
+        if self.e_ident[0..4] != ELFMAGIC {
+            return Err(parse_ehdr_error("invalid ELF magic"));
+        }
+        if self.e_ident[EI_CLASS] != E_CLASS {
+            return Err(parse_ehdr_error("file class mismatch"));
+        }
+        if self.e_ident[EI_VERSION] != EV_CURRENT {
+            return Err(parse_ehdr_error("invalid ELF version"));
+        }
+        if self.e_machine != EM_ARCH {
+            return Err(parse_ehdr_error("file arch mismatch"));
+        }
+        Ok(())
     }
 
     #[inline]
@@ -114,10 +145,11 @@ fn mmap_segment<M: Mmap>(
         )
     }?;
     if need_copy {
-        let dest =
-            unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.range.len) };
-        object.read(dest, param.range.offset)?;
-        unsafe { M::mprotect(ptr, param.len, param.prot) }?;
+        unsafe {
+            let dest = core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.range.len);
+            object.read(dest, param.range.offset)?;
+            M::mprotect(ptr, param.len, param.prot)?;
+        }
     }
     Ok(ptr)
 }
@@ -227,19 +259,14 @@ fn load_segment(segments: &ElfSegments, phdr: &Phdr) -> Option<MmapParam> {
 }
 
 #[inline]
-fn fill_bss<M: Mmap>(segments: &ElfSegments, phdr: &Phdr) -> Result<()> {
+fn fill_bss<M: Mmap>(segments: &mut ElfSegments, phdr: &Phdr) -> Result<()> {
     if phdr.p_filesz != phdr.p_memsz {
         let prot = ElfSegments::map_prot(phdr.p_flags);
         let max_vaddr = (phdr.p_vaddr as usize + phdr.p_memsz as usize + PAGE_SIZE - 1) & MASK;
         // 用0填充这一页
         let zero_start = (phdr.p_vaddr + phdr.p_filesz) as usize;
         let zero_end = (zero_start + PAGE_SIZE - 1) & MASK;
-        let zero_mem = unsafe {
-            core::slice::from_raw_parts_mut(
-                (segments.base() + zero_start) as *mut u8,
-                zero_end - zero_start,
-            )
-        };
+        let zero_mem = segments.get_slice_mut::<u8>(zero_start, zero_end - zero_start);
         zero_mem.fill(0);
 
         if zero_end < max_vaddr {
@@ -295,9 +322,14 @@ impl Builder {
         }
     }
 
-    fn exec_hook<F>(&mut self, hook: &F, phdr: &Phdr) -> Result<()>
+    fn exec_hook<F>(&mut self, hook: &F, phdr: &ElfPhdr) -> Result<()>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
         hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
             parse_phdr_error(
@@ -316,21 +348,21 @@ impl Builder {
             // 解析.dynamic section
             PT_DYNAMIC => {
                 self.dynamic = Some(ElfRawDynamic::new(
-                    (phdr.p_vaddr as usize + self.segments.base()) as _,
+                    self.segments.get_ptr(phdr.p_paddr as usize),
                 )?)
             }
             PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
             PT_PHDR => {
                 self.phdr_mmap = Some(unsafe {
-                    core::slice::from_raw_parts(
-                        (self.segments.base() + phdr.p_vaddr as usize) as *const ElfPhdr,
-                        phdr.p_memsz as usize / size_of::<Phdr>(),
+                    core::mem::transmute(
+                        self.segments
+                            .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
                     )
-                })
+                });
             }
             PT_INTERP => {
                 self.interp = Some(unsafe {
-                    CStr::from_ptr((phdr.p_vaddr as usize + self.segments.base()) as _)
+                    CStr::from_ptr(self.segments.get_ptr(phdr.p_vaddr as usize))
                         .to_str()
                         .unwrap()
                 });
@@ -400,9 +432,8 @@ pub struct Loader<M>
 where
     M: Mmap,
 {
-    init_params: Option<InitParams>,
+    pub(crate) init_params: Option<InitParams>,
     buf: ElfBuf,
-    id: u32,
     _marker: PhantomData<M>,
 }
 
@@ -412,7 +443,6 @@ impl<M: Mmap> Loader<M> {
         Self {
             init_params: None,
             buf: ElfBuf::new(),
-            id: 0,
             _marker: PhantomData,
         }
     }
@@ -423,10 +453,9 @@ impl<M: Mmap> Loader<M> {
     }
 
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
-        object.read(self.buf.stack_buf(), 0)?;
-        let id = self.id + 1;
-        self.id += 1;
-        ElfHeader::new(self.buf.stack_buf(), id)
+        let buf = &mut self.buf.stack_buf()[0..EHDR_SIZE];
+        object.read(buf, 0)?;
+        ElfHeader::new(&buf).cloned()
     }
 
     pub fn read_phdr(
@@ -435,14 +464,24 @@ impl<M: Mmap> Loader<M> {
         ehdr: &ElfHeader,
     ) -> Result<&[ElfPhdr]> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdrs = if self.id == ehdr.id {
-            if let Some(phdrs) = self.buf.get_phdrs_from_stack(phdr_start, phdr_end) {
-                phdrs
-            } else {
-                self.buf.heap_buf().resize(phdr_end - phdr_start, 0);
-                object.read(self.buf.heap_buf(), phdr_start)?;
-                self.buf.get_phdrs_from_heap()
-            }
+        self.buf.heap_buf().resize(phdr_end - phdr_start, 0);
+        object.read(self.buf.heap_buf(), phdr_start)?;
+        Ok(self.buf.get_phdrs_from_heap())
+    }
+
+    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
+        object.read(self.buf.stack_buf(), 0)?;
+        ElfHeader::new(self.buf.stack_buf()).cloned()
+    }
+
+    pub(crate) fn prepare_phdr(
+        &mut self,
+        ehdr: &ElfHeader,
+        object: &mut impl ElfObject,
+    ) -> Result<&[ElfPhdr]> {
+        let (phdr_start, phdr_end) = ehdr.phdr_range();
+        let phdrs = if let Some(phdrs) = self.buf.get_phdrs_from_stack(phdr_start, phdr_end) {
+            phdrs
         } else {
             self.buf.heap_buf().resize(phdr_end - phdr_start, 0);
             object.read(self.buf.heap_buf(), phdr_start)?;
@@ -460,11 +499,16 @@ impl<M: Mmap> Loader<M> {
         build: B,
     ) -> Result<L>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
         B: FnOnce(Builder, &[ElfPhdr]) -> Result<L>,
     {
         let init_params = self.init_params;
-        let phdrs = self.read_phdr(&mut object, &ehdr)?;
+        let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
         let memory = mmap_segment::<M>(&param, &mut object)?;
@@ -489,7 +533,7 @@ impl<M: Mmap> Loader<M> {
                 PT_LOAD => {
                     if let Some(param) = load_segment(&builder.segments, phdr) {
                         mmap_segment::<M>(&param, &mut object)?;
-                        fill_bss::<M>(&builder.segments, phdr)?;
+                        fill_bss::<M>(&mut builder.segments, phdr)?;
                     }
                 }
                 _ => builder.parse_other_phdr::<M>(phdr)?,
@@ -498,7 +542,7 @@ impl<M: Mmap> Loader<M> {
         build(builder, phdrs)
     }
 
-    pub(crate) async fn load_async_impl<F, B, L>(
+    pub(crate) async fn load_async_impl< F, B, L>(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObjectAsync,
@@ -507,11 +551,16 @@ impl<M: Mmap> Loader<M> {
         build: B,
     ) -> Result<L>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
         B: FnOnce(Builder, &[ElfPhdr]) -> Result<L>,
     {
         let init_params = self.init_params;
-        let phdrs = self.read_phdr(&mut object, &ehdr)?;
+        let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
         let memory = mmap_segment_async::<M>(&param, &mut object).await?;
@@ -536,7 +585,7 @@ impl<M: Mmap> Loader<M> {
                 PT_LOAD => {
                     if let Some(param) = load_segment(&builder.segments, phdr) {
                         mmap_segment_async::<M>(&param, &mut object).await?;
-                        fill_bss::<M>(&builder.segments, phdr)?;
+                        fill_bss::<M>(&mut builder.segments, phdr)?;
                     }
                 }
                 _ => builder.parse_other_phdr::<M>(phdr)?,

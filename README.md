@@ -3,6 +3,7 @@
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 [![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
+[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/cole14/rust-elf/actions)
 
 # elf_loader
 
@@ -27,9 +28,6 @@ This library draws on the strengths of `musl` and `glibc`'s `ld.so` implementati
 
 ### ✨ Very easy to port and has good extensibility ✨
 If you want to port `elf_loader`, you only need to implement the `Mmap` and `ElfObject` traits for your platform. When implementing the `Mmap` trait, you can refer to the default implementation provided by `elf_loader`: [mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap). In addition, you can use the `hook` functions provided by this library to extend the functionality of `elf_loader` to implement any other features you want. When using the `hook` functions, you can refer to: [hook](https://github.com/weizhiao/dlopen-rs/blob/main/src/loader/mod.rs) in `dlopen-rs`.
-
-### ✨ Tiny library with few dependencies ✨
-With minimal features, this crate only depends on the `elf`, `cfg-if`, and `bitflags` crates.
 
 ### ✨ Provides asynchronous interfaces ✨
 `elf_loader` provides asynchronous interfaces for loading ELF files, which can achieve higher performance in scenarios where ELF files are loaded concurrently.   

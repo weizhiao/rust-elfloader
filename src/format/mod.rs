@@ -3,7 +3,7 @@ pub(crate) mod exec;
 
 use crate::{
     ELFRelro, ElfRelocation, Loader, Result,
-    arch::{Dyn, ElfPhdr, ElfRela, Phdr},
+    arch::{Dyn, ElfPhdr, ElfRela},
     dynamic::ElfDynamic,
     loader::Builder,
     mmap::Mmap,
@@ -28,6 +28,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use dylib::{ElfDylib, RelocatedDylib};
+use elf::abi::PT_LOAD;
 use exec::{ElfExec, RelocatedExec};
 
 struct DataItem {
@@ -381,6 +382,11 @@ impl CoreComponent {
         self.inner.symbols.as_ref()
     }
 
+    #[inline]
+    pub(crate) fn segments(&self) -> &ElfSegments {
+        &self.inner.segments
+    }
+
     fn from_raw(
         name: CString,
         base: usize,
@@ -498,20 +504,23 @@ impl Builder {
             let (phdr_start, phdr_end) = self.ehdr.phdr_range();
             // 获取映射到内存中的Phdr
             let phdrs = self.phdr_mmap.unwrap_or_else(|| {
-                for phdr in phdrs {
-                    let cur_range =
-                        phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
-                    if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
-                        return unsafe {
-                            core::slice::from_raw_parts(
-                                (self.segments.base() + phdr_start - cur_range.start)
-                                    as *const ElfPhdr,
-                                self.ehdr.e_phnum(),
-                            )
-                        };
-                    }
-                }
-                unreachable!()
+                phdrs
+                    .iter()
+                    .filter(|phdr| phdr.p_type == PT_LOAD)
+                    .find_map(|phdr| {
+                        let cur_range =
+                            phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
+                        if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                            return unsafe {
+                                Some(core::mem::transmute(self.segments.get_slice::<ElfPhdr>(
+                                    phdr.p_vaddr as usize + phdr_start - cur_range.start,
+                                    self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
+                                )))
+                            };
+                        }
+                        None
+                    })
+                    .unwrap()
             });
 
             let relocation = ElfRelocation::new(dynamic.pltrel, dynamic.dynrel, dynamic.rela_count);
@@ -623,7 +632,12 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<Elf>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
         let ehdr = self.read_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
@@ -642,7 +656,12 @@ impl<M: Mmap> Loader<M> {
         hook: F,
     ) -> Result<Elf>
     where
-        F: Fn(&CStr, &Phdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+        F: Fn(
+            &CStr,
+            &ElfPhdr,
+            &ElfSegments,
+            &mut UserData,
+        ) -> core::result::Result<(), Box<dyn Any>>,
     {
         let ehdr = self.read_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();

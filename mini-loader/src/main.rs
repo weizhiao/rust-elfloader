@@ -13,7 +13,7 @@ use core::{
 use elf_loader::{
     Loader,
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
-    arch::{Dyn, ElfPhdr, ElfRela, Phdr, REL_RELATIVE},
+    arch::{Dyn, ElfPhdr, ElfRela, REL_RELATIVE},
     mmap::MmapImpl,
     object::ElfFile,
 };
@@ -145,7 +145,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     loop {
         match cur_aux.tag {
             AT_NULL => break,
-            AT_PHDR => ph = cur_aux.val as *const Phdr,
+            AT_PHDR => ph = cur_aux.val as *const ElfPhdr,
             AT_PHNUM => phnum = cur_aux.val,
             AT_BASE => base = cur_aux.val as usize,
             _ => {}

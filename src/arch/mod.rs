@@ -1,12 +1,9 @@
 //! Contains content related to the CPU instruction set
 use core::ops::Deref;
 
-use elf::{
-    abi::{
-        SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
-        STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
-    },
-    file::Class,
+use elf::abi::{
+    SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
+    STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
 
 cfg_if::cfg_if! {
@@ -33,9 +30,10 @@ const OK_TYPES: usize = 1 << STT_NOTYPE
 
 cfg_if::cfg_if! {
     if #[cfg(target_pointer_width = "64")]{
-        pub(crate) const E_CLASS: Class = Class::ELF64;
-        pub type Phdr = elf::segment::Elf64_Phdr;
+        pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS64;
+        pub(crate) type Phdr = elf::segment::Elf64_Phdr;
         pub type Dyn = elf::dynamic::Elf64_Dyn;
+        pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
         pub(crate) type Sym = elf::symbol::Elf64_Sym;
         pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
@@ -43,9 +41,10 @@ cfg_if::cfg_if! {
         pub(crate) const PHDR_SIZE: usize = core::mem::size_of::<elf::segment::Elf64_Phdr>();
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf64_Ehdr>();
     }else{
-        pub(crate) const E_CLASS: Class = Class::ELF32;
-        pub type Phdr = elf::segment::Elf32_Phdr;
+        pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS32;
+        pub(crate) type Phdr = elf::segment::Elf32_Phdr;
         pub type Dyn = elf::dynamic::Elf32_Dyn;
+        pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
         pub(crate) type Sym = elf::symbol::Elf32_Sym;
         pub(crate) const REL_MASK: usize = 0xFF;
