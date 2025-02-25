@@ -1,7 +1,7 @@
 use crate::{
     ElfObject, Result, UserData,
     arch::{E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, PHDR_SIZE, Phdr},
-    dynamic::ElfRawDynamic,
+    dynamic::ElfDynamic,
     format::InitParams,
     mmap::{self, MapFlags, Mmap, ProtFlags},
     object::ElfObjectAsync,
@@ -293,7 +293,7 @@ pub(crate) struct Builder {
     pub(crate) lazy_bind: Option<bool>,
     pub(crate) ehdr: ElfHeader,
     pub(crate) relro: Option<ELFRelro>,
-    pub(crate) dynamic: Option<ElfRawDynamic>,
+    pub(crate) dynamic: Option<ElfDynamic>,
     pub(crate) user_data: UserData,
     pub(crate) segments: ElfSegments,
     pub(crate) init_params: Option<InitParams>,
@@ -347,18 +347,17 @@ impl Builder {
         match phdr.p_type {
             // 解析.dynamic section
             PT_DYNAMIC => {
-                self.dynamic = Some(ElfRawDynamic::new(
+                self.dynamic = Some(ElfDynamic::new(
                     self.segments.get_ptr(phdr.p_paddr as usize),
+                    &self.segments,
                 )?)
             }
             PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
             PT_PHDR => {
-                self.phdr_mmap = Some(unsafe {
-                    core::mem::transmute(
-                        self.segments
-                            .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
-                    )
-                });
+                self.phdr_mmap = Some(
+                    self.segments
+                        .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
+                );
             }
             PT_INTERP => {
                 self.interp = Some(unsafe {
@@ -542,7 +541,7 @@ impl<M: Mmap> Loader<M> {
         build(builder, phdrs)
     }
 
-    pub(crate) async fn load_async_impl< F, B, L>(
+    pub(crate) async fn load_async_impl<F, B, L>(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObjectAsync,

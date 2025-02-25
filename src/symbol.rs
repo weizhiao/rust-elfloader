@@ -53,7 +53,7 @@ impl ElfGnuHash {
         }
         if nsym > 0 {
             unsafe {
-                let mut hashval = self.chains.add(nsym - self.header.symbias as usize + 1);
+                let mut hashval = self.chains.add(nsym - self.header.symbias as usize);
                 while hashval.read() & 1 == 0 {
                     nsym += 1;
                     hashval = hashval.add(1);
@@ -173,14 +173,16 @@ impl SymbolTable {
     /// Use the symbol specific information to get the symbol in the symbol table
     pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         let hash = ElfGnuHash::gnu_hash(symbol.name.as_bytes());
-        let bloom_width: u32 = 8 * size_of::<usize>() as u32;
-        let bloom_idx = (hash / (bloom_width)) as usize % self.hashtab.header.nbloom as usize;
-        let filter = unsafe { self.hashtab.blooms.add(bloom_idx).read() } as u64;
-        if filter & (1 << (hash % bloom_width)) == 0 {
+        let fofs = hash as usize / (8 * size_of::<usize>());
+        let fmask = 1 << hash % (8 * size_of::<usize>() as u32);
+        let bloom_idx = fofs & (self.hashtab.header.nbloom - 1) as usize;
+        let filter = unsafe { self.hashtab.blooms.add(bloom_idx).read() };
+        if filter & fmask == 0 {
             return None;
         }
-        let hash2 = hash >> self.hashtab.header.nshift;
-        if filter & (1 << (hash2 % bloom_width)) == 0 {
+        let filter2 =
+            filter >> ((hash >> self.hashtab.header.nshift) as usize % (8 * size_of::<usize>()));
+        if filter2 & 1 == 0 {
             return None;
         }
         let table_start_idx = self.hashtab.header.symbias as usize;
@@ -240,12 +242,15 @@ impl SymbolTable {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let cname = self.strtab.get_cstr(symbol.st_name());
         let name = ElfStringTable::convert_cstr(&cname);
-        (symbol, SymbolInfo {
-            name,
-            cname: Some(&cname),
-            #[cfg(feature = "version")]
-            version: self.get_requirement(idx),
-        })
+        (
+            symbol,
+            SymbolInfo {
+                name,
+                cname: Some(&cname),
+                #[cfg(feature = "version")]
+                version: self.get_requirement(idx),
+            },
+        )
     }
 
     #[inline]

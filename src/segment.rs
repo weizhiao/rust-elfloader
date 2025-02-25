@@ -103,7 +103,7 @@ impl ElfSegments {
 
     /// len以byte为单位
     #[inline]
-    pub(crate) fn get_slice<T>(&self, start: usize, len: usize) -> &[T] {
+    pub(crate) fn get_slice<T>(&self, start: usize, len: usize) -> &'static [T] {
         unsafe {
             // 保证切片在可映射的elf段内
             debug_assert!(start + len - self.offset <= self.len);
@@ -112,7 +112,7 @@ impl ElfSegments {
     }
 
     /// len以byte为单位
-    pub(crate) fn get_slice_mut<T>(&self, start: usize, len: usize) -> &mut [T] {
+    pub(crate) fn get_slice_mut<T>(&self, start: usize, len: usize) -> &'static mut [T] {
         unsafe {
             // 保证切片在可映射的elf段内
             debug_assert!(start + len - self.offset <= self.len);

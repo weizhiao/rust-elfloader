@@ -500,7 +500,7 @@ impl ElfCommonPart {
 
 impl Builder {
     pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ElfCommonPart> {
-        let common = if let Some(dynamic) = self.dynamic.map(|d| d.finish(self.segments.base())) {
+        let common = if let Some(dynamic) = self.dynamic {
             let (phdr_start, phdr_end) = self.ehdr.phdr_range();
             // 获取映射到内存中的Phdr
             let phdrs = self.phdr_mmap.unwrap_or_else(|| {

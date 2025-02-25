@@ -3,71 +3,18 @@ use crate::{
     Result,
     arch::{Dyn, ElfRela},
     parse_dynamic_error,
+    segment::ElfSegments,
 };
 use alloc::vec::Vec;
 use core::{
     num::NonZeroUsize,
     ptr::{NonNull, null_mut},
-    slice::from_raw_parts,
     usize,
 };
 use elf::abi::*;
 
-/// Information in the dynamic section
-pub struct ElfRawDynamic {
-    pub dyn_ptr: *const Dyn,
-    /// DT_GNU_HASH
-    pub hash_off: usize,
-    /// DT_STMTAB
-    pub symtab_off: usize,
-    /// DT_STRTAB
-    pub strtab_off: usize,
-    /// DT_FLAGS
-    pub flags: usize,
-    /// DT_PLTGOT
-    pub got_off: Option<NonZeroUsize>,
-    /// DT_JMPREL
-    pub pltrel_off: Option<NonZeroUsize>,
-    /// DT_PLTRELSZ
-    pub pltrel_size: Option<NonZeroUsize>,
-    /// DT_RELA
-    pub rela_off: Option<NonZeroUsize>,
-    /// DT_RELASZ
-    pub rela_size: Option<NonZeroUsize>,
-    /// DT_RELACOUNT
-    pub rela_count: Option<NonZeroUsize>,
-    /// DT_INIT
-    pub init_off: Option<NonZeroUsize>,
-    /// DT_FINI
-    pub fini_off: Option<NonZeroUsize>,
-    /// DT_INIT_ARRAY
-    pub init_array_off: Option<NonZeroUsize>,
-    /// DT_INIT_ARRAYSZ
-    pub init_array_size: Option<NonZeroUsize>,
-    /// DT_FINI_ARRAY
-    pub fini_array_off: Option<NonZeroUsize>,
-    /// DT_FINI_ARRAYSZ
-    pub fini_array_size: Option<NonZeroUsize>,
-    /// DT_VERSYM
-    pub version_ids_off: Option<NonZeroUsize>,
-    /// DT_VERNEED
-    pub verneed_off: Option<NonZeroUsize>,
-    /// DT_VERNEEDNUM
-    pub verneed_num: Option<NonZeroUsize>,
-    /// DT_VERDEF
-    pub verdef_off: Option<NonZeroUsize>,
-    /// DT_VERDEFNUM
-    pub verdef_num: Option<NonZeroUsize>,
-    /// DT_NEEDED
-    pub needed_libs: Vec<NonZeroUsize>,
-    /// DT_RPATH
-    pub rpath_off: Option<NonZeroUsize>,
-    /// DT_RUNPATH
-    pub runpath_off: Option<NonZeroUsize>,
-}
-
-impl ElfRawDynamic {
-    pub fn new(dynamic_ptr: *const Dyn) -> Result<ElfRawDynamic> {
+impl ElfDynamic {
+    pub fn new(dynamic_ptr: *const Dyn, segments: &ElfSegments) -> Result<Self> {
         // 这两个是一个格式正常的elf动态库中必须存在的
         let mut symtab_off = 0;
         let mut strtab_off = 0;
@@ -96,6 +43,7 @@ impl ElfRawDynamic {
 
         let mut cur_dyn_ptr = dynamic_ptr;
         let mut dynamic = unsafe { &*cur_dyn_ptr };
+        let base = segments.base();
 
         unsafe {
             loop {
@@ -166,135 +114,100 @@ impl ElfRawDynamic {
         let hash_off = hash_off.ok_or(parse_dynamic_error(
             "dynamic section does not have DT_GNU_HASH",
         ))?;
-        Ok(ElfRawDynamic {
+        let pltrel = pltrel_off
+            .map(|pltrel_off| segments.get_slice(pltrel_off.get(), pltrel_size.unwrap().get()));
+        let dynrel =
+            rela_off.map(|rel_off| segments.get_slice(rel_off.get(), rela_size.unwrap().get()));
+        let init_fn = init_off
+            .map(|val| unsafe { core::mem::transmute(segments.get_ptr::<fn()>(val.get())) });
+        let init_array_fn = init_array_off.map(|init_array_off| {
+            segments.get_slice(init_array_off.get(), init_array_size.unwrap().get())
+        });
+        let fini_fn = fini_off.map(|fini_off| unsafe {
+            core::mem::transmute(segments.get_ptr::<fn()>(fini_off.get()))
+        });
+        let fini_array_fn = fini_array_off.map(|fini_array_off| {
+            segments.get_slice(fini_array_off.get(), fini_array_size.unwrap().get())
+        });
+        let verneed = verneed_off.map(|verneed_off| unsafe {
+            (
+                verneed_off.checked_add(segments.base()).unwrap_unchecked(),
+                verneed_num.unwrap_unchecked(),
+            )
+        });
+        let verdef = verdef_off.map(|verdef_off| unsafe {
+            (
+                verdef_off.checked_add(segments.base()).unwrap_unchecked(),
+                verdef_num.unwrap_unchecked(),
+            )
+        });
+        let version_idx = version_ids_off
+            .map(|off| unsafe { off.checked_add(segments.base()).unwrap_unchecked() });
+        Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
-            hash_off,
-            symtab_off,
-            flags,
-            got_off,
-            needed_libs,
-            strtab_off,
-            pltrel_off,
-            pltrel_size,
-            rela_off,
-            rela_size,
-            init_off,
-            fini_off,
-            init_array_off,
-            init_array_size,
-            fini_array_off,
-            fini_array_size,
-            version_ids_off,
-            verneed_off,
-            verneed_num,
-            verdef_off,
-            verdef_num,
-            rela_count,
-            rpath_off,
-            runpath_off,
-        })
-    }
-
-    /// Map the offset address to an address in actual memory.
-    pub fn finish(self, base: usize) -> ElfDynamic {
-        let pltrel = self.pltrel_off.map(|pltrel_off| unsafe {
-            from_raw_parts(
-                (base + pltrel_off.get()) as *const ElfRela,
-                self.pltrel_size.unwrap_unchecked().get() / size_of::<ElfRela>(),
-            )
-        });
-        let dynrel = self.rela_off.map(|rel_off| unsafe {
-            from_raw_parts(
-                (base + rel_off.get()) as *const ElfRela,
-                self.rela_size.unwrap_unchecked().get() / size_of::<ElfRela>(),
-            )
-        });
-        let init_fn = self
-            .init_off
-            .map(|val| unsafe { core::mem::transmute(val.get() + base) });
-        let init_array_fn = self.init_array_off.map(|init_array_off| {
-            let ptr = init_array_off.get() + base;
-            unsafe {
-                from_raw_parts(
-                    ptr as _,
-                    self.init_array_size.unwrap_unchecked().get() / size_of::<usize>(),
-                )
-            }
-        });
-        let fini_fn = self
-            .fini_off
-            .map(|fini_off| unsafe { core::mem::transmute(fini_off.get() + base) });
-        let fini_array_fn = self.fini_array_off.map(|fini_array_off| {
-            let ptr = fini_array_off.get() + base;
-            unsafe {
-                from_raw_parts(
-                    ptr as _,
-                    self.fini_array_size.unwrap_unchecked().get() / size_of::<usize>(),
-                )
-            }
-        });
-        let verneed = self.verneed_off.map(|verneed_off| unsafe {
-            (
-                verneed_off.checked_add(base).unwrap_unchecked(),
-                self.verneed_num.unwrap_unchecked(),
-            )
-        });
-        let verdef = self.verdef_off.map(|verdef_off| unsafe {
-            (
-                verdef_off.checked_add(base).unwrap_unchecked(),
-                self.verdef_num.unwrap_unchecked(),
-            )
-        });
-        let version_idx = self
-            .version_ids_off
-            .map(|off| unsafe { off.checked_add(base).unwrap_unchecked() });
-        ElfDynamic {
-            dyn_ptr: self.dyn_ptr,
-            hashtab: self.hash_off + base,
-            symtab: self.symtab_off + base,
-            strtab: self.strtab_off + base,
-            bind_now: self.flags & DF_BIND_NOW as usize != 0,
+            hashtab: hash_off + base,
+            symtab: symtab_off + base,
+            strtab: strtab_off + base,
+            bind_now: flags & DF_BIND_NOW as usize != 0,
             got: NonNull::new(
-                self.got_off
+                got_off
                     .map(|off| (base + off.get()) as *mut usize)
                     .unwrap_or(null_mut()),
             ),
+            needed_libs,
+            pltrel,
+            dynrel,
             init_fn,
             init_array_fn,
             fini_fn,
             fini_array_fn,
-            pltrel,
-            dynrel,
-            rela_count: self.rela_count,
-            needed_libs: self.needed_libs,
+            rela_count,
+            rpath_off,
+            runpath_off,
             version_idx,
             verneed,
             verdef,
-            rpath_off: self.rpath_off,
-            runpath_off: self.runpath_off,
-        }
+        })
     }
 }
 
 /// Information in the dynamic section after mapping to the real address
 pub struct ElfDynamic {
     pub dyn_ptr: *const Dyn,
+    /// DT_GNU_HASH
     pub hashtab: usize,
+    /// DT_STMTAB
     pub symtab: usize,
+    /// DT_STRTAB
     pub strtab: usize,
+    /// DT_FLAGS
     pub bind_now: bool,
+    /// DT_PLTGOT
     pub got: Option<NonNull<usize>>,
+    /// DT_INIT
     pub init_fn: Option<extern "C" fn()>,
+    /// DT_INIT_ARRAY
     pub init_array_fn: Option<&'static [extern "C" fn()]>,
+    /// DT_FINI
     pub fini_fn: Option<extern "C" fn()>,
+    /// /// DT_FINI_ARRAY
     pub fini_array_fn: Option<&'static [extern "C" fn()]>,
+    /// DT_JMPREL
     pub pltrel: Option<&'static [ElfRela]>,
+    /// DT_RELA
     pub dynrel: Option<&'static [ElfRela]>,
+    /// DT_RELACOUNT
     pub rela_count: Option<NonZeroUsize>,
+    /// DT_NEEDED
     pub needed_libs: Vec<NonZeroUsize>,
+    /// DT_VERSYM
     pub version_idx: Option<NonZeroUsize>,
+    /// DT_VERNEED and DT_VERNEEDNUM
     pub verneed: Option<(NonZeroUsize, NonZeroUsize)>,
+    /// DT_VERDEF and DT_VERDEFNUM
     pub verdef: Option<(NonZeroUsize, NonZeroUsize)>,
+    /// DT_RPATH
     pub rpath_off: Option<NonZeroUsize>,
+    /// DT_RUNPATH
     pub runpath_off: Option<NonZeroUsize>,
 }
