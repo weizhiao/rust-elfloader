@@ -11,11 +11,9 @@ use core::{
     ptr::{addr_of_mut, null},
 };
 use elf_loader::{
-    Loader,
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
     arch::{Dyn, ElfPhdr, ElfRela, REL_RELATIVE},
-    mmap::MmapImpl,
-    object::ElfFile,
+    load,
 };
 use linked_list_allocator::LockedHeap;
 use syscalls::{Sysno, syscall};
@@ -184,15 +182,11 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     // 加载输入的elf文件
     let argv = unsafe { sp.add(1) };
     let elf_name = unsafe { CStr::from_ptr(argv.add(1).read() as _) };
-    let elf_file = ElfFile::from_path(elf_name.to_str().unwrap()).unwrap();
-    let mut loader: Loader<MmapImpl> = Loader::new();
-    let elf = loader.easy_load(elf_file).unwrap();
+    let elf = load!(elf_name.to_str().unwrap()).unwrap();
     let mut interp_dylib = None;
     // 加载动态加载器ld.so，如果有的话
     if let Some(interp_name) = elf.interp() {
-        let interp_file = ElfFile::from_path(interp_name).unwrap();
-        let mut interp_loader = Loader::<MmapImpl>::new();
-        interp_dylib = Some(interp_loader.easy_load_dylib(interp_file).unwrap());
+        interp_dylib = Some(load!(interp_name).unwrap());
     }
     let phdrs = elf.phdrs();
     // 重新设置aux

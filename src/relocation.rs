@@ -52,7 +52,7 @@ pub(crate) struct RelocateHelper<'core> {
     pub lib_name: &'core str,
 }
 
-// 在此之前检查是否需要relocate
+/// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F, D>(
     common: ElfCommonPart,
     scope: Vec<RelocateHelper<'iter>>,

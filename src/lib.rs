@@ -43,6 +43,7 @@ pub mod arch;
 pub mod dynamic;
 mod format;
 mod loader;
+mod macros;
 pub mod mmap;
 pub mod object;
 mod relocation;

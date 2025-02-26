@@ -1,4 +1,4 @@
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::load_dylib;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -40,13 +40,6 @@ fn compile() {
 
 fn main() {
     compile();
-    let mut loader = Loader::<MmapImpl>::new();
-    let mut load = |name: &str| {
-        loader
-            .easy_load_dylib(ElfFile::from_path(lib_path().join(name).to_str().unwrap()).unwrap())
-            .unwrap()
-    };
-
     fn print(s: &str) {
         println!("{}", s);
     }
@@ -54,9 +47,9 @@ fn main() {
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    let liba = load("liba.so");
-    let libb = load("libb.so");
-    let libc = load("libc.so");
+    let liba = load_dylib!(lib_path().join("liba.so").to_str().unwrap()).unwrap();
+    let libb = load_dylib!(lib_path().join("libb.so").to_str().unwrap()).unwrap();
+    let libc = load_dylib!(lib_path().join("libc.so").to_str().unwrap()).unwrap();
     let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

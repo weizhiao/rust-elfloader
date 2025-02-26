@@ -76,4 +76,4 @@ required-features = ["fs", "mmap"]
 
 [[example]]
 name = "load_dylib"
-required-features = ["fs", "mmap"]
+required-features = ["mmap"]

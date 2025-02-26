@@ -36,13 +36,13 @@
 
 # Feature
 
-| 特性      |  描述  |
-| --------- | ----------------- |
-| fs        |  启用对文件系统的支持        						|
-| use-libc  |  该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端，否则直接使用`linux syscalls`		|
-| mmap      |  在加载elf文件时，使用有mmap的平台上的默认实现  	| 
-| version   |  在解析符号时使用符号的版本信息     |
-| log   |  启用日志     |
+| 特性     | 描述                                                                                                                        |
+| -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| fs       | 启用对文件系统的支持                                                                                                        |
+| use-libc | 该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端，否则直接使用`linux syscalls` |
+| mmap     | 在加载elf文件时，使用有mmap的平台上的默认实现                                                                               |
+| version  | 在解析符号时使用符号的版本信息                                                                                              |
+| log      | 启用日志                                                                                                                    |
 
 在没有操作系统的情况下请关闭`fs`，`use-libc`和`mmap`这三个feature。
 
@@ -50,8 +50,7 @@
 ## 加载一个简单的动态库
 
 ```rust
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
@@ -59,20 +58,17 @@ fn main() {
         println!("{}", s);
     }
 
-	// liba.so依赖的符号
+    // Symbols required by dynamic library liba.so
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-	// 加载动态库liba.so
-	let mut loader = Loader::<MmapImpl>::new();
-    let liba = loader
-        .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-        .unwrap();
-	// 重定位liba.so中的符号
+    // Load dynamic library liba.so
+    let liba = load_dylib!("target/liba.so").unwrap();
+    // Relocate symbols in liba.so
     let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
-	// 调用liba.so中的函数a
+    // Call function a in liba.so
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
-    f();
+    println!("{}", f());
 }
 ```
 

@@ -39,21 +39,20 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 
 # Feature
 
-| Feature      |  Description  |
-| --------- | ----------------- |
-| fs        |  Enable support for filesystems      						|
-| use-libc  |  This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls`		|
-| mmap      |  Use the default implementation on platforms with mmap when loading ELF files| 
-| version   |  Use the version information of symbols when resolving them.     |
-| log   |  Enable logging     |
+| Feature  | Description                                                                                                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fs       | Enable support for filesystems                                                                                                                                                    |
+| use-libc | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls` |
+| mmap     | Use the default implementation on platforms with mmap when loading ELF files                                                                                                      |
+| version  | Use the version information of symbols when resolving them.                                                                                                                       |
+| log      | Enable logging                                                                                                                                                                    |
 
 Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating system.
 
 # Example
 ## Load a simple dynamic library
 ```rust
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
@@ -61,20 +60,17 @@ fn main() {
         println!("{}", s);
     }
 
-	// Symbols required by dynamic library liba.so
+    // Symbols required by dynamic library liba.so
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-	// Load dynamic library liba.so 
-	let loader = Loader::<MmapImpl>::new();
-    let liba = loader
-        .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-        .unwrap();
-	// Relocate symbols in liba.so
+    // Load dynamic library liba.so
+    let liba = load_dylib!("target/liba.so").unwrap();
+    // Relocate symbols in liba.so
     let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
-	// Call function a in liba.so
+    // Call function a in liba.so
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
-    f();
+    println!("{}", f());
 }
 ```
 
