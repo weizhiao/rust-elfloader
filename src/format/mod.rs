@@ -639,7 +639,7 @@ impl<M: Mmap> Loader<M> {
             &mut UserData,
         ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
         self.load_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
             builder.create_elf(phdrs, is_dylib)
@@ -663,7 +663,7 @@ impl<M: Mmap> Loader<M> {
             &mut UserData,
         ) -> core::result::Result<(), Box<dyn Any>>,
     {
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
         self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
             builder.create_elf(phdrs, is_dylib)

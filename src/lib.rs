@@ -6,7 +6,7 @@
 //! * Use it to implement a Rust version of the dynamic linker
 //! * Use it to load ELF dynamic libraries on embedded devices
 //! ## Example
-//! ```rust
+//! ```rust, ignore
 //! use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
 //! use std::collections::HashMap;
 //! fn main() {

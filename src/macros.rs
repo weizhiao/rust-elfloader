@@ -7,8 +7,8 @@ mod imp {
     /// // from file
     /// let liba = load_dylib!("target/liba.so");
     /// // from memory
-    /// # let bytes = &[];
-    /// let liba = load_dylib!("liba.so", bytes);
+    /// # let bytes = [];
+    /// let liba = load_dylib!("liba.so", &bytes);
     /// ```
     #[macro_export]
     macro_rules! load_dylib {

@@ -245,11 +245,11 @@ impl RelocatedDylib<'_> {
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
+    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
     /// # let mut loader = Loader::<MmapImpl>::new();
     /// # let lib = loader
-    /// #     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
+    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
     /// unsafe {
     ///     let awesome_function: Symbol<unsafe extern fn(f64) -> f64> =
     ///         lib.get("awesome_function").unwrap();
@@ -258,11 +258,11 @@ impl RelocatedDylib<'_> {
     /// ```
     /// A static variable may also be loaded and inspected:
     /// ```no_run
-    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
+    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
     /// # let mut loader = Loader::<MmapImpl>::new();
     /// # let lib = loader
-    /// #     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
+    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
     /// unsafe {
     ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
     ///     **awesome_variable = 42.0;

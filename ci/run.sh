@@ -19,7 +19,8 @@ if [ "${CROSS}" = "1" ]; then
 	CARGO=cross
 fi
 
-OP="build"
+if [ "${OP}" = "build" ]; then
+	"${CARGO}" -vv ${OP} --target="${TARGET}" --no-default-features
+fi
 
-"${CARGO}" -vv ${OP} --target="${TARGET}" --no-default-features
 "${CARGO}" -vv ${OP} --target="${TARGET}" --features "${FEATURES}"

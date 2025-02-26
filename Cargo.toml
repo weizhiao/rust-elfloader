@@ -57,7 +57,7 @@ harness = false
 required-features = ["fs", "mmap"]
 
 [features]
-default = ["fs", "mmap", "log"]
+default = ["fs", "mmap"]
 
 # Enable support for filesystems
 fs = ["dep:syscalls"]
