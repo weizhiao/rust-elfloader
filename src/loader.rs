@@ -266,8 +266,11 @@ fn fill_bss<M: Mmap>(segments: &mut ElfSegments, phdr: &Phdr) -> Result<()> {
         // 用0填充这一页
         let zero_start = (phdr.p_vaddr + phdr.p_filesz) as usize;
         let zero_end = (zero_start + PAGE_SIZE - 1) & MASK;
-        let zero_mem = segments.get_slice_mut::<u8>(zero_start, zero_end - zero_start);
-        zero_mem.fill(0);
+        unsafe {
+            segments
+                .get_mut_ptr::<u8>(zero_start)
+                .write_bytes(0, zero_end - zero_start);
+        };
 
         if zero_end < max_vaddr {
             //之后剩余的一定是页的整数倍

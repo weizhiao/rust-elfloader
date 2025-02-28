@@ -6,11 +6,7 @@ use core::fmt::Debug;
 use core::ptr::NonNull;
 use elf::abi::{PF_R, PF_W, PF_X};
 
-#[cfg(target_arch = "aarch64")]
-pub const PAGE_SIZE: usize = 0x10000;
-#[cfg(not(target_arch = "aarch64"))]
 pub const PAGE_SIZE: usize = 0x1000;
-
 pub const MASK: usize = !(PAGE_SIZE - 1);
 
 #[allow(unused)]
