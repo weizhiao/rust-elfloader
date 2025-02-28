@@ -322,15 +322,7 @@ impl Builder {
         }
     }
 
-    fn exec_hook<F>(&mut self, hook: &F, phdr: &ElfPhdr) -> Result<()>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+    fn exec_hook(&mut self, hook: Hook, phdr: &ElfPhdr) -> Result<()> {
         hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
             parse_phdr_error(
                 format!(
@@ -426,6 +418,13 @@ impl ElfBuf {
     }
 }
 
+pub(crate) type Hook<'hook> = &'hook dyn Fn(
+    &CStr,
+    &ElfPhdr,
+    &ElfSegments,
+    &mut UserData,
+) -> core::result::Result<(), Box<dyn Any>>;
+
 /// The elf object loader
 pub struct Loader<M>
 where
@@ -489,23 +488,13 @@ impl<M: Mmap> Loader<M> {
         Ok(unsafe { core::mem::transmute(phdrs) })
     }
 
-    pub(crate) fn load_impl<F, B, L>(
+    pub(crate) fn load_impl(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-        hook: F,
-        build: B,
-    ) -> Result<L>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-        B: FnOnce(Builder, &[ElfPhdr]) -> Result<L>,
-    {
+        hook: Hook,
+    ) -> Result<(Builder, &[ElfPhdr])> {
         let init_params = self.init_params;
         let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
@@ -538,26 +527,16 @@ impl<M: Mmap> Loader<M> {
                 _ => builder.parse_other_phdr::<M>(phdr)?,
             }
         }
-        build(builder, phdrs)
+        Ok((builder, phdrs))
     }
 
-    pub(crate) async fn load_async_impl<F, B, L>(
+    pub(crate) async fn load_async_impl(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: F,
-        build: B,
-    ) -> Result<L>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-        B: FnOnce(Builder, &[ElfPhdr]) -> Result<L>,
-    {
+        hook: Hook<'_>,
+    ) -> Result<(Builder, &[ElfPhdr])> {
         let init_params = self.init_params;
         let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
@@ -590,6 +569,6 @@ impl<M: Mmap> Loader<M> {
                 _ => builder.parse_other_phdr::<M>(phdr)?,
             }
         }
-        build(builder, phdrs)
+        Ok((builder, phdrs))
     }
 }

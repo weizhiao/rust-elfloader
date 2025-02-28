@@ -1,16 +1,15 @@
 use super::{ElfCommonPart, Relocated};
 use crate::{
-    CoreComponent, Loader, RelocatedDylib, Result, UserData,
+    CoreComponent, Loader, RelocatedDylib, Result,
     arch::{ElfPhdr, ElfRela},
-    loader::Builder,
+    loader::{Builder, Hook},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{RelocateHelper, relocate_impl},
-    segment::ElfSegments,
+    relocation::{LazyScope, RelocateHelper, relocate_impl},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{any::Any, ffi::CStr, fmt::Debug, marker::PhantomData, ops::Deref};
+use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated executable file
 pub struct ElfExec {
@@ -64,7 +63,7 @@ impl ElfExec {
         scope: S,
         pre_find: &'find F,
         deal_unknown: D,
-        local_lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+        local_lazy_scope: Option<LazyScope>,
     ) -> Result<RelocatedExec<'lib>>
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
@@ -107,7 +106,7 @@ impl ElfExec {
             |rela: &ElfRela, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
         Ok(RelocatedExec {
             entry: self.entry,
-            core: relocate_impl(self.common, helper, pre_find, wrapper, local_lazy_scope)?,
+            core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
     }
 }
@@ -122,61 +121,42 @@ impl Builder {
 impl<M: Mmap> Loader<M> {
     /// Load a executable file into memory
     pub fn easy_load_exec(&mut self, object: impl ElfObject) -> Result<ElfExec> {
-        self.load_exec(object, None, |_, _, _, _| Ok(()))
+        self.load_exec(object, None, &|_, _, _, _| Ok(()))
     }
 
     /// Load a executable file into memory
     /// # Note
     /// * `hook` functions are called first when a program header is processed.
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub fn load_exec<F>(
+    pub fn load_exec(
         &mut self,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<ElfExec>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook,
+    ) -> Result<ElfExec> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        self.load_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_exec(phdrs)
-        })
+        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind, &hook)?;
+        builder.create_exec(phdrs)
     }
 
     /// Load a executable file into memory
     /// # Note
     /// `hook` functions are called first when a program header is processed.
-    pub async fn load_exec_async<F>(
+    pub async fn load_exec_async(
         &mut self,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<ElfExec>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook<'_>,
+    ) -> Result<ElfExec> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_exec(phdrs)
-        })
-        .await
+        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind, &hook).await?;
+        builder.create_exec(phdrs)
     }
 }
 

@@ -49,6 +49,14 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 
 Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating system.
 
+# Architecture Support
+
+| Arch    | Support | Lazy Binding |
+| ------- | ------- | ------------ |
+| x86_64  | ✅       | ✅            |
+| aarch64 | ✅       | ✅            |
+| riscv64 | ✅       | ✅            |
+
 # Example
 ## Load a simple dynamic library
 ```rust

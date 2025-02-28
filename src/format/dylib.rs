@@ -3,16 +3,16 @@ use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::{ElfPhdr, ElfRela},
     dynamic::ElfDynamic,
-    loader::Builder,
+    loader::{Builder, Hook},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{RelocateHelper, SymDef, relocate_impl},
+    relocation::{LazyScope, RelocateHelper, SymDef, relocate_impl},
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, ffi::CString, sync::Arc};
-use core::{any::Any, ffi::CStr, fmt::Debug, marker::PhantomData, ops::Deref};
+use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
@@ -73,7 +73,7 @@ impl ElfDylib {
         scope: S,
         pre_find: &'find F,
         deal_unknown: D,
-        local_lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+        local_lazy_scope: Option<LazyScope>,
     ) -> Result<RelocatedDylib<'lib>>
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
@@ -96,7 +96,7 @@ impl ElfDylib {
         let wrapper =
             |rela: &ElfRela, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
         Ok(RelocatedDylib {
-            core: relocate_impl(self.common, helper, pre_find, wrapper, local_lazy_scope)?,
+            core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
     }
 }
@@ -111,61 +111,42 @@ impl Builder {
 impl<M: Mmap> Loader<M> {
     /// Load a dynamic library into memory
     pub fn easy_load_dylib(&mut self, object: impl ElfObject) -> Result<ElfDylib> {
-        self.load_dylib(object, None, |_, _, _, _| Ok(()))
+        self.load_dylib(object, None, &|_, _, _, _| Ok(()))
     }
 
     /// Load a dynamic library into memory
     /// # Note
     /// * `hook` functions are called first when a program header is processed.
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub fn load_dylib<F>(
+    pub fn load_dylib(
         &mut self,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<ElfDylib>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook,
+    ) -> Result<ElfDylib> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        self.load_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_dylib(phdrs)
-        })
+        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind, &hook)?;
+        builder.create_dylib(phdrs)
     }
 
     /// Load a dynamic library into memory
     /// # Note
     /// `hook` functions are called first when a program header is processed.
-    pub async fn load_dylib_async<F>(
+    pub async fn load_dylib_async(
         &mut self,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<ElfDylib>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook<'_>,
+    ) -> Result<ElfDylib> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_dylib(phdrs)
-        })
-        .await
+        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind, &hook).await?;
+        builder.create_dylib(phdrs)
     }
 }
 

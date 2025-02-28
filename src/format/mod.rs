@@ -5,10 +5,11 @@ use crate::{
     ELFRelro, ElfRelocation, Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRela},
     dynamic::ElfDynamic,
-    loader::Builder,
+    loader::{Builder, Hook},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_dynamic_error,
+    relocation::LazyScope,
     segment::ElfSegments,
     symbol::SymbolTable,
 };
@@ -150,6 +151,14 @@ impl<'scope> RelocatedElf<'scope> {
             RelocatedElf::Exec(exec) => Some(exec),
         }
     }
+
+    #[inline]
+    pub fn as_dylib(&self) -> Option<&RelocatedDylib<'scope>> {
+        match self {
+            RelocatedElf::Dylib(dylib) => Some(dylib),
+            RelocatedElf::Exec(_) => None,
+        }
+    }
 }
 
 impl Deref for Elf {
@@ -193,7 +202,7 @@ impl Elf {
         scope: S,
         pre_find: &'find F,
         deal_unknown: D,
-        local_lazy_scope: Option<Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>>,
+        local_lazy_scope: Option<LazyScope>,
     ) -> Result<RelocatedElf<'lib>>
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
@@ -249,7 +258,7 @@ pub(crate) struct CoreComponentInner {
     /// user data
     user_data: UserData,
     /// lazy binding scope
-    pub(crate) lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
+    pub(crate) lazy_scope: Option<LazyScope>,
     /// semgents
     pub(crate) segments: ElfSegments,
 }
@@ -288,10 +297,7 @@ unsafe impl Send for CoreComponent {}
 
 impl CoreComponent {
     #[inline]
-    pub(crate) fn set_lazy_scope(
-        &self,
-        lazy_scope: Option<Box<dyn Fn(&str) -> Option<*const ()> + 'static>>,
-    ) {
+    pub(crate) fn set_lazy_scope(&self, lazy_scope: Option<LazyScope>) {
         // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
         let ptr = unsafe { &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner) };
         ptr.lazy_scope = lazy_scope;
@@ -618,56 +624,37 @@ impl Builder {
 impl<M: Mmap> Loader<M> {
     /// Load a elf file into memory
     pub fn easy_load(&mut self, object: impl ElfObject) -> Result<Elf> {
-        self.load(object, None, |_, _, _, _| Ok(()))
+        self.load(object, None, &|_, _, _, _| Ok(()))
     }
 
     /// Load a elf file into memory
     /// # Note
     /// * `hook` functions are called first when a program header is processed.
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub fn load<F>(
+    pub fn load(
         &mut self,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<Elf>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook,
+    ) -> Result<Elf> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
-        self.load_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_elf(phdrs, is_dylib)
-        })
+        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind, &hook)?;
+        builder.create_elf(phdrs, is_dylib)
     }
 
     /// Load a elf file into memory
     /// # Note
     /// `hook` functions are called first when a program header is processed.
-    pub async fn load_async<F>(
+    pub async fn load_async(
         &mut self,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: F,
-    ) -> Result<Elf>
-    where
-        F: Fn(
-            &CStr,
-            &ElfPhdr,
-            &ElfSegments,
-            &mut UserData,
-        ) -> core::result::Result<(), Box<dyn Any>>,
-    {
+        hook: Hook<'_>,
+    ) -> Result<Elf> {
         let ehdr = self.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
-        self.load_async_impl(ehdr, object, lazy_bind, hook, |builder, phdrs| {
-            builder.create_elf(phdrs, is_dylib)
-        })
-        .await
+        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind, &hook).await?;
+        builder.create_elf(phdrs, is_dylib)
     }
 }
