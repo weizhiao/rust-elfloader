@@ -1,4 +1,3 @@
-#![crate_type = "cdylib"]
 #![no_std]
 
 use core::panic::PanicInfo;
@@ -8,7 +7,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn a() -> i32 {
     1
 }
@@ -21,10 +20,10 @@ pub struct S {
     d: u8,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn test_identity_struct(x: S) -> S {
     x
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static HELLO: &str = "Hello!";

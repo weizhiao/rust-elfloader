@@ -1,4 +1,3 @@
-#![crate_type = "cdylib"]
 #![no_std]
 
 use core::panic::PanicInfo;
@@ -8,17 +7,17 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-extern "Rust" {
+unsafe extern "Rust" {
     fn print(s: &str);
     fn a() -> i32;
-	static HELLO: &'static str;
+    static HELLO: &'static str;
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn b() -> i32 {
     unsafe {
         print("call b()");
-		print(HELLO);
+        print(HELLO);
         a() + 1
     }
 }

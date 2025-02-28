@@ -3,32 +3,26 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
-const TARGET_TMPDIR: Option<&'static str> = option_env!("CARGO_TARGET_TMPDIR");
 
-fn lib_path() -> std::path::PathBuf {
-    TARGET_TMPDIR
-        .unwrap_or(TARGET_DIR.unwrap_or("target"))
-        .into()
+fn lib_path() -> PathBuf {
+    let path: PathBuf = TARGET_DIR.unwrap_or("target").into();
+    path.join("release")
 }
 
-const FILE_NAME: [&str; 3] = ["a.rs", "b.rs", "c.rs"];
-const DIR: &'static str = "example_dylib";
+const PACKAGE_NAME: [&str; 3] = ["a", "b", "c"];
 
 fn compile() {
     static ONCE: ::std::sync::Once = ::std::sync::Once::new();
     ONCE.call_once(|| {
-        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-        let dir = PathBuf::from(DIR);
-        for name in FILE_NAME {
-            let mut cmd = ::std::process::Command::new(&rustc);
-            let path = dir.join(name);
-            cmd.arg(path)
+        for name in PACKAGE_NAME {
+            let mut cmd = ::std::process::Command::new("cargo");
+            cmd.arg("rustc")
+                .arg("-r")
+                .arg("-p")
+                .arg(name)
+                .arg("--")
                 .arg("-C")
-                .arg("panic=abort")
-                .arg("-C")
-                .arg("opt-level=3")
-                .arg("--out-dir")
-                .arg(lib_path());
+                .arg("panic=abort");
             assert!(
                 cmd.status()
                     .expect("could not compile the test helpers!")

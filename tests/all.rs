@@ -1,36 +1,52 @@
 #[cfg(all(feature = "fs", feature = "mmap"))]
 mod fs {
     use elf_loader::{Elf, load, load_dylib, load_exec};
+    use std::env::consts;
     use std::path::PathBuf;
+    use std::sync::OnceLock;
     use std::{collections::HashMap, fs::File, io::Read};
 
     const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
-    const TARGET_TMPDIR: Option<&'static str> = option_env!("CARGO_TARGET_TMPDIR");
+    static TARGET_TRIPLE: OnceLock<String> = OnceLock::new();
 
-    fn lib_path() -> std::path::PathBuf {
-        TARGET_TMPDIR
-            .unwrap_or(TARGET_DIR.unwrap_or("target"))
-            .into()
+    fn lib_path() -> PathBuf {
+        let path: PathBuf = TARGET_DIR.unwrap_or("target").into();
+        path.join(TARGET_TRIPLE.get().unwrap()).join("release")
     }
 
-    const FILE_NAME: [&str; 3] = ["a.rs", "b.rs", "c.rs"];
-    const DIR: &'static str = "example_dylib";
+    const PACKAGE_NAME: [&str; 3] = ["a", "b", "c"];
 
     fn compile() {
         static ONCE: ::std::sync::Once = ::std::sync::Once::new();
         ONCE.call_once(|| {
-            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-            let dir = PathBuf::from(DIR);
-            for name in FILE_NAME {
-                let mut cmd = ::std::process::Command::new(&rustc);
-                let path = dir.join(name);
-                cmd.arg(path)
+            let arch = consts::ARCH;
+            if arch.contains("x86_64") {
+                TARGET_TRIPLE
+                    .set("x86_64-unknown-linux-gnu".to_string())
+                    .unwrap();
+            } else if arch.contains("riscv64") {
+                TARGET_TRIPLE
+                    .set("riscv64gc-unknown-linux-gnu".to_string())
+                    .unwrap();
+            } else if arch.contains("aarch64") {
+                TARGET_TRIPLE
+                    .set("aarch64-unknown-linux-gnu".to_string())
+                    .unwrap();
+            } else {
+                unimplemented!()
+            }
+
+            for name in PACKAGE_NAME {
+                let mut cmd = ::std::process::Command::new("cargo");
+                cmd.arg("rustc")
+                    .arg("-r")
+                    .arg("-p")
+                    .arg(name)
+                    .arg("--target")
+                    .arg(TARGET_TRIPLE.get().unwrap().as_str())
+                    .arg("--")
                     .arg("-C")
-                    .arg("panic=abort")
-                    .arg("-C")
-                    .arg("opt-level=3")
-                    .arg("--out-dir")
-                    .arg(lib_path());
+                    .arg("panic=abort");
                 assert!(
                     cmd.status()
                         .expect("could not compile the test helpers!")

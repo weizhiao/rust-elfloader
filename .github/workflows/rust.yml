@@ -44,6 +44,6 @@ jobs:
       run: sh ci/run.sh
     strategy:
       matrix:
-        target: [ x86_64-unknown-linux-gnu ]
+        target: [ x86_64-unknown-linux-gnu, "aarch64-unknown-linux-gnu", "riscv64gc-unknown-linux-gnu" ]
         channel: [ 1.85.0, stable ]
         features: [ "fs,mmap", "fs,mmap,use-libc" ]
