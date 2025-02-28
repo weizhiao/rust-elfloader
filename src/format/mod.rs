@@ -177,7 +177,7 @@ impl Elf {
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
-        self,
+        mut self,
         scope: S,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
@@ -188,6 +188,10 @@ impl Elf {
         'iter: 'lib,
         'find: 'lib,
     {
+        match &mut self {
+            Elf::Dylib(elf_dylib) => elf_dylib.common.lazy = false,
+            Elf::Exec(elf_exec) => elf_exec.common.lazy = false,
+        }
         self.relocate(scope, pre_find, |_, _, _| Err(Box::new(())), None)
     }
 

@@ -16,7 +16,7 @@ use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
-    common: ElfCommonPart,
+    pub(crate) common: ElfCommonPart,
 }
 
 impl Deref for ElfDylib {
@@ -47,7 +47,7 @@ impl ElfDylib {
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
-        self,
+        mut self,
         scope: S,
         pre_find: &'find F,
     ) -> Result<RelocatedDylib<'lib>>
@@ -58,6 +58,7 @@ impl ElfDylib {
         'iter: 'lib,
         'find: 'lib,
     {
+        self.common.lazy = false;
         self.relocate(scope, pre_find, |_, _, _| Err(Box::new(())), None)
     }
 
