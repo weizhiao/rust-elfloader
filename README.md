@@ -51,11 +51,11 @@ Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating s
 
 # Architecture Support
 
-| Arch    | Support | Lazy Binding |
-| ------- | ------- | ------------ |
-| x86_64  | ✅       | ✅            |
-| aarch64 | ✅       | ✅            |
-| riscv64 | ✅       | ✅            |
+| Arch    | Support | Lazy Binding | Test |
+| ------- | ------- | ------------ | ---- |
+| x86_64  | ✅       | ✅            | ✅    |
+| aarch64 | ✅       | ✅            | ✅    |
+| riscv64 | ✅       | ✅            | ✅    |
 
 # Example
 ## Load a simple dynamic library

@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
 description = "A pure-rust library for loading all ELF format files from both memory and files."
-exclude = [".gitignore"]
+exclude = [".gitignore", "ci"]
 
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]
@@ -26,6 +26,7 @@ members = [
     "example_dylib/b",
     "example_dylib/c",
 ]
+exclude = ["mini-loader"]
 
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }
