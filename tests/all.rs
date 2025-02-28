@@ -9,9 +9,14 @@ mod fs {
     const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
     static TARGET_TRIPLE: OnceLock<String> = OnceLock::new();
 
-    fn lib_path() -> PathBuf {
+    fn lib_path(file_name: &str) -> String {
         let path: PathBuf = TARGET_DIR.unwrap_or("target").into();
-        path.join(TARGET_TRIPLE.get().unwrap()).join("release")
+        path.join(TARGET_TRIPLE.get().unwrap())
+            .join("release")
+            .join(file_name)
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     const PACKAGE_NAME: [&str; 3] = ["a", "b", "c"];
@@ -66,9 +71,9 @@ mod fs {
         let mut map = HashMap::new();
         map.insert("print", print as _);
         let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-        let liba = load_dylib!(lib_path().join("liba.so").to_str().unwrap()).unwrap();
-        let libb = load_dylib!(lib_path().join("libb.so").to_str().unwrap()).unwrap();
-        let libc = load_dylib!(lib_path().join("libc.so").to_str().unwrap()).unwrap();
+        let liba = load_dylib!(&lib_path("liba.so")).unwrap();
+        let libb = load_dylib!(&lib_path("libb.so")).unwrap();
+        let libc = load_dylib!(&lib_path("libc.so")).unwrap();
         let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
         let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
         assert!(f() == 1);
@@ -83,7 +88,7 @@ mod fs {
     #[test]
     fn load_from_memory() {
         compile();
-        let mut file = File::open(lib_path().join("liba.so").to_str().unwrap()).unwrap();
+        let mut file = File::open(&lib_path("liba.so")).unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         let liba = load_dylib!("liba.so", &bytes).unwrap();
@@ -103,15 +108,13 @@ mod fs {
     #[test]
     fn type_mismatch() {
         compile();
-        let _ = load_exec!(lib_path().join("liba.so").to_str().unwrap())
-            .err()
-            .unwrap();
+        let _ = load_exec!(&lib_path("liba.so")).err().unwrap();
     }
 
     #[test]
     fn load_elf() {
         compile();
-        let liba = load!(lib_path().join("liba.so").to_str().unwrap()).unwrap();
+        let liba = load!(&lib_path("liba.so")).unwrap();
         assert!(matches!(liba, Elf::Dylib(_)));
         let a = liba
             .easy_relocate([].into_iter(), &|_| None)
@@ -125,7 +128,7 @@ mod fs {
     #[test]
     fn missing_symbol_fails() {
         compile();
-        let lib = load_dylib!(lib_path().join("liba.so").to_str().unwrap())
+        let lib = load_dylib!(&lib_path("liba.so"))
             .unwrap()
             .easy_relocate([].into_iter(), &|_| None)
             .unwrap();
@@ -146,7 +149,7 @@ mod fs {
     #[test]
     fn test_id_struct() {
         compile();
-        let lib = load_dylib!(lib_path().join("liba.so").to_str().unwrap())
+        let lib = load_dylib!(&lib_path("liba.so"))
             .unwrap()
             .easy_relocate([].into_iter(), &|_| None)
             .unwrap();

@@ -1,46 +1,91 @@
-use std::{collections::HashMap, path::Path, ptr::null};
+use std::{env::consts, path::PathBuf, sync::OnceLock};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
 use libloading::Library;
 
+const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
+static TARGET_TRIPLE: OnceLock<String> = OnceLock::new();
+
+fn lib_path(file_name: &str) -> String {
+    let path: PathBuf = TARGET_DIR.unwrap_or("target").into();
+    path.join(TARGET_TRIPLE.get().unwrap())
+        .join("release")
+        .join(file_name)
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+const PACKAGE_NAME: [&str; 3] = ["a", "b", "c"];
+
+fn compile() {
+    static ONCE: ::std::sync::Once = ::std::sync::Once::new();
+    ONCE.call_once(|| {
+        let arch = consts::ARCH;
+        if arch.contains("x86_64") {
+            TARGET_TRIPLE
+                .set("x86_64-unknown-linux-gnu".to_string())
+                .unwrap();
+        } else if arch.contains("riscv64") {
+            TARGET_TRIPLE
+                .set("riscv64gc-unknown-linux-gnu".to_string())
+                .unwrap();
+        } else if arch.contains("aarch64") {
+            TARGET_TRIPLE
+                .set("aarch64-unknown-linux-gnu".to_string())
+                .unwrap();
+        } else {
+            unimplemented!()
+        }
+
+        for name in PACKAGE_NAME {
+            let mut cmd = ::std::process::Command::new("cargo");
+            cmd.arg("rustc")
+                .arg("-r")
+                .arg("-p")
+                .arg(name)
+                .arg("--target")
+                .arg(TARGET_TRIPLE.get().unwrap().as_str())
+                .arg("--")
+                .arg("-C")
+                .arg("panic=abort");
+            assert!(
+                cmd.status()
+                    .expect("could not compile the test helpers!")
+                    .success()
+            );
+        }
+    });
+}
+
 fn load_benchmark(c: &mut Criterion) {
-    let path = Path::new("target/liba.so");
-    let mut map = HashMap::new();
-    map.insert("__gmon_start__", null());
-    map.insert("__cxa_finalize", null());
-    map.insert("_ITM_registerTMCloneTable", null());
-    map.insert("_ITM_deregisterTMCloneTable", null());
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    compile();
+    let path = lib_path("liba.so");
     c.bench_function("elf_loader:new", |b| {
         b.iter(|| {
             let mut loader = Loader::<MmapImpl>::new();
             let liba = loader
-                .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+                .easy_load_dylib(ElfFile::from_path(&path).unwrap())
                 .unwrap();
-            let _ = liba.easy_relocate([].iter(), &pre_find).unwrap();
+            let _ = liba.easy_relocate([].iter(), &|_| None).unwrap();
         });
     });
     c.bench_function("libloading:new", |b| {
         b.iter(|| {
-            unsafe { Library::new(path).unwrap() };
+            unsafe { Library::new(&path).unwrap() };
         })
     });
 }
 
 fn get_symbol_benchmark(c: &mut Criterion) {
-    let path = Path::new("target/liba.so");
-    let mut map = HashMap::new();
-    map.insert("__gmon_start__", null());
-    map.insert("__cxa_finalize", null());
-    map.insert("_ITM_registerTMCloneTable", null());
-    map.insert("_ITM_deregisterTMCloneTable", null());
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    compile();
+    let path = lib_path("liba.so");
     let mut loader = Loader::<MmapImpl>::new();
     let liba = loader
-        .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+        .easy_load_dylib(ElfFile::from_path(&path).unwrap())
         .unwrap();
-    let lib1 = liba.easy_relocate([].iter(), &pre_find).unwrap();
+    let lib1 = liba.easy_relocate([].iter(), &|_| None).unwrap();
     let lib2 = unsafe { Library::new(path).unwrap() };
     c.bench_function("elf_loader:get", |b| {
         b.iter(|| unsafe { lib1.get::<fn(i32, i32) -> i32>("a").unwrap() })

@@ -6,7 +6,8 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
     apt-get update && \
     apt-get install -y \
     curl \
-    qemu-user-static 
+    qemu-user-static  \
+    gdb-multiarch
 
 # Install Rust
 ENV RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static \
