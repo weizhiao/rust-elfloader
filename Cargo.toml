@@ -63,14 +63,16 @@ harness = false
 required-features = ["fs", "mmap"]
 
 [features]
-default = ["fs", "mmap"]
+default = ["fs", "mmap", "use-libc"]
 
 # Enable support for filesystems
-fs = ["dep:syscalls"]
-# Use libc as the backend, otherwise directly use linux syscalls
+fs = []
+# Use linux syscalls
+use-syscall = ["dep:syscalls"]
+# Use libc as the backend
 use-libc = ["dep:libc"]
 # Use the default implementation on platforms with mmap when loading ELF files
-mmap = ["dep:syscalls"]
+mmap = []
 # Use the version information of symbols when resolving them.
 version = []
 # Enable logging.

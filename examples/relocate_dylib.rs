@@ -35,6 +35,10 @@ fn compile() {
             TARGET_TRIPLE
                 .set("aarch64-unknown-linux-gnu".to_string())
                 .unwrap();
+        } else if arch.contains("loongarch64") {
+            TARGET_TRIPLE
+                .set("loongarch64-unknown-linux-musl".to_string())
+                .unwrap();
         } else {
             unimplemented!()
         }

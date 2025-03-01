@@ -18,9 +18,19 @@ mod imp {
                 loader.easy_load_dylib(file)
             })
         };
-        ($name:expr,$bytes:expr) => {
+        ($name:expr, $bytes:expr) => {
             $crate::Loader::<$crate::mmap::MmapImpl>::new()
                 .easy_load_dylib($crate::object::ElfBinary::new($name, $bytes))
+        };
+        ($name:expr, $bytes:expr, lazy : $lazy:expr) => {
+            $crate::Loader::<$crate::mmap::MmapImpl>::new()
+                .load_dylib($crate::object::ElfBinary::new($name, $bytes), Some($lazy))
+        };
+        ($name:expr, lazy : $lazy:expr) => {
+            $crate::object::ElfFile::from_path($name).and_then(|file| {
+                let mut loader = $crate::Loader::<$crate::mmap::MmapImpl>::new();
+                loader.load_dylib(file, Some($lazy))
+            })
         };
     }
 

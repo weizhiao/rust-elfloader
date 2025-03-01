@@ -1,4 +1,3 @@
-use super::{MapFlags, ProtFlags};
 use crate::Error;
 use alloc::string::ToString;
 
@@ -16,8 +15,8 @@ mod imp {
         unsafe fn mmap(
             addr: Option<usize>,
             len: usize,
-            prot: super::ProtFlags,
-            flags: super::MapFlags,
+            prot: ProtFlags,
+            flags: MapFlags,
             offset: usize,
             fd: Option<i32>,
             need_copy: &mut bool,
@@ -47,8 +46,8 @@ mod imp {
         unsafe fn mmap_anonymous(
             addr: usize,
             len: usize,
-            prot: super::ProtFlags,
-            flags: super::MapFlags,
+            prot: ProtFlags,
+            flags: MapFlags,
         ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
             let ptr = unsafe {
                 mmap(
@@ -80,7 +79,7 @@ mod imp {
         unsafe fn mprotect(
             addr: core::ptr::NonNull<core::ffi::c_void>,
             len: usize,
-            prot: super::ProtFlags,
+            prot: ProtFlags,
         ) -> crate::Result<()> {
             let res = unsafe { mprotect(addr.as_ptr(), len, prot.bits()) };
             if res != 0 {
@@ -91,10 +90,13 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "use-libc"))]
+#[cfg(feature = "use-syscall")]
 mod imp {
-    use super::{MapFlags, ProtFlags, map_error};
-    use crate::{Result, mmap::Mmap};
+    use super::map_error;
+    use crate::{
+        Result,
+        mmap::{MapFlags, Mmap, ProtFlags},
+    };
     use core::{
         ffi::{c_int, c_void},
         ptr::NonNull,
@@ -170,8 +172,8 @@ mod imp {
         unsafe fn mmap(
             addr: Option<usize>,
             len: usize,
-            prot: super::ProtFlags,
-            flags: super::MapFlags,
+            prot: ProtFlags,
+            flags: MapFlags,
             offset: usize,
             fd: Option<i32>,
             need_copy: &mut bool,
@@ -188,8 +190,8 @@ mod imp {
         unsafe fn mmap_anonymous(
             addr: usize,
             len: usize,
-            prot: super::ProtFlags,
-            flags: super::MapFlags,
+            prot: ProtFlags,
+            flags: MapFlags,
         ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
             let ptr = mmap_anonymous(addr as _, len, prot, flags)?;
             Ok(unsafe { NonNull::new_unchecked(ptr) })
@@ -206,7 +208,7 @@ mod imp {
         unsafe fn mprotect(
             addr: core::ptr::NonNull<core::ffi::c_void>,
             len: usize,
-            prot: super::ProtFlags,
+            prot: ProtFlags,
         ) -> crate::Result<()> {
             mprotect(addr.as_ptr(), len, prot)?;
             Ok(())

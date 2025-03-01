@@ -325,7 +325,7 @@ impl Builder {
         }
     }
 
-    fn exec_hook(&mut self, hook: Hook, phdr: &ElfPhdr) -> Result<()> {
+    fn exec_hook(&mut self, hook: &Hook, phdr: &ElfPhdr) -> Result<()> {
         hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
             parse_phdr_error(
                 format!(
@@ -367,7 +367,7 @@ impl Builder {
     }
 }
 
-struct ElfBuf {
+pub(crate) struct ElfBuf {
     stack_buf: MaybeUninit<[u8; EHDR_SIZE + 12 * PHDR_SIZE]>,
     heap_buf: Vec<u8>,
 }
@@ -419,14 +419,32 @@ impl ElfBuf {
             )
         }
     }
+
+    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
+        object.read(self.stack_buf(), 0)?;
+        ElfHeader::new(self.stack_buf()).cloned()
+    }
+
+    pub(crate) fn prepare_phdr<'buf>(
+        &mut self,
+        ehdr: &ElfHeader,
+        object: &mut impl ElfObject,
+    ) -> Result<&'buf [ElfPhdr]> {
+        let (phdr_start, phdr_end) = ehdr.phdr_range();
+        let phdrs = if let Some(phdrs) = self.get_phdrs_from_stack(phdr_start, phdr_end) {
+            phdrs
+        } else {
+            self.heap_buf().resize(phdr_end - phdr_start, 0);
+            object.read(self.heap_buf(), phdr_start)?;
+            self.get_phdrs_from_heap()
+        };
+        Ok(unsafe { core::mem::transmute(phdrs) })
+    }
 }
 
-pub(crate) type Hook<'hook> = &'hook dyn Fn(
-    &CStr,
-    &ElfPhdr,
-    &ElfSegments,
-    &mut UserData,
-) -> core::result::Result<(), Box<dyn Any>>;
+pub(crate) type Hook<'hook> = Box<
+    dyn Fn(&CStr, &ElfPhdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+>;
 
 /// The elf object loader
 pub struct Loader<M>
@@ -434,7 +452,17 @@ where
     M: Mmap,
 {
     pub(crate) init_params: Option<InitParams>,
-    buf: ElfBuf,
+    pub(crate) buf: ElfBuf,
+    hook: Option<
+        Box<
+            dyn Fn(
+                &CStr,
+                &ElfPhdr,
+                &ElfSegments,
+                &mut UserData,
+            ) -> core::result::Result<(), Box<dyn Any>>,
+        >,
+    >,
     _marker: PhantomData<M>,
 }
 
@@ -443,6 +471,7 @@ impl<M: Mmap> Loader<M> {
     pub const fn new() -> Self {
         Self {
             init_params: None,
+            hook: None,
             buf: ElfBuf::new(),
             _marker: PhantomData,
         }
@@ -451,6 +480,11 @@ impl<M: Mmap> Loader<M> {
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
     pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) {
         self.init_params = Some(InitParams { argc, argv, envp });
+    }
+
+    /// `hook` functions are called first when a program header is processed
+    pub fn set_hook(&mut self, hook: Hook) {
+        self.hook = Some(hook)
     }
 
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
@@ -470,36 +504,14 @@ impl<M: Mmap> Loader<M> {
         Ok(self.buf.get_phdrs_from_heap())
     }
 
-    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
-        object.read(self.buf.stack_buf(), 0)?;
-        ElfHeader::new(self.buf.stack_buf()).cloned()
-    }
-
-    pub(crate) fn prepare_phdr(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfObject,
-    ) -> Result<&[ElfPhdr]> {
-        let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdrs = if let Some(phdrs) = self.buf.get_phdrs_from_stack(phdr_start, phdr_end) {
-            phdrs
-        } else {
-            self.buf.heap_buf().resize(phdr_end - phdr_start, 0);
-            object.read(self.buf.heap_buf(), phdr_start)?;
-            self.buf.get_phdrs_from_heap()
-        };
-        Ok(unsafe { core::mem::transmute(phdrs) })
-    }
-
     pub(crate) fn load_impl(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-        hook: Hook,
     ) -> Result<(Builder, &[ElfPhdr])> {
         let init_params = self.init_params;
-        let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
+        let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
         let memory = mmap_segment::<M>(&param, &mut object)?;
@@ -518,7 +530,9 @@ impl<M: Mmap> Loader<M> {
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs.iter() {
-            builder.exec_hook(&hook, phdr)?;
+            if let Some(hook) = &self.hook {
+                builder.exec_hook(hook, phdr)?;
+            }
             match phdr.p_type {
                 // 将segment加载到内存中
                 PT_LOAD => {
@@ -538,10 +552,9 @@ impl<M: Mmap> Loader<M> {
         ehdr: ElfHeader,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: Hook<'_>,
     ) -> Result<(Builder, &[ElfPhdr])> {
         let init_params = self.init_params;
-        let phdrs = self.prepare_phdr(&ehdr, &mut object)?;
+        let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
         let memory = mmap_segment_async::<M>(&param, &mut object).await?;
@@ -560,7 +573,9 @@ impl<M: Mmap> Loader<M> {
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs.iter() {
-            builder.exec_hook(&hook, phdr)?;
+            if let Some(hook) = self.hook.as_ref() {
+                builder.exec_hook(&hook, phdr)?;
+            }
             match phdr.p_type {
                 // 将segment加载到内存中
                 PT_LOAD => {

@@ -5,7 +5,7 @@ use crate::{
     ELFRelro, ElfRelocation, Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRela},
     dynamic::ElfDynamic,
-    loader::{Builder, Hook},
+    loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_dynamic_error,
@@ -172,12 +172,28 @@ impl Deref for Elf {
     }
 }
 
+// 使用CoreComponentRef是防止出现循环引用
+pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &F) -> LazyScope
+where
+    F: Fn(&str) -> Option<*const ()>,
+{
+    Box::new(move |name| {
+        libs.iter().find_map(|lib| {
+            pre_find(name).or_else(|| unsafe {
+                RelocatedDylib::from_core_component(lib.upgrade().unwrap())
+                    .get::<()>(name)
+                    .map(|sym| sym.into_raw())
+            })
+        })
+    })
+}
+
 impl Elf {
     /// Relocate the elf file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
-        mut self,
+        self,
         scope: S,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
@@ -188,11 +204,12 @@ impl Elf {
         'iter: 'lib,
         'find: 'lib,
     {
-        match &mut self {
-            Elf::Dylib(elf_dylib) => elf_dylib.common.lazy = false,
-            Elf::Exec(elf_exec) => elf_exec.common.lazy = false,
+        match self {
+            Elf::Dylib(elf_dylib) => Ok(RelocatedElf::Dylib(
+                elf_dylib.easy_relocate(scope, pre_find)?,
+            )),
+            Elf::Exec(elf_exec) => Ok(RelocatedElf::Exec(elf_exec.easy_relocate(scope, pre_find)?)),
         }
-        self.relocate(scope, pre_find, |_, _, _| Err(Box::new(())), None)
     }
 
     /// Relocate the elf file with the given dynamic libraries and function closure.
@@ -206,7 +223,7 @@ impl Elf {
         scope: S,
         pre_find: &'find F,
         deal_unknown: D,
-        local_lazy_scope: Option<LazyScope>,
+        local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedElf<'lib>>
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
@@ -262,7 +279,7 @@ pub(crate) struct CoreComponentInner {
     /// user data
     user_data: UserData,
     /// lazy binding scope
-    pub(crate) lazy_scope: Option<LazyScope>,
+    pub(crate) lazy_scope: Option<LazyScope<'static>>,
     /// semgents
     pub(crate) segments: ElfSegments,
 }
@@ -303,8 +320,11 @@ impl CoreComponent {
     #[inline]
     pub(crate) fn set_lazy_scope(&self, lazy_scope: Option<LazyScope>) {
         // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
-        let ptr = unsafe { &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner) };
-        ptr.lazy_scope = lazy_scope;
+        unsafe {
+            let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner);
+            // 在relocate接口处保证了lazy_scope的声明周期，因此这里直接转换
+            ptr.lazy_scope = core::mem::transmute(lazy_scope);
+        };
     }
 
     #[inline]
@@ -628,37 +648,30 @@ impl Builder {
 impl<M: Mmap> Loader<M> {
     /// Load a elf file into memory
     pub fn easy_load(&mut self, object: impl ElfObject) -> Result<Elf> {
-        self.load(object, None, &|_, _, _, _| Ok(()))
+        self.load(object, None)
     }
 
     /// Load a elf file into memory
     /// # Note
-    /// * `hook` functions are called first when a program header is processed.
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub fn load(
-        &mut self,
-        mut object: impl ElfObject,
-        lazy_bind: Option<bool>,
-        hook: Hook,
-    ) -> Result<Elf> {
-        let ehdr = self.prepare_ehdr(&mut object)?;
+    pub fn load(&mut self, mut object: impl ElfObject, lazy_bind: Option<bool>) -> Result<Elf> {
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
-        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind, &hook)?;
+        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
         builder.create_elf(phdrs, is_dylib)
     }
 
     /// Load a elf file into memory
     /// # Note
-    /// `hook` functions are called first when a program header is processed.
+    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
     pub async fn load_async(
         &mut self,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
-        hook: Hook<'_>,
     ) -> Result<Elf> {
-        let ehdr = self.prepare_ehdr(&mut object)?;
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
-        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind, &hook).await?;
+        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
         builder.create_elf(phdrs, is_dylib)
     }
 }

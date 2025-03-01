@@ -39,23 +39,25 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 
 # Feature
 
-| Feature  | Description                                                                                                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs       | Enable support for filesystems                                                                                                                                                    |
-| use-libc | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls` |
-| mmap     | Use the default implementation on platforms with mmap when loading ELF files                                                                                                      |
-| version  | Use the version information of symbols when resolving them.                                                                                                                       |
-| log      | Enable logging                                                                                                                                                                    |
+| Feature     | Description                                                                                                                                                                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fs          | Enable support for filesystems                                                                                                                                                    |
+| use-libc    | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls` |
+| use-syscall | This feature works when the `fs` or `mmap `feature is enabled. If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend                                 |
+| mmap        | Use the default implementation on platforms with mmap when loading ELF files                                                                                                      |
+| version     | Use the version information of symbols when resolving them.                                                                                                                       |
+| log         | Enable logging                                                                                                                                                                    |
 
-Disable the `fs`,`use-libc` and `mmap` features if you don't have an operating system.
+Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have an operating system.
 
 # Architecture Support
 
-| Arch    | Support | Lazy Binding | Test |
-| ------- | ------- | ------------ | ---- |
-| x86_64  | ✅       | ✅            | ✅    |
-| aarch64 | ✅       | ✅            | ✅    |
-| riscv64 | ✅       | ✅            | ✅    |
+| Arch        | Support | Lazy Binding | Test |
+| ----------- | ------- | ------------ | ---- |
+| x86_64      | ✅       | ✅            | ✅    |
+| aarch64     | ✅       | ✅            | ✅    |
+| riscv64     | ✅       | ✅            | ✅    |
+| loongarch64 | ✅       | ❌            | ✅    |
 
 # Example
 ## Load a simple dynamic library
@@ -87,11 +89,7 @@ fn main() {
 [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader) is implemented based on the `elf_loader` library. mini-loader can load and execute elf files, and currently only supports `x86_64`.
 
 # TODO
-* Support more CPU instruction sets (currently only supports `AArch64`, `Riscv64`, `X86-64`).
-* Improve support for `DT_FLAGS` flag bits.
-* Improve comments and documentation.
-* Add support for more instruction sets in the example mini-loader.
-* Add more performance tests and correctness tests.
+* Support more CPU instruction sets.
 * Further optimize performance using portable simd.  
 ...
 

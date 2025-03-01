@@ -93,7 +93,7 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "use-libc"))]
+#[cfg(feature = "use-syscall")]
 mod imp {
     use super::ElfFile;
     use crate::{Result, io_error, object::ElfObject};

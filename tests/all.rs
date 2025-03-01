@@ -37,6 +37,10 @@ mod fs {
                 TARGET_TRIPLE
                     .set("aarch64-unknown-linux-gnu".to_string())
                     .unwrap();
+            } else if arch.contains("loongarch64") {
+                TARGET_TRIPLE
+                    .set("loongarch64-unknown-linux-musl".to_string())
+                    .unwrap();
             } else {
                 unimplemented!()
             }
@@ -83,6 +87,34 @@ mod fs {
         let c = libc.easy_relocate([&b].into_iter(), &pre_find).unwrap();
         let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
         assert!(f() == 3);
+    }
+
+    #[test]
+    fn lazy_binding() {
+        compile();
+        fn print(s: &str) {
+            println!("{}", s);
+        }
+        let mut map = HashMap::new();
+        map.insert("print", print as _);
+        let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+        let liba = load_dylib!(&lib_path("liba.so")).unwrap();
+        let libb = load_dylib!(&lib_path("libb.so"), lazy : true).unwrap();
+        let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+        let b = libb
+            .relocate(
+                [&a].into_iter(),
+                &pre_find,
+                |_, _, _| Err(Box::new(())),
+                Some(Box::new(|name| unsafe {
+                    a.get::<()>(name)
+                        .map(|sym| sym.into_raw())
+                        .or_else(|| pre_find(name))
+                })),
+            )
+            .unwrap();
+        let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
+        assert!(f() == 2);
     }
 
     #[test]

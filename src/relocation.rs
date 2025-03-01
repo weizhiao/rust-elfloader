@@ -52,7 +52,7 @@ pub(crate) struct RelocateHelper<'core> {
     pub lib_name: &'core str,
 }
 
-pub(crate) type LazyScope = Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'static>;
+pub(crate) type LazyScope<'lib> = Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
@@ -60,7 +60,7 @@ pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
     scope: Vec<RelocateHelper<'iter>>,
     pre_find: &'find F,
     deal_unknown: &dyn Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>,
-    local_lazy_scope: Option<LazyScope>,
+    local_lazy_scope: Option<LazyScope<'lib>>,
 ) -> Result<Relocated<'lib>>
 where
     F: Fn(&str) -> Option<*const ()>,

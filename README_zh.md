@@ -36,23 +36,25 @@
 
 # Feature
 
-| 特性     | 描述                                                                                                                        |
-| -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| fs       | 启用对文件系统的支持                                                                                                        |
-| use-libc | 该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端，否则直接使用`linux syscalls` |
-| mmap     | 在加载elf文件时，使用有mmap的平台上的默认实现                                                                               |
-| version  | 在解析符号时使用符号的版本信息                                                                                              |
-| log      | 启用日志                                                                                                                    |
+| 特性        | 描述                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| fs          | 启用对文件系统的支持                                                                          |
+| use-libc    | 该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端 |
+| use-syscall | 该feature在开启`fs`或者`mmap` feature时生效。使用`linux syscalls`作为后端                     |
+| mmap        | 在加载elf文件时，使用有mmap的平台上的默认实现                                                 |
+| version     | 在解析符号时使用符号的版本信息                                                                |
+| log         | 启用日志                                                                                      |
 
-在没有操作系统的情况下请关闭`fs`，`use-libc`和`mmap`这三个feature。
+在没有操作系统的情况下请关闭`fs`，`use-syscall`，`use-libc`和`mmap`这四个feature。
 
 # 指令集支持
 
-| 指令集  | 支持 | 延迟绑定 | 测试 |
-| ------- | ---- | -------- | ---- |
-| x86_64  | ✅    | ✅        | ✅    |
-| aarch64 | ✅    | ✅        | ✅    |
-| riscv64 | ✅    | ✅        | ✅    |
+| 指令集      | 支持 | 延迟绑定 | 测试 |
+| ----------- | ---- | -------- | ---- |
+| x86_64      | ✅    | ✅        | ✅    |
+| aarch64     | ✅    | ✅        | ✅    |
+| riscv64     | ✅    | ✅        | ✅    |
+| loongarch64 | ✅    | ❌        | ✅    |
 
 # 示例
 ## 加载一个简单的动态库
@@ -85,11 +87,7 @@ fn main() {
 [mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)是基于`elf_loader`库实现的。mini-loader可以加载并执行elf文件，目前只支持`x86_64`。  
 
 # 未完成
-* 支持更多的CPU指令集（目前只支持AArch64，Riscv64，X86-64）。
-* 完善对DT_FLAGS标志位的支持。
-* 完善注释和文档。  
-* 为示例mini-loader支持更多的指令集。
-* 增加测试.
+* 支持更多的CPU指令集。
 * 使用portable simd进一步优化性能。
 ......
 

@@ -16,6 +16,9 @@ cfg_if::cfg_if! {
     }else if #[cfg(target_arch="aarch64")]{
         mod aarch64;
         pub use aarch64::*;
+    }else if #[cfg(target_arch="loongarch64")]{
+        mod loongarch64;
+        pub use loongarch64::*;
     }
 }
 

@@ -36,8 +36,15 @@ extern crate alloc;
     target_arch = "x86_64",
     target_arch = "aarch64",
     target_arch = "riscv64",
+    target_arch = "loongarch64"
 )))]
 compile_error!("unsupport arch");
+
+#[cfg(all(
+    any(feature = "fs", feature = "mmap"),
+    not(any(feature = "use-libc", feature = "use-syscall"))
+))]
+compile_error!("use at least one of libc and syscall");
 
 pub mod arch;
 pub mod dynamic;
