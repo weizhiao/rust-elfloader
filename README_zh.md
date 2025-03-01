@@ -21,7 +21,42 @@
 `elf_loader`不依赖Rust `std`，也不强制依赖`libc`和操作系统，因此它可以在内核和嵌入式设备等`no_std`环境中使用。
 
 ### ✨ 速度快 ✨
-本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。基于`elf_loader`的[dlopen-rs](https://crates.io/crates/dlopen-rs)性能比`libloading`更好。
+本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。  
+下面是性能测试的结果，你可以在Github Actions中的`bench` job中查看它：
+```
+elf_loader:new          time:   [36.333 µs 36.478 µs 36.628 µs]
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking libloading:new
+Benchmarking libloading:new: Warming up for 3.0000 s
+
+Benchmarking libloading:new: Collecting 100 samples in estimated 5.2174 s (111k iterations)
+Benchmarking libloading:new: Analyzing
+libloading:new          time:   [46.348 µs 47.065 µs 47.774 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking elf_loader:get
+Benchmarking elf_loader:get: Warming up for 3.0000 s
+Benchmarking elf_loader:get: Collecting 100 samples in estimated 5.0000 s (476M iterations)
+Benchmarking elf_loader:get: Analyzing
+elf_loader:get          time:   [10.459 ns 10.477 ns 10.498 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+
+Benchmarking libloading:get
+Benchmarking libloading:get: Warming up for 3.0000 s
+Benchmarking libloading:get: Collecting 100 samples in estimated 5.0002 s (54M iterations)
+Benchmarking libloading:get: Analyzing
+libloading:get          time:   [93.226 ns 93.369 ns 93.538 ns]
+Found 11 outliers among 100 measurements (11.00%)
+  7 (7.00%) high mild
+  4 (4.00%) high severe
+```
+需要注意的是elf_loader并不是一个动态链接器，它并不能自动解析动态库的依赖，不过它可以作为动态链接器的底层使用。
 
 ### ✨ 非常容易移植，具有良好的可扩展性 ✨
 如果你想要移植`elf_loader`，你只需为你的平台实现 `Mmap`和`ElfObject` trait。在实现`Mmap` trait时可以参考`elf_loader`提供的默认实现：[mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap)。  
@@ -83,13 +118,9 @@ fn main() {
 }
 ```
 
-## mini-loader
-[mini-loader](https://github.com/weizhiao/elf_loader/tree/main/mini-loader)是基于`elf_loader`库实现的。mini-loader可以加载并执行elf文件，目前只支持`x86_64`。  
-
 # 未完成
 * 支持更多的CPU指令集。
 * 使用portable simd进一步优化性能。
-......
 
 # 最低编译器版本支持
 Rust 1.85.0及以上
