@@ -9,7 +9,7 @@
 
 English | [中文](README_zh.md)  
 
-`elf_loader` can load various forms of ELF files from memory or files, including `Executable file`, `Shared object file`, and `Position-Independent Executable file`.
+`elf_loader` can load and relocate various forms of ELF files from memory or files, including `Executable file`, `Shared object file`, and `Position-Independent Executable file`.
 
 [Documentation](https://docs.rs/elf_loader/)
 

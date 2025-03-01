@@ -5,7 +5,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
 [![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/cole14/rust-elf/actions)
 # elf_loader
-`elf_loader`能够从内存、文件加载各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
+`elf_loader`能够从内存、文件加载并重定位各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
 [文档](https://docs.rs/elf_loader/)
 
