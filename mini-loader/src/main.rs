@@ -12,7 +12,7 @@ use core::{
 };
 use elf_loader::{
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
-    arch::{Dyn, ElfPhdr, ElfRela, REL_RELATIVE},
+    arch::{Dyn, ElfPhdr, REL_RELATIVE},
     load,
 };
 use linked_list_allocator::LockedHeap;
@@ -86,6 +86,7 @@ global_asm!(
 	.globl	trampoline
 	.type	trampoline,@function
 trampoline:
+	xor rdx, rdx
 	mov	rsp, rsi
 	jmp	rdi
 	/* Should not reach. */
@@ -143,7 +144,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     loop {
         match cur_aux.tag {
             AT_NULL => break,
-            AT_PHDR => ph = cur_aux.val as *const ElfPhdr,
+            AT_PHDR => ph = cur_aux.val as *const elf::segment::Elf64_Phdr,
             AT_PHNUM => phnum = cur_aux.val,
             AT_BASE => base = cur_aux.val as usize,
             _ => {}
@@ -165,14 +166,14 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         }
     }
     // 自举，mini-loader自己对自己重定位
-    let rela_ptr = (rela as usize + base) as *const ElfRela;
+    let rela_ptr = (rela as usize + base) as *const elf::relocation::Elf64_Rela;
     let relas = unsafe { &*core::ptr::slice_from_raw_parts(rela_ptr, rela_count as usize) };
     for rela in relas {
-        if rela.r_type() != REL_RELATIVE as usize {
+        if rela.r_info as usize & 0xFFFFFFFF != REL_RELATIVE as usize {
             print_str("unknown rela type");
         }
-        let ptr = (rela.r_offset() + base) as *mut usize;
-        unsafe { ptr.write(base + rela.r_addend()) };
+        let ptr = (rela.r_offset as usize + base) as *mut usize;
+        unsafe { ptr.write(base + rela.r_addend as usize) };
     }
     // 至此就完成自举，可以进行函数调用了
     unsafe { ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HAEP_SIZE) };
