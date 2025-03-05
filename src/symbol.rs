@@ -41,7 +41,7 @@ impl ElfGnuHash {
     pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
         let mut hash = 5381u32;
         for byte in name {
-            hash = unsafe { hash.unchecked_mul(33).unchecked_add((*byte) as _) };
+            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
         }
         hash
     }
