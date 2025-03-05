@@ -3,7 +3,7 @@
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 [![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
-[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/cole14/rust-elf/actions)
+[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
 # elf_loader
 `elf_loader`能够从内存、文件加载并重定位各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
@@ -84,12 +84,12 @@ Found 11 outliers among 100 measurements (11.00%)
 
 # 指令集支持
 
-| 指令集      | 支持 | 延迟绑定 | 测试 |
-| ----------- | ---- | -------- | ---- |
-| x86_64      | ✅    | ✅        | ✅    |
-| aarch64     | ✅    | ✅        | ✅    |
-| riscv64     | ✅    | ✅        | ✅    |
-| loongarch64 | ✅    | ❌        | ✅    |
+| 指令集      | 支持 | 延迟绑定 | 测试    |
+| ----------- | ---- | -------- | ------- |
+| x86_64      | ✅    | ✅        | ✅(CI)   |
+| aarch64     | ✅    | ✅        | ✅(CI)   |
+| riscv64     | ✅    | ✅        | ✅(CI)   |
+| loongarch64 | ✅    | ❌        | ✅(QEMU) |
 
 # 示例
 ## 加载一个简单的动态库

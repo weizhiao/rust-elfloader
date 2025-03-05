@@ -54,12 +54,15 @@ pub(crate) struct RelocateHelper<'core> {
 
 pub(crate) type LazyScope<'lib> = Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
+type DealUnknown<'deal> =
+    &'deal dyn Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>;
+
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
     common: ElfCommonPart,
     scope: Vec<RelocateHelper<'iter>>,
     pre_find: &'find F,
-    deal_unknown: &dyn Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>,
+    deal_unknown: DealUnknown,
     local_lazy_scope: Option<LazyScope<'lib>>,
 ) -> Result<Relocated<'lib>>
 where
@@ -235,17 +238,16 @@ impl ElfRelocation {
         }
     }
 
-    fn relocate_pltrel<F, D>(
+    fn relocate_pltrel<F>(
         &self,
         core: &CoreComponent,
         symtab: &SymbolTable,
         scope: &[RelocateHelper],
         pre_find: &F,
-        deal_unknown: D,
+        deal_unknown: DealUnknown,
     ) -> Result<()>
     where
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>,
     {
         let base = core.base();
         for rela in self.pltrel {
@@ -308,17 +310,16 @@ impl ElfRelocation {
         });
     }
 
-    fn relocate_dynrel<F, D>(
+    fn relocate_dynrel<F>(
         &self,
         core: &CoreComponent,
         symtab: &SymbolTable,
         scope: &[RelocateHelper],
         pre_find: &F,
-        deal_unknown: D,
+        deal_unknown: DealUnknown,
     ) -> Result<()>
     where
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>,
     {
         /*
             A Represents the addend used to compute the value of the relocatable field.

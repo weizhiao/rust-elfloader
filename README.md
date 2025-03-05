@@ -3,7 +3,7 @@
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 [![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
-[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/cole14/rust-elf/actions)
+[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
 
 # elf_loader
 
@@ -88,12 +88,12 @@ Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have 
 
 # Architecture Support
 
-| Arch        | Support | Lazy Binding | Test |
-| ----------- | ------- | ------------ | ---- |
-| x86_64      | ✅       | ✅            | ✅    |
-| aarch64     | ✅       | ✅            | ✅    |
-| riscv64     | ✅       | ✅            | ✅    |
-| loongarch64 | ✅       | ❌            | ✅    |
+| Arch        | Support | Lazy Binding | Test    |
+| ----------- | ------- | ------------ | ------- |
+| x86_64      | ✅       | ✅            | ✅(CI)   |
+| aarch64     | ✅       | ✅            | ✅(CI)   |
+| riscv64     | ✅       | ✅            | ✅(CI)   |
+| loongarch64 | ✅       | ❌            | ✅(QEMU) |
 
 # Example
 ## Load a simple dynamic library
