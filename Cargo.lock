@@ -211,6 +211,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "elf_loader"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "289a3b66fc21982f251247b76338965504de75b1c5bd2d49e80ff1db38cbf482"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "elf",
+ "syscalls",
+]
+
+[[package]]
 name = "half"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -311,10 +323,10 @@ checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "mini-loader"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "elf",
- "elf_loader",
+ "elf_loader 0.9.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "linked_list_allocator",
  "syscalls",
 ]
