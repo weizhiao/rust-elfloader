@@ -20,13 +20,7 @@ license = "MIT/Apache-2.0"
 rust-version = "1.85.0"
 
 [workspace]
-members = [
-    "mini-loader",
-    "example_dylib/a",
-    "example_dylib/b",
-    "example_dylib/c",
-]
-exclude = ["mini-loader"]
+members = ["example_dylib/a", "example_dylib/b", "example_dylib/c"]
 
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }

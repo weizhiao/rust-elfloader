@@ -260,7 +260,7 @@ impl RelocatedDylib<'_> {
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
         self.symtab()
-            .lookup_filter(&SymbolInfo::from_str(name))
+            .lookup_filter(&SymbolInfo::from_str(name, None))
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
@@ -290,7 +290,7 @@ impl RelocatedDylib<'_> {
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
         self.symtab()
-            .lookup_filter(&SymbolInfo::new_with_version(name, version))
+            .lookup_filter(&SymbolInfo::from_str(name, Some(version)))
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),

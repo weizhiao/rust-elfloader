@@ -108,27 +108,39 @@ pub struct SymbolTable {
 /// Symbol specific information, including symbol name and version name.
 pub struct SymbolInfo<'symtab> {
     name: &'symtab str,
+    data: PreCompute,
     cname: Option<&'symtab CStr>,
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'symtab>>,
 }
 
-impl<'symtab> SymbolInfo<'symtab> {
-    pub(crate) const fn from_str(name: &'symtab str) -> Self {
-        SymbolInfo {
-            name,
-            cname: None,
-            #[cfg(feature = "version")]
-            version: None,
+struct PreCompute {
+    hash: u32,
+    fofs: usize,
+    fmask: usize,
+}
+
+impl PreCompute {
+    #[inline]
+    fn new(name: &str) -> Self {
+        let hash = ElfGnuHash::gnu_hash(name.as_bytes());
+        PreCompute {
+            hash,
+            fofs: hash as usize / (8 * size_of::<usize>()),
+            fmask: 1 << hash % (8 * size_of::<usize>() as u32),
         }
     }
+}
 
-    #[cfg(feature = "version")]
-    pub(crate) fn new_with_version(name: &'symtab str, version: &'symtab str) -> Self {
+impl<'symtab> SymbolInfo<'symtab> {
+    #[allow(unused_variables)]
+    pub(crate) fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
         SymbolInfo {
             name,
+            data: PreCompute::new(name),
             cname: None,
-            version: Some(crate::version::SymbolVersion::new(version)),
+            #[cfg(feature = "version")]
+            version: version.map(|v| crate::version::SymbolVersion::new(v)),
         }
     }
 
@@ -172,9 +184,9 @@ impl SymbolTable {
 
     /// Use the symbol specific information to get the symbol in the symbol table
     pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
-        let hash = ElfGnuHash::gnu_hash(symbol.name.as_bytes());
-        let fofs = hash as usize / (8 * size_of::<usize>());
-        let fmask = 1 << hash % (8 * size_of::<usize>() as u32);
+        let hash = symbol.data.hash;
+        let fofs = symbol.data.fofs;
+        let fmask = symbol.data.fmask;
         let bloom_idx = fofs & (self.hashtab.header.nbloom - 1) as usize;
         let filter = unsafe { self.hashtab.blooms.add(bloom_idx).read() };
         if filter & fmask == 0 {
@@ -246,6 +258,7 @@ impl SymbolTable {
             symbol,
             SymbolInfo {
                 name,
+                data: PreCompute::new(name),
                 cname: Some(&cname),
                 #[cfg(feature = "version")]
                 version: self.get_requirement(idx),
