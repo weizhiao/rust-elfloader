@@ -35,7 +35,8 @@ workspace = true
 optional = true
 
 [dependencies.elf]
-version = "0.7.4"
+git = "https://github.com/weizhiao/rust-elf"
+branch = "master"
 default-features = false
 
 [dependencies.log]
@@ -71,6 +72,9 @@ mmap = []
 version = []
 # Enable logging.
 log = ["dep:log"]
+# Use rel as the relocation type
+rel = []
+
 
 [[example]]
 name = "relocate_dylib"

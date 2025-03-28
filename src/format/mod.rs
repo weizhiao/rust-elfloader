@@ -2,16 +2,7 @@ pub(crate) mod dylib;
 pub(crate) mod exec;
 
 use crate::{
-    ELFRelro, ElfRelocation, Loader, Result,
-    arch::{Dyn, ElfPhdr, ElfRela},
-    dynamic::ElfDynamic,
-    loader::Builder,
-    mmap::Mmap,
-    object::{ElfObject, ElfObjectAsync},
-    parse_dynamic_error,
-    relocation::LazyScope,
-    segment::ElfSegments,
-    symbol::SymbolTable,
+    arch::{Dyn, ElfPhdr, ElfRelType, ElfRela}, dynamic::ElfDynamic, loader::Builder, mmap::Mmap, object::{ElfObject, ElfObjectAsync}, parse_dynamic_error, relocation::LazyScope, segment::ElfSegments, symbol::SymbolTable, ELFRelro, ElfRelocation, Loader, Result
 };
 use alloc::{
     boxed::Box,
@@ -177,7 +168,7 @@ pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &F) ->
 where
     F: Fn(&str) -> Option<*const ()>,
 {
-    Box::new(move |name| {
+    Arc::new(move |name| {
         libs.iter().find_map(|lib| {
             pre_find(name).or_else(|| unsafe {
                 RelocatedDylib::from_core_component(lib.upgrade().unwrap())
@@ -228,7 +219,7 @@ impl Elf {
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRela, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
+        D: Fn(&ElfRelType, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,

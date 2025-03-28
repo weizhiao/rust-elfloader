@@ -192,9 +192,8 @@ checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
 
 [[package]]
 name = "elf"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
+version = "0.8.0-dev"
+source = "git+https://github.com/weizhiao/rust-elf?branch=master#33080911f62286aa98441de4d4f60709aaf1cbe8"
 
 [[package]]
 name = "elf_loader"

@@ -19,7 +19,13 @@ cfg_if::cfg_if! {
     }else if #[cfg(target_arch="loongarch64")]{
         mod loongarch64;
         pub use loongarch64::*;
-    }
+    }else if #[cfg(target_arch = "x86")]{
+        mod x86;
+        pub use x86::*;
+    }else if #[cfg(target_arch = "arm")]{
+		mod arm;
+		pub use arm::*;
+	}
 }
 
 pub const REL_NONE: u32 = 0;
@@ -38,6 +44,7 @@ cfg_if::cfg_if! {
         pub type Dyn = elf::dynamic::Elf64_Dyn;
         pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
+        pub(crate) type Rel = elf::relocation::Elf64_Rel;
         pub(crate) type Sym = elf::symbol::Elf64_Sym;
         pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
         pub(crate) const REL_BIT: usize = 32;
@@ -49,6 +56,7 @@ cfg_if::cfg_if! {
         pub type Dyn = elf::dynamic::Elf32_Dyn;
         pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
+        pub(crate) type Rel = elf::relocation::Elf32_Rel;
         pub(crate) type Sym = elf::symbol::Elf32_Sym;
         pub(crate) const REL_MASK: usize = 0xFF;
         pub(crate) const REL_BIT: usize = 8;
@@ -78,9 +86,38 @@ impl ElfRela {
         self.rela.r_offset as usize
     }
 
+	/// base is not used during execution. The base parameter is added only for the sake of interface consistency
     #[inline]
-    pub fn r_addend(&self) -> usize {
+    pub fn r_addend(&self, _base: usize) -> usize {
         self.rela.r_addend as usize
+    }
+}
+
+#[repr(transparent)]
+pub struct ElfRel {
+    rel: Rel,
+}
+
+impl ElfRel {
+    #[inline]
+    pub fn r_type(&self) -> usize {
+        self.rel.r_info as usize & REL_MASK
+    }
+
+    #[inline]
+    pub fn r_symbol(&self) -> usize {
+        self.rel.r_info as usize >> REL_BIT
+    }
+
+    #[inline]
+    pub fn r_offset(&self) -> usize {
+        self.rel.r_offset as usize
+    }
+
+    #[inline]
+    pub fn r_addend(&self, base: usize) -> usize {
+        let ptr = (self.r_offset() + base) as *mut usize;
+        unsafe { ptr.read() }
     }
 }
 
@@ -183,3 +220,8 @@ impl Clone for ElfPhdr {
         }
     }
 }
+
+#[cfg(not(feature = "rel"))]
+pub type ElfRelType = ElfRela;
+#[cfg(feature = "rel")]
+pub type ElfRelType = ElfRel;

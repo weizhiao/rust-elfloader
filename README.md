@@ -83,6 +83,7 @@ For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`,
 | mmap        | Use the default implementation on platforms with mmap when loading ELF files                                                                                                      |
 | version     | Use the version information of symbols when resolving them.                                                                                                                       |
 | log         | Enable logging                                                                                                                                                                    |
+| rel         | Use rel as the relocation type                                                                                                                                                    |
 
 Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have an operating system.
 
@@ -94,6 +95,8 @@ Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have 
 | aarch64     | ✅       | ✅            | ✅(CI)   |
 | riscv64     | ✅       | ✅            | ✅(CI)   |
 | loongarch64 | ✅       | ❌            | ✅(QEMU) |
+| x86         | ✅       | ❌            | ✅(QEMU) |
+| arm         | ✅       | ❌            | ✅(QEMU) |
 
 # Example
 ## Load a simple dynamic library

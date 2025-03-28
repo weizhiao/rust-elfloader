@@ -52,10 +52,10 @@ pub(crate) struct RelocateHelper<'core> {
     pub lib_name: &'core str,
 }
 
-pub(crate) type LazyScope<'lib> = Box<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
+pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
 type DealUnknown<'deal> =
-    &'deal dyn Fn(&ElfRela, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>;
+    &'deal dyn Fn(&ElfRelType, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>;
 
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
@@ -129,11 +129,11 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
 #[derive(Default)]
 pub(crate) struct ElfRelocation {
     // REL_RELATIVE
-    relative: &'static [ElfRela],
+    relative: &'static [ElfRelType],
     // plt
-    pltrel: &'static [ElfRela],
+    pltrel: &'static [ElfRelType],
     // others in dyn
-    dynrel: &'static [ElfRela],
+    dynrel: &'static [ElfRelType],
 }
 
 fn find_symdef<'iter, 'temp>(
@@ -214,8 +214,8 @@ fn reloc_error(
 impl ElfRelocation {
     #[inline]
     pub(crate) fn new(
-        pltrel: Option<&'static [ElfRela]>,
-        dynrel: Option<&'static [ElfRela]>,
+        pltrel: Option<&'static [ElfRelType]>,
+        dynrel: Option<&'static [ElfRelType]>,
         rela_count: Option<NonZeroUsize>,
     ) -> Self {
         // nrelative记录着REL_RELATIVE重定位类型的个数
@@ -250,9 +250,10 @@ impl ElfRelocation {
         F: Fn(&str) -> Option<*const ()>,
     {
         let base = core.base();
-        for rela in self.pltrel {
-            let r_type = rela.r_type() as u32;
-            let r_sym = rela.r_symbol();
+        for rel in self.pltrel {
+            let r_type = rel.r_type() as u32;
+            let r_sym = rel.r_symbol();
+            let r_addend = rel.r_addend(base);
             // S
             // 对于.rela.plt来说通常只有这两种重定位类型
             if likely(r_type == REL_JUMP_SLOT) {
@@ -260,16 +261,15 @@ impl ElfRelocation {
                 if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
                     find_symdef(core, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
                 }) {
-                    write_val(base, rela.r_offset(), symbol as usize);
+                    write_val(base, rel.r_offset(), symbol as usize);
                     continue;
                 }
             } else if unlikely(r_type == REL_IRELATIVE) {
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + rela.r_addend()) };
-                write_val(base, rela.r_offset(), ifunc());
+                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + r_addend) };
+                write_val(base, rel.r_offset(), ifunc());
                 continue;
             }
-            deal_unknown(&rela, &core)
-                .map_err(|err| reloc_error(r_type as _, r_sym, err, &core))?;
+            deal_unknown(&rel, &core).map_err(|err| reloc_error(r_type as _, r_sym, err, &core))?;
         }
         Ok(())
     }
@@ -277,11 +277,12 @@ impl ElfRelocation {
     fn relocate_pltrel_lazy(&self, core: &CoreComponent, got: *mut usize) -> Result<()> {
         // 开启lazy bind后会跳过plt相关的重定位
         let base = core.base();
-        for rela in self.pltrel {
-            let r_type = rela.r_type() as u32;
+        for rel in self.pltrel {
+            let r_type = rel.r_type() as u32;
+            let r_addend = rel.r_addend(base);
             // S
             if likely(r_type == REL_JUMP_SLOT) {
-                let ptr = (base + rela.r_offset()) as *mut usize;
+                let ptr = (base + rel.r_offset()) as *mut usize;
                 // 即使是延迟加载也需要进行简单重定位，好让plt代码能够正常工作
                 unsafe {
                     let origin_val = ptr.read();
@@ -289,8 +290,8 @@ impl ElfRelocation {
                     ptr.write(new_val);
                 }
             } else if unlikely(r_type == REL_IRELATIVE) {
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + rela.r_addend()) };
-                write_val(base, rela.r_offset(), ifunc());
+                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + r_addend) };
+                write_val(base, rel.r_offset(), ifunc());
             } else {
                 unreachable!()
             }
@@ -303,10 +304,11 @@ impl ElfRelocation {
 
     fn relocate_relative(&self, base: usize) {
         assert!(!(self.relative.len() > 0 && self.relative[0].r_type() != REL_RELATIVE as usize));
-        self.relative.into_iter().for_each(|rela| {
+        self.relative.into_iter().for_each(|rel| {
             // B + A
-            debug_assert!(rela.r_type() == REL_RELATIVE as usize);
-            write_val(base, rela.r_offset(), base + rela.r_addend());
+            debug_assert!(rel.r_type() == REL_RELATIVE as usize);
+            let r_addend = rel.r_addend(base);
+            write_val(base, rel.r_offset(), base + r_addend);
         });
     }
 
@@ -328,9 +330,10 @@ impl ElfRelocation {
         */
 
         let base = core.base();
-        for rela in self.dynrel {
-            let r_type = rela.r_type() as _;
-            let r_sym = rela.r_symbol();
+        for rel in self.dynrel {
+            let r_type = rel.r_type() as _;
+            let r_sym = rel.r_symbol();
+            let r_addend = rel.r_addend(base);
             match r_type {
                 // REL_GOT: S  REL_SYMBOLIC: S + A
                 REL_GOT | REL_SYMBOLIC => {
@@ -338,7 +341,7 @@ impl ElfRelocation {
                     if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
                         find_symdef(core, &scope, dynsym, &syminfo).map(|symdef| symdef.convert())
                     }) {
-                        write_val(base, rela.r_offset(), symbol as usize);
+                        write_val(base, rel.r_offset(), symbol as usize);
                         continue;
                     }
                 }
@@ -346,9 +349,9 @@ impl ElfRelocation {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                     if let Some(symdef) = find_symdef(core, &scope, dynsym, &syminfo) {
                         // offset in tls
-                        let tls_val = (symdef.sym.unwrap().st_value() + rela.r_addend())
+                        let tls_val = (symdef.sym.unwrap().st_value() + r_addend)
                             .wrapping_sub(TLS_DTV_OFFSET);
-                        write_val(base, rela.r_offset(), tls_val);
+                        write_val(base, rel.r_offset(), tls_val);
                         continue;
                     }
                 }
@@ -356,7 +359,7 @@ impl ElfRelocation {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                     if let Some(symbol) = find_symdef(core, &scope, dynsym, &syminfo) {
                         let len = symbol.sym.unwrap().st_size();
-                        let dest = core.segments().get_slice_mut::<u8>(rela.r_offset(), len);
+                        let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
                         let src = core
                             .segments()
                             .get_slice(symbol.sym.unwrap().st_value(), len);
@@ -367,13 +370,12 @@ impl ElfRelocation {
                 _ => {}
             }
             if unlikely(r_type == REL_RELATIVE) {
-                write_val(base, rela.r_offset(), base + rela.r_addend());
+                write_val(base, rel.r_offset(), base + r_addend);
                 continue;
             } else if unlikely(r_type == REL_NONE) {
                 continue;
             }
-            deal_unknown(&rela, &core)
-                .map_err(|err| reloc_error(r_type as _, r_sym, err, &core))?;
+            deal_unknown(&rel, &core).map_err(|err| reloc_error(r_type as _, r_sym, err, &core))?;
         }
         Ok(())
     }

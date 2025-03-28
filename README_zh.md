@@ -79,6 +79,7 @@ Found 11 outliers among 100 measurements (11.00%)
 | mmap        | 在加载elf文件时，使用有mmap的平台上的默认实现                                                 |
 | version     | 在解析符号时使用符号的版本信息                                                                |
 | log         | 启用日志                                                                                      |
+| rel         | 将rel作为重定位条目的格式                                                                     |
 
 在没有操作系统的情况下请关闭`fs`，`use-syscall`，`use-libc`和`mmap`这四个feature。
 
@@ -90,6 +91,8 @@ Found 11 outliers among 100 measurements (11.00%)
 | aarch64     | ✅    | ✅        | ✅(CI)   |
 | riscv64     | ✅    | ✅        | ✅(CI)   |
 | loongarch64 | ✅    | ❌        | ✅(QEMU) |
+| x86         | ✅    | ❌        | ✅(QEMU) |
+| arm         | ✅    | ❌        | ✅(QEMU) |
 
 # 示例
 ## 加载一个简单的动态库

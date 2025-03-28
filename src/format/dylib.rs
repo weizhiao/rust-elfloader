@@ -1,7 +1,7 @@
 use super::{CoreComponentRef, ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, Result, UserData,
-    arch::{ElfPhdr, ElfRela},
+    arch::{ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     loader::Builder,
     mmap::Mmap,
@@ -89,7 +89,7 @@ impl ElfDylib {
     where
         S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRela, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
+        D: Fn(&ElfRelType, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -105,7 +105,7 @@ impl ElfDylib {
             .collect();
         let scope_clone = scope.clone();
         let wrapper =
-            |rela: &ElfRela, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
+            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
         Ok(RelocatedDylib {
             core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
         })

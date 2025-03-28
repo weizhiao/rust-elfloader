@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     Result,
-    arch::{Dyn, ElfRela},
+    arch::{Dyn, ElfRel, ElfRelType, ElfRela},
     parse_dynamic_error,
     segment::ElfSegments,
 };
@@ -39,6 +39,7 @@ impl ElfDynamic {
         let mut rpath_off = None;
         let mut runpath_off = None;
         let mut flags = 0;
+        let mut is_rela = None;
         let mut needed_libs = Vec::new();
 
         let mut cur_dyn_ptr = dynamic_ptr;
@@ -47,7 +48,7 @@ impl ElfDynamic {
 
         unsafe {
             loop {
-                match dynamic.d_tag {
+                match dynamic.d_tag as _ {
                     DT_FLAGS => flags = dynamic.d_un as usize,
                     DT_PLTGOT => got_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_NEEDED => {
@@ -59,14 +60,20 @@ impl ElfDynamic {
                     DT_PLTRELSZ => {
                         pltrel_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
+                    DT_PLTREL => {
+                        is_rela = Some(dynamic.d_un as i64 == DT_RELA);
+                    }
                     DT_JMPREL => {
                         pltrel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
-                    DT_RELA => rela_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
-                    DT_RELASZ => {
+                    DT_RELA | DT_REL => {
+                        is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
+                        rela_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                    }
+                    DT_RELASZ | DT_RELSZ => {
                         rela_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
-                    DT_RELACOUNT => {
+                    DT_RELACOUNT | DT_RELCOUNT => {
                         rela_count = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_INIT => init_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
@@ -110,6 +117,12 @@ impl ElfDynamic {
                 cur_dyn_ptr = cur_dyn_ptr.add(1);
                 dynamic = &*cur_dyn_ptr;
             }
+        }
+        if let Some(is_rela) = is_rela {
+            assert!(
+                is_rela && size_of::<ElfRelType>() == size_of::<ElfRela>()
+                    || !is_rela && size_of::<ElfRelType>() == size_of::<ElfRel>()
+            );
         }
         let hash_off = hash_off.ok_or(parse_dynamic_error(
             "dynamic section does not have DT_GNU_HASH",
@@ -190,12 +203,12 @@ pub struct ElfDynamic {
     pub init_array_fn: Option<&'static [extern "C" fn()]>,
     /// DT_FINI
     pub fini_fn: Option<extern "C" fn()>,
-    /// /// DT_FINI_ARRAY
+    /// DT_FINI_ARRAY
     pub fini_array_fn: Option<&'static [extern "C" fn()]>,
     /// DT_JMPREL
-    pub pltrel: Option<&'static [ElfRela]>,
+    pub pltrel: Option<&'static [ElfRelType]>,
     /// DT_RELA
-    pub dynrel: Option<&'static [ElfRela]>,
+    pub dynrel: Option<&'static [ElfRelType]>,
     /// DT_RELACOUNT
     pub rela_count: Option<NonZeroUsize>,
     /// DT_NEEDED

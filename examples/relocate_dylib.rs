@@ -27,6 +27,14 @@ fn compile() {
             TARGET_TRIPLE
                 .set("x86_64-unknown-linux-gnu".to_string())
                 .unwrap();
+        } else if arch.contains("x86") {
+            TARGET_TRIPLE
+                .set("i586-unknown-linux-gnu".to_string())
+                .unwrap();
+        } else if arch.contains("arm") {
+            TARGET_TRIPLE
+                .set("arm-unknown-linux-gnueabihf".to_string())
+                .unwrap();
         } else if arch.contains("riscv64") {
             TARGET_TRIPLE
                 .set("riscv64gc-unknown-linux-gnu".to_string())
