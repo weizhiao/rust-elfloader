@@ -91,8 +91,8 @@ Found 11 outliers among 100 measurements (11.00%)
 | aarch64     | ✅    | ✅        | ✅(CI)   |
 | riscv64     | ✅    | ✅        | ✅(CI)   |
 | loongarch64 | ✅    | ❌        | ✅(QEMU) |
-| x86         | ✅    | ❌        | ✅(QEMU) |
-| arm         | ✅    | ❌        | ✅(QEMU) |
+| x86         | ✅    | ❌        | ✅(CI) |
+| arm         | ✅    | ❌        | ✅(CI) |
 
 # 示例
 ## 加载一个简单的动态库

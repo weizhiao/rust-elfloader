@@ -3,7 +3,7 @@ mod fs {
     use elf_loader::{Elf, load, load_dylib, load_exec};
     use std::env::consts;
     use std::path::PathBuf;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::OnceLock;
     use std::{collections::HashMap, fs::File, io::Read};
 
     const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
@@ -28,6 +28,14 @@ mod fs {
             if arch.contains("x86_64") {
                 TARGET_TRIPLE
                     .set("x86_64-unknown-linux-gnu".to_string())
+                    .unwrap();
+            } else if arch.contains("x86") {
+                TARGET_TRIPLE
+                    .set("i586-unknown-linux-gnu".to_string())
+                    .unwrap();
+            } else if arch.contains("arm") {
+                TARGET_TRIPLE
+                    .set("arm-unknown-linux-gnueabihf".to_string())
                     .unwrap();
             } else if arch.contains("riscv64") {
                 TARGET_TRIPLE
@@ -89,8 +97,10 @@ mod fs {
         assert!(f() == 3);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn lazy_binding() {
+		use std::sync::Arc;
         compile();
         fn print(s: &str) {
             println!("{}", s);
