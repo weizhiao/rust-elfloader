@@ -3,7 +3,7 @@ mod fs {
     use elf_loader::{Elf, load, load_dylib, load_exec};
     use std::env::consts;
     use std::path::PathBuf;
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
     use std::{collections::HashMap, fs::File, io::Read};
 
     const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
@@ -106,7 +106,7 @@ mod fs {
                 [&a].into_iter(),
                 &pre_find,
                 |_, _, _| Err(Box::new(())),
-                Some(Box::new(|name| unsafe {
+                Some(Arc::new(|name| unsafe {
                     a.get::<()>(name)
                         .map(|sym| sym.into_raw())
                         .or_else(|| pre_find(name))
