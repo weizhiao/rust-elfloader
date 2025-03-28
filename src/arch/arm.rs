@@ -21,6 +21,15 @@ global_asm!(
 	.type dl_runtime_resolve, %function
 	.align 16
 dl_runtime_resolve:
+    push {{r0, r1, r2, r3, r4}}
+    ldr r0, [lr, #-4]
+    add r1, lr, #4 
+	sub r1, ip, r1
+    lsr r1, r1, 2
+    bl dl_fixup
+    mov	ip, r0
+    pop	{{r0, r1, r2, r3, r4, lr}}
+    bx ip
 "
 );
 
@@ -33,5 +42,4 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
         got.add(1).write(dylib);
         got.add(2).write(dl_runtime_resolve as usize);
     }
-    unimplemented!()
 }

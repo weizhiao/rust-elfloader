@@ -63,7 +63,7 @@ jobs:
       run: sh ci/run.sh
     strategy:
       matrix:
-         target: [ i586-unknown-linux-gnu]
+         target: [ i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
          channel: [ 1.85.0, stable ]
          features: [ "fs,mmap,use-syscall,rel", "fs,mmap,use-libc,rel" ]
 
