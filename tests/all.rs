@@ -97,7 +97,6 @@ mod fs {
         assert!(f() == 3);
     }
 
-    #[cfg(target_pointer_width = "64")]
     #[test]
     fn lazy_binding() {
 		use std::sync::Arc;

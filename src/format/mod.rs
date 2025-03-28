@@ -2,7 +2,16 @@ pub(crate) mod dylib;
 pub(crate) mod exec;
 
 use crate::{
-    arch::{Dyn, ElfPhdr, ElfRelType, ElfRela}, dynamic::ElfDynamic, loader::Builder, mmap::Mmap, object::{ElfObject, ElfObjectAsync}, parse_dynamic_error, relocation::LazyScope, segment::ElfSegments, symbol::SymbolTable, ELFRelro, ElfRelocation, Loader, Result
+    ELFRelro, ElfRelocation, Loader, Result,
+    arch::{Dyn, ElfPhdr, ElfRelType},
+    dynamic::ElfDynamic,
+    loader::Builder,
+    mmap::Mmap,
+    object::{ElfObject, ElfObjectAsync},
+    parse_dynamic_error,
+    relocation::LazyScope,
+    segment::ElfSegments,
+    symbol::SymbolTable,
 };
 use alloc::{
     boxed::Box,
@@ -258,7 +267,7 @@ pub(crate) struct CoreComponentInner {
     /// dynamic
     dynamic: Option<NonNull<Dyn>>,
     /// rela.plt
-    pub(crate) pltrel: Option<NonNull<ElfRela>>,
+    pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     /// phdrs
     phdrs: &'static [ElfPhdr],
     /// .fini

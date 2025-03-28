@@ -21,6 +21,16 @@ global_asm!(
 	.type dl_runtime_resolve, @function
 	.align 16
 dl_runtime_resolve:
+// 计算偏移
+	mov ecx, [esp + 4]
+	shr ecx, 3
+	mov [esp + 4], ecx
+// 与glibc不同,这里仍使用栈进行传参
+	call dl_fixup
+// 将函数的真正地址写回栈顶
+	mov [esp], eax
+// 清除plt代码压入栈中的东西,当执行完这条指令后栈顶保存的是plt代码对应的返回地址
+	ret 4
 "
 );
 
@@ -34,5 +44,4 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
         got.add(1).write(dylib);
         got.add(2).write(dl_runtime_resolve as usize);
     }
-    unimplemented!()
 }

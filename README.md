@@ -95,7 +95,7 @@ Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have 
 | aarch64     | ✅       | ✅            | ✅(CI)   |
 | riscv64     | ✅       | ✅            | ✅(CI)   |
 | loongarch64 | ✅       | ❌            | ✅(QEMU) |
-| x86         | ✅       | ❌            | ✅(CI) |
+| x86         | ✅       | ✅            | ✅(CI) |
 | arm         | ✅       | ❌            | ✅(CI) |
 
 # Example
