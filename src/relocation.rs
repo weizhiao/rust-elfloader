@@ -175,6 +175,11 @@ where
                         sym: None,
                         base: core.base(),
                     })
+                } else if dynsym.st_value() != 0 {
+                    Some(SymDef {
+                        sym: Some(dynsym),
+                        base: core.base(),
+                    })
                 } else {
                     None
                 }
