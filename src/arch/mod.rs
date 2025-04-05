@@ -45,7 +45,7 @@ cfg_if::cfg_if! {
         pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
         pub(crate) type Rel = elf::relocation::Elf64_Rel;
-        pub(crate) type Relr = elf::relocation::Elf64_Relr;
+        pub(crate) type Relr = u64;
         pub(crate) type Sym = elf::symbol::Elf64_Sym;
         pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
         pub(crate) const REL_BIT: usize = 32;
@@ -58,14 +58,34 @@ cfg_if::cfg_if! {
         pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
         pub(crate) type Rel = elf::relocation::Elf32_Rel;
-        pub(crate) type Relr = elf::relocation::Elf32_Relr;
-        pub(crate) type Sym = elf::symbol::Elf32_Sym;
+        pub(crate) type Relr = u32;
+        pub(crate) type Sym = Elf32Sym;
         pub(crate) const REL_MASK: usize = 0xFF;
         pub(crate) const REL_BIT: usize = 8;
         pub(crate) const PHDR_SIZE: usize = core::mem::size_of::<elf::segment::Elf32_Phdr>();
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
     }
 }
+
+#[repr(C)]
+pub struct Elf32Sym {
+    pub st_name: u32,
+    pub st_value: u32,
+    pub st_size: u32,
+    pub st_info: u8,
+    pub st_other: u8,
+    pub st_shndx: u16,
+}
+
+/// This element holds the total size, in bytes, of the DT_RELR relocation table.
+pub const DT_RELRSZ: i64 = 35;
+/// This element is similar to DT_RELA, except its table has implicit
+/// addends and info, such as Elf32_Relr for the 32-bit file class or
+/// Elf64_Relr for the 64-bit file class. If this element is present,
+/// the dynamic structure must also have DT_RELRSZ and DT_RELRENT elements.
+pub const DT_RELR: i64 = 36;
+/// This element holds the size, in bytes, of the DT_RELR relocation entry.
+pub const DT_RELRENT: i64 = 37;
 
 #[repr(transparent)]
 pub struct ElfRelr {
@@ -75,7 +95,7 @@ pub struct ElfRelr {
 impl ElfRelr {
     #[inline]
     pub fn value(&self) -> usize {
-        self.relr.0 as usize
+        self.relr as usize
     }
 }
 

@@ -69,6 +69,13 @@ Found 11 outliers among 100 measurements (11.00%)
 利用Rust的生命周期机制，在编译期检查elf文件的依赖库是否被提前销毁，大大提高了安全性。  
 比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs)中验证这一点）
 
+### ✨ 延迟绑定 ✨
+`elf_loader`支持延迟绑定，这意味着当一个符号被解析时，它不会被立即解析，而是会在第一次被调用时才被解析。
+
+### ✨ 支持RELR相对重定位格式 ✨
+`elf_loader`支持RELR相对重定位格式，有关RELR的详细内容可以看这里：[Relative relocations and RELR](https://maskray.me/blog/2021-10-31-relative-relocations-and-relr)。
+
+
 # Feature
 
 | 特性        | 描述                                                                                          |
@@ -120,10 +127,6 @@ fn main() {
     println!("{}", f());
 }
 ```
-
-# 未完成
-* 支持更多的CPU指令集。
-* 使用portable simd进一步优化性能。
 
 # 最低编译器版本支持
 Rust 1.85.0及以上

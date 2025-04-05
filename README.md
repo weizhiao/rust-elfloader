@@ -73,6 +73,12 @@ However, you need to implement the `Mmap` and `ElfObjectAsync` traits according 
 Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely.   
 For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs).)
 
+### ✨ Supports Lazy Binding ✨
+The `elf_loader` supports lazy binding, which means that when a symbol is resolved, it is not resolved immediately, but is instead resolved when it is first called.
+
+### ✨ Supports RELR relative relocation format ✨
+The `elf_loader` supports the RELR relative relocation format. For detailed information on RELR, please refer to: [Relative relocations and RELR](https://maskray.me/blog/2021-10-31-relative-relocations-and-relr).
+
 # Feature
 
 | Feature     | Description                                                                                                                                                                       |
@@ -123,10 +129,6 @@ fn main() {
     println!("{}", f());
 }
 ```
-
-# TODO
-* Support more CPU instruction sets.
-* Further optimize performance using portable simd.  
 
 # Minimum Supported Rust Version
 Rust 1.85 or higher.

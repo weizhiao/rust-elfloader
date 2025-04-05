@@ -1,9 +1,6 @@
 //! Parsing `.dynamic` section
 use crate::{
-    Result,
-    arch::{Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
-    parse_dynamic_error,
-    segment::ElfSegments,
+    arch::{Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr, DT_RELR, DT_RELRSZ}, parse_dynamic_error, segment::ElfSegments, Result
 };
 use alloc::vec::Vec;
 use core::{
