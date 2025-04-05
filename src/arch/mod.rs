@@ -23,9 +23,9 @@ cfg_if::cfg_if! {
         mod x86;
         pub use x86::*;
     }else if #[cfg(target_arch = "arm")]{
-		mod arm;
-		pub use arm::*;
-	}
+        mod arm;
+        pub use arm::*;
+    }
 }
 
 pub const REL_NONE: u32 = 0;
@@ -45,6 +45,7 @@ cfg_if::cfg_if! {
         pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
         pub(crate) type Rel = elf::relocation::Elf64_Rel;
+        pub(crate) type Relr = elf::relocation::Elf64_Relr;
         pub(crate) type Sym = elf::symbol::Elf64_Sym;
         pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
         pub(crate) const REL_BIT: usize = 32;
@@ -57,11 +58,24 @@ cfg_if::cfg_if! {
         pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
         pub(crate) type Rel = elf::relocation::Elf32_Rel;
+        pub(crate) type Relr = elf::relocation::Elf32_Relr;
         pub(crate) type Sym = elf::symbol::Elf32_Sym;
         pub(crate) const REL_MASK: usize = 0xFF;
         pub(crate) const REL_BIT: usize = 8;
         pub(crate) const PHDR_SIZE: usize = core::mem::size_of::<elf::segment::Elf32_Phdr>();
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
+    }
+}
+
+#[repr(transparent)]
+pub struct ElfRelr {
+    relr: Relr,
+}
+
+impl ElfRelr {
+    #[inline]
+    pub fn value(&self) -> usize {
+        self.relr.0 as usize
     }
 }
 
@@ -86,7 +100,7 @@ impl ElfRela {
         self.rela.r_offset as usize
     }
 
-	/// base is not used during execution. The base parameter is added only for the sake of interface consistency
+    /// base is not used during execution. The base parameter is added only for the sake of interface consistency
     #[inline]
     pub fn r_addend(&self, _base: usize) -> usize {
         self.rela.r_addend as usize

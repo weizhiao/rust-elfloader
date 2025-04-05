@@ -553,7 +553,12 @@ impl Builder {
                     .unwrap()
             });
 
-            let relocation = ElfRelocation::new(dynamic.pltrel, dynamic.dynrel, dynamic.rela_count);
+            let relocation = ElfRelocation::new(
+                dynamic.pltrel,
+                dynamic.dynrel,
+                dynamic.relr,
+                dynamic.rel_count,
+            );
             let symbols = SymbolTable::new(&dynamic);
             let needed_libs: Vec<&'static str> = dynamic
                 .needed_libs
@@ -599,7 +604,7 @@ impl Builder {
             if is_dylib {
                 return Err(parse_dynamic_error("dylib does not have dynamic"));
             }
-            let relocation = ElfRelocation::new(None, None, None);
+            let relocation = ElfRelocation::new(None, None, None, None);
             ElfCommonPart {
                 entry: self.ehdr.e_entry as usize,
                 relro: self.relro,

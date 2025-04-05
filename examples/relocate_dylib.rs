@@ -61,7 +61,9 @@ fn compile() {
                 .arg(TARGET_TRIPLE.get().unwrap().as_str())
                 .arg("--")
                 .arg("-C")
-                .arg("panic=abort");
+                .arg("panic=abort")
+                .arg("-C")
+                .arg("link-args=-Wl,--pack-dyn-relocs=relr");
             assert!(
                 cmd.status()
                     .expect("could not compile the test helpers!")

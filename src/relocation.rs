@@ -11,7 +11,7 @@ use core::{
     any::Any,
     marker::PhantomData,
     num::NonZeroUsize,
-    ptr::null,
+    ptr::{null, null_mut},
     sync::atomic::{AtomicUsize, Ordering},
 };
 use elf::abi::*;
@@ -72,8 +72,7 @@ where
 {
     let symtab = common.symtab().unwrap();
     let relocation = &common.relocation;
-    let base = common.base();
-    relocation.relocate_relative(base);
+    relocation.relocate_relative(&common);
     relocation.relocate_dynrel(&common, symtab, &scope, pre_find, &deal_unknown)?;
     if common.is_lazy() {
         relocation.relocate_pltrel_lazy(&common, common.got.unwrap().as_ptr())?;
@@ -126,10 +125,24 @@ unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> us
     symbol
 }
 
-#[derive(Default)]
+enum RelativeRel {
+    Rel(&'static [ElfRelType]),
+    Relr(&'static [ElfRelr]),
+}
+
+impl RelativeRel {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        match self {
+            RelativeRel::Rel(rel) => rel.is_empty(),
+            RelativeRel::Relr(relr) => relr.is_empty(),
+        }
+    }
+}
+
 pub(crate) struct ElfRelocation {
     // REL_RELATIVE
-    relative: &'static [ElfRelType],
+    relative: RelativeRel,
     // plt
     pltrel: &'static [ElfRelType],
     // others in dyn
@@ -221,25 +234,34 @@ impl ElfRelocation {
     pub(crate) fn new(
         pltrel: Option<&'static [ElfRelType]>,
         dynrel: Option<&'static [ElfRelType]>,
+        relr: Option<&'static [ElfRelr]>,
         rela_count: Option<NonZeroUsize>,
     ) -> Self {
-        // nrelative记录着REL_RELATIVE重定位类型的个数
-        let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
-        let old_dynrel = dynrel.unwrap_or(&[]);
-        let relative = &old_dynrel[..nrelative];
-        let temp_dynrel = &old_dynrel[nrelative..];
-        let pltrel = pltrel.unwrap_or(&[]);
-        let dynrel = if unsafe {
-            old_dynrel.as_ptr().add(old_dynrel.len()) == pltrel.as_ptr().add(pltrel.len())
-        } {
-            &temp_dynrel[..temp_dynrel.len() - pltrel.len()]
+        if let Some(relr) = relr {
+            Self {
+                relative: RelativeRel::Relr(relr),
+                pltrel: pltrel.unwrap_or(&[]),
+                dynrel: dynrel.unwrap_or(&[]),
+            }
         } else {
-            temp_dynrel
-        };
-        Self {
-            relative,
-            pltrel,
-            dynrel,
+            // nrelative记录着REL_RELATIVE重定位类型的个数
+            let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
+            let old_dynrel = dynrel.unwrap_or(&[]);
+            let relative = RelativeRel::Rel(&old_dynrel[..nrelative]);
+            let temp_dynrel = &old_dynrel[nrelative..];
+            let pltrel = pltrel.unwrap_or(&[]);
+            let dynrel = if unsafe {
+                old_dynrel.as_ptr().add(old_dynrel.len()) == pltrel.as_ptr().add(pltrel.len())
+            } {
+                &temp_dynrel[..temp_dynrel.len() - pltrel.len()]
+            } else {
+                temp_dynrel
+            };
+            Self {
+                relative,
+                pltrel,
+                dynrel,
+            }
         }
     }
 
@@ -307,14 +329,44 @@ impl ElfRelocation {
         Ok(())
     }
 
-    fn relocate_relative(&self, base: usize) {
-        assert!(!(self.relative.len() > 0 && self.relative[0].r_type() != REL_RELATIVE as usize));
-        self.relative.into_iter().for_each(|rel| {
-            // B + A
-            debug_assert!(rel.r_type() == REL_RELATIVE as usize);
-            let r_addend = rel.r_addend(base);
-            write_val(base, rel.r_offset(), base + r_addend);
-        });
+    fn relocate_relative(&self, core: &CoreComponent) {
+        let base = core.base();
+        match self.relative {
+            RelativeRel::Rel(rel) => {
+                assert!(!(rel.len() > 0 && rel[0].r_type() != REL_RELATIVE as usize));
+                rel.into_iter().for_each(|rel| {
+                    // B + A
+                    debug_assert!(rel.r_type() == REL_RELATIVE as usize);
+                    let r_addend = rel.r_addend(base);
+                    write_val(base, rel.r_offset(), base + r_addend);
+                })
+            }
+            RelativeRel::Relr(relr) => {
+                let mut reloc_addr: *mut usize = null_mut();
+                relr.into_iter().for_each(|relr| {
+                    let value = relr.value();
+                    unsafe {
+                        if (value & 1) == 0 {
+                            reloc_addr = core.segments().get_mut_ptr(value);
+                            reloc_addr.write(base + reloc_addr.read());
+                            reloc_addr = reloc_addr.add(1);
+                        } else {
+                            let mut bitmap = value;
+                            let mut idx = 0;
+                            while bitmap != 0 {
+								bitmap >>= 1;
+                                if (bitmap & 1) != 0 {
+                                    let ptr = reloc_addr.add(idx);
+                                    ptr.write(base + ptr.read());
+                                }
+                                idx += 1;
+                            }
+                            reloc_addr = reloc_addr.add(8 * size_of::<usize>() - 1);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     fn relocate_dynrel<F>(

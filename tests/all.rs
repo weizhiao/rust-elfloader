@@ -99,7 +99,7 @@ mod fs {
 
     #[test]
     fn lazy_binding() {
-		use std::sync::Arc;
+        use std::sync::Arc;
         compile();
         fn print(s: &str) {
             println!("{}", s);

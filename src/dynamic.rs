@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     Result,
-    arch::{Dyn, ElfRel, ElfRelType, ElfRela},
+    arch::{Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
     parse_dynamic_error,
     segment::ElfSegments,
 };
@@ -22,9 +22,11 @@ impl ElfDynamic {
         let mut got_off = None;
         let mut pltrel_size = None;
         let mut pltrel_off = None;
-        let mut rela_off = None;
-        let mut rela_size = None;
-        let mut rela_count = None;
+        let mut rel_off = None;
+        let mut rel_size = None;
+        let mut rel_count = None;
+        let mut relr_off = None;
+        let mut relr_size = None;
         let mut init_off = None;
         let mut fini_off = None;
         let mut init_array_off = None;
@@ -66,15 +68,19 @@ impl ElfDynamic {
                     DT_JMPREL => {
                         pltrel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
+                    DT_RELR => relr_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_RELA | DT_REL => {
                         is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
-                        rela_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_RELASZ | DT_RELSZ => {
-                        rela_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                    }
+                    DT_RELRSZ => {
+                        relr_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_RELACOUNT | DT_RELCOUNT => {
-                        rela_count = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_count = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_INIT => init_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_FINI => fini_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
@@ -130,7 +136,9 @@ impl ElfDynamic {
         let pltrel = pltrel_off
             .map(|pltrel_off| segments.get_slice(pltrel_off.get(), pltrel_size.unwrap().get()));
         let dynrel =
-            rela_off.map(|rel_off| segments.get_slice(rel_off.get(), rela_size.unwrap().get()));
+            rel_off.map(|rel_off| segments.get_slice(rel_off.get(), rel_size.unwrap().get()));
+        let relr =
+            relr_off.map(|relr_off| segments.get_slice(relr_off.get(), relr_size.unwrap().get()));
         let init_fn = init_off
             .map(|val| unsafe { core::mem::transmute(segments.get_ptr::<fn()>(val.get())) });
         let init_array_fn = init_array_off.map(|init_array_off| {
@@ -170,11 +178,12 @@ impl ElfDynamic {
             needed_libs,
             pltrel,
             dynrel,
+            relr,
             init_fn,
             init_array_fn,
             fini_fn,
             fini_array_fn,
-            rela_count,
+            rel_count,
             rpath_off,
             runpath_off,
             version_idx,
@@ -209,8 +218,10 @@ pub struct ElfDynamic {
     pub pltrel: Option<&'static [ElfRelType]>,
     /// DT_RELA
     pub dynrel: Option<&'static [ElfRelType]>,
+    /// DT_RELR
+    pub relr: Option<&'static [ElfRelr]>,
     /// DT_RELACOUNT
-    pub rela_count: Option<NonZeroUsize>,
+    pub rel_count: Option<NonZeroUsize>,
     /// DT_NEEDED
     pub needed_libs: Vec<NonZeroUsize>,
     /// DT_VERSYM
