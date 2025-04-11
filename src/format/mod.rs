@@ -50,7 +50,7 @@ impl UserData {
 
     #[inline]
     pub fn insert(&mut self, key: u8, value: Box<dyn Any>) -> Option<Box<dyn Any>> {
-        for item in self.data.iter_mut() {
+        for item in &mut self.data {
             if item.key == key {
                 let old = core::mem::take(&mut item.value);
                 item.value = Some(value);
@@ -98,11 +98,9 @@ impl ElfInit {
                 .iter()
                 .chain(self.init_array_fn.unwrap_or(&[]).iter())
                 .for_each(|init| unsafe {
-                    core::mem::transmute::<_, extern "C" fn(c_int, usize, usize)>(*init)(
-                        init_params.argc as _,
-                        init_params.argv,
-                        init_params.envp,
-                    );
+                    core::mem::transmute::<extern "C" fn(), extern "C" fn(c_int, usize, usize)>(
+                        *init,
+                    )(init_params.argc as _, init_params.argv, init_params.envp);
                 });
         } else {
             self.init_fn
@@ -166,8 +164,8 @@ impl Deref for Elf {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Elf::Dylib(elf_dylib) => &elf_dylib,
-            Elf::Exec(elf_exec) => &elf_exec,
+            Elf::Dylib(elf_dylib) => elf_dylib,
+            Elf::Exec(elf_exec) => elf_exec,
         }
     }
 }
@@ -313,17 +311,19 @@ pub struct CoreComponent {
     pub(crate) inner: Arc<CoreComponentInner>,
 }
 
-unsafe impl Sync for CoreComponent {}
-unsafe impl Send for CoreComponent {}
+unsafe impl Sync for CoreComponentInner {}
+unsafe impl Send for CoreComponentInner {}
 
 impl CoreComponent {
     #[inline]
-    pub(crate) fn set_lazy_scope(&self, lazy_scope: Option<LazyScope>) {
+    pub(crate) fn set_lazy_scope(&self, lazy_scope: LazyScope) {
         // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
         unsafe {
             let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner);
             // 在relocate接口处保证了lazy_scope的声明周期，因此这里直接转换
-            ptr.lazy_scope = core::mem::transmute(lazy_scope);
+            ptr.lazy_scope = Some(core::mem::transmute::<LazyScope<'_>, LazyScope<'static>>(
+                lazy_scope,
+            ));
         };
     }
 
@@ -373,7 +373,7 @@ impl CoreComponent {
     /// Gets the short name of the elf object.
     #[inline]
     pub fn shortname(&self) -> &str {
-        self.name().split('/').last().unwrap()
+        self.name().split('/').next_back().unwrap()
     }
 
     /// Gets the base address of the elf object.
@@ -385,13 +385,13 @@ impl CoreComponent {
     /// Gets the memory length of the elf object map.
     #[inline]
     pub fn map_len(&self) -> usize {
-        self.inner.segments.len()
+        self.inner.segments.mmap_len()
     }
 
     /// Gets the program headers of the elf object.
     #[inline]
     pub fn phdrs(&self) -> &[ElfPhdr] {
-        &self.inner.phdrs
+        self.inner.phdrs
     }
 
     /// Gets the address of the dynamic section.
@@ -541,12 +541,10 @@ impl Builder {
                         let cur_range =
                             phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
                         if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
-                            return unsafe {
-                                Some(core::mem::transmute(self.segments.get_slice::<ElfPhdr>(
-                                    phdr.p_vaddr as usize + phdr_start - cur_range.start,
-                                    self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
-                                )))
-                            };
+                            return Some(self.segments.get_slice::<ElfPhdr>(
+                                phdr.p_vaddr as usize + phdr_start - cur_range.start,
+                                self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
+                            ));
                         }
                         None
                     })

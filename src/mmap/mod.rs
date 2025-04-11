@@ -1,11 +1,13 @@
 //! Map memory to address space
 cfg_if::cfg_if! {
     if #[cfg(feature = "mmap")]{
-        pub(crate) mod mmap;
-        pub use mmap::MmapImpl;
+        #[path = "mmap.rs"]
+        pub(crate) mod mmap_impl;
+        pub use mmap_impl::MmapImpl;
     }else {
-        pub(crate) mod no_mmap;
-        pub use no_mmap::MmapImpl;
+        #[path = "no_mmap.rs"]
+        pub(crate) mod no_mmap_impl;
+        pub use no_mmap_impl::MmapImpl;
     }
 }
 
@@ -32,7 +34,7 @@ bitflags! {
 }
 
 bitflags! {
-	#[derive(Clone, Copy)]
+    #[derive(Clone, Copy)]
      /// Additional parameters for [`mmap`].
      pub struct MapFlags: c_int {
         /// Create a private copy-on-write mapping. Mutually exclusive with `MAP_SHARED`.
@@ -56,13 +58,15 @@ pub trait Mmap {
     /// This function maps a file or bytes into memory at the specified address with the given protection and flags.
     ///
     /// # Arguments
-    /// * `addr` - An optional starting address for the mapping. The address is always aligned by page size(4096 or 65536).
-    /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096 or 65536).
+    /// * `addr` - An optional starting address for the mapping. The address is always aligned by page size(4096).
+    /// * `len` - The length of the memory region to map. The length is always aligned by page size(4096).
     /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
     /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
     /// * `offset` - The file offset.
     /// * `fd` - The file descriptor.
     /// * `need_copy` - It is set to false if the mmap function can do the job of segment copying on its own, and to true otherwise.
+    /// # Safety
+    /// This depends on the correctness of the trait implementation.
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,
@@ -80,6 +84,9 @@ pub trait Mmap {
     /// * `len` - The length of the memory region to map.
     /// * `prot` - The protection options for the mapping.
     /// * `flags` - The flags controlling the details of the mapping.
+    ///
+    /// # Safety
+    /// This depends on the correctness of the trait implementation.
     unsafe fn mmap_anonymous(
         addr: usize,
         len: usize,
@@ -92,6 +99,8 @@ pub trait Mmap {
     /// # Arguments
     /// * `addr` - A `NonNull` pointer to the start of the memory region to unmap.
     /// * `len` - The length of the memory region to unmap.
+    /// # Safety
+    /// This depends on the correctness of the trait implementation.
     unsafe fn munmap(addr: NonNull<c_void>, len: usize) -> Result<()>;
 
     /// Changes the protection of a memory region.
@@ -102,5 +111,7 @@ pub trait Mmap {
     /// * `addr` - A `NonNull` pointer to the start of the memory region to protect.
     /// * `len` - The length of the memory region to protect.
     /// * `prot` - The new protection options for the mapping.
+    /// # Safety
+    /// This depends on the correctness of the trait implementation.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
 }

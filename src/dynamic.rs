@@ -1,12 +1,14 @@
 //! Parsing `.dynamic` section
 use crate::{
-    arch::{Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr, DT_RELR, DT_RELRSZ}, parse_dynamic_error, segment::ElfSegments, Result
+    Result,
+    arch::{DT_RELR, DT_RELRSZ, Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
+    parse_dynamic_error,
+    segment::ElfSegments,
 };
 use alloc::vec::Vec;
 use core::{
     num::NonZeroUsize,
     ptr::{NonNull, null_mut},
-    usize,
 };
 use elf::abi::*;
 
@@ -67,7 +69,7 @@ impl ElfDynamic {
                     }
                     DT_RELR => relr_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_RELA | DT_REL => {
-                        is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
+                        is_rela = Some(dynamic.d_tag == DT_RELA);
                         rel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_RELASZ | DT_RELSZ => {

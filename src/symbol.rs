@@ -37,7 +37,7 @@ impl ElfGnuHash {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
         let mut hash = 5381u32;
         for byte in name {
@@ -126,8 +126,8 @@ impl PreCompute {
         let hash = ElfGnuHash::gnu_hash(name.as_bytes());
         PreCompute {
             hash,
-            fofs: hash as usize / (8 * size_of::<usize>()),
-            fmask: 1 << hash % (8 * size_of::<usize>() as u32),
+            fofs: hash as usize / usize::BITS as usize,
+            fmask: 1 << (hash % (8 * size_of::<usize>() as u32)),
         }
     }
 }
@@ -147,7 +147,7 @@ impl<'symtab> SymbolInfo<'symtab> {
     /// Gets the name of the symbol.
     #[inline]
     pub fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     /// Gets the C-style name of the symbol.
@@ -193,7 +193,7 @@ impl SymbolTable {
             return None;
         }
         let filter2 =
-            filter >> ((hash >> self.hashtab.header.nshift) as usize % (8 * size_of::<usize>()));
+            filter >> ((hash >> self.hashtab.header.nshift) as usize % usize::BITS as usize);
         if filter2 & 1 == 0 {
             return None;
         }
@@ -253,13 +253,13 @@ impl SymbolTable {
     ) -> (&'symtab ElfSymbol, SymbolInfo<'symtab>) {
         let symbol = unsafe { &*self.symtab.add(idx) };
         let cname = self.strtab.get_cstr(symbol.st_name());
-        let name = ElfStringTable::convert_cstr(&cname);
+        let name = ElfStringTable::convert_cstr(cname);
         (
             symbol,
             SymbolInfo {
                 name,
                 data: PreCompute::new(name),
-                cname: Some(&cname),
+                cname: Some(cname),
                 #[cfg(feature = "version")]
                 version: self.get_requirement(idx),
             },

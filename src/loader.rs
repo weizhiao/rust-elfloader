@@ -190,7 +190,7 @@ fn create_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize) {
     let mut min_prot = 0;
 
     //找到最小的偏移地址和最大的偏移地址
-    for phdr in phdrs.iter() {
+    for phdr in phdrs {
         if phdr.p_type == PT_LOAD {
             let vaddr_start = phdr.p_vaddr as usize;
             let vaddr_end = (phdr.p_vaddr + phdr.p_memsz) as usize;
@@ -208,7 +208,7 @@ fn create_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize) {
 
     // 按页对齐
     max_vaddr = (max_vaddr + PAGE_SIZE - 1) & MASK;
-    min_vaddr &= MASK as usize;
+    min_vaddr &= MASK;
     let total_size = max_vaddr - min_vaddr;
     let prot = ElfSegments::map_prot(min_prot);
     (
@@ -388,24 +388,6 @@ impl ElfBuf {
     }
 
     #[inline]
-    fn get_phdrs_from_stack(&self, phdr_start: usize, phdr_end: usize) -> Option<&[ElfPhdr]> {
-        if Self::MAX_BUF_SIZE >= phdr_end {
-            unsafe {
-                Some(core::slice::from_raw_parts(
-                    self.stack_buf
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(phdr_start)
-                        .cast::<ElfPhdr>(),
-                    (phdr_end - phdr_start) / size_of::<Phdr>(),
-                ))
-            }
-        } else {
-            None
-        }
-    }
-
-    #[inline]
     fn heap_buf(&mut self) -> &mut Vec<u8> {
         &mut self.heap_buf
     }
@@ -425,24 +407,32 @@ impl ElfBuf {
         ElfHeader::new(self.stack_buf()).cloned()
     }
 
-    pub(crate) fn prepare_phdr<'buf>(
+    pub(crate) fn prepare_phdr(
         &mut self,
         ehdr: &ElfHeader,
         object: &mut impl ElfObject,
-    ) -> Result<&'buf [ElfPhdr]> {
+    ) -> Result<&[ElfPhdr]> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let phdrs = if let Some(phdrs) = self.get_phdrs_from_stack(phdr_start, phdr_end) {
-            phdrs
+        if Self::MAX_BUF_SIZE >= phdr_end {
+            unsafe {
+                Ok(core::slice::from_raw_parts(
+                    self.stack_buf
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(phdr_start)
+                        .cast::<ElfPhdr>(),
+                    (phdr_end - phdr_start) / size_of::<Phdr>(),
+                ))
+            }
         } else {
             self.heap_buf().resize(phdr_end - phdr_start, 0);
             object.read(self.heap_buf(), phdr_start)?;
-            self.get_phdrs_from_heap()
-        };
-        Ok(unsafe { core::mem::transmute(phdrs) })
+            Ok(self.get_phdrs_from_heap())
+        }
     }
 }
 
-pub(crate) type Hook<'hook> = Box<
+pub(crate) type Hook = Box<
     dyn Fn(&CStr, &ElfPhdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
 >;
 
@@ -453,17 +443,14 @@ where
 {
     pub(crate) init_params: Option<InitParams>,
     pub(crate) buf: ElfBuf,
-    hook: Option<
-        Box<
-            dyn Fn(
-                &CStr,
-                &ElfPhdr,
-                &ElfSegments,
-                &mut UserData,
-            ) -> core::result::Result<(), Box<dyn Any>>,
-        >,
-    >,
+    hook: Option<Hook>,
     _marker: PhantomData<M>,
+}
+
+impl<M: Mmap> Default for Loader<M> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<M: Mmap> Loader<M> {
@@ -490,7 +477,7 @@ impl<M: Mmap> Loader<M> {
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
         let buf = &mut self.buf.stack_buf()[0..EHDR_SIZE];
         object.read(buf, 0)?;
-        ElfHeader::new(&buf).cloned()
+        ElfHeader::new(buf).cloned()
     }
 
     pub fn read_phdr(
@@ -513,7 +500,7 @@ impl<M: Mmap> Loader<M> {
         let init_params = self.init_params;
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-        let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
+        let (param, min_vaddr) = create_segments(phdrs, ehdr.is_dylib());
         let memory = mmap_segment::<M>(&param, &mut object)?;
         let segments = ElfSegments {
             memory,
@@ -529,7 +516,7 @@ impl<M: Mmap> Loader<M> {
             init_params,
         );
         // 根据Phdr的类型进行不同操作
-        for phdr in phdrs.iter() {
+        for phdr in phdrs {
             if let Some(hook) = &self.hook {
                 builder.exec_hook(hook, phdr)?;
             }
@@ -556,7 +543,7 @@ impl<M: Mmap> Loader<M> {
         let init_params = self.init_params;
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-        let (param, min_vaddr) = create_segments(&phdrs, ehdr.is_dylib());
+        let (param, min_vaddr) = create_segments(phdrs, ehdr.is_dylib());
         let memory = mmap_segment_async::<M>(&param, &mut object).await?;
         let segments = ElfSegments {
             memory,
@@ -572,9 +559,9 @@ impl<M: Mmap> Loader<M> {
             init_params,
         );
         // 根据Phdr的类型进行不同操作
-        for phdr in phdrs.iter() {
+        for phdr in phdrs {
             if let Some(hook) = self.hook.as_ref() {
-                builder.exec_hook(&hook, phdr)?;
+                builder.exec_hook(hook, phdr)?;
             }
             match phdr.p_type {
                 // 将segment加载到内存中

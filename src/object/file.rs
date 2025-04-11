@@ -8,6 +8,9 @@ pub struct ElfFile {
 }
 
 impl ElfFile {
+    /// # Safety
+    ///
+    /// The `fd` passed in must be an owned file descriptor; in particular, it must be open.
     pub unsafe fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
         ElfFile {
             name: CString::new(path).unwrap(),
@@ -53,7 +56,7 @@ mod imp {
 
     fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
         loop {
-            if bytes.len() == 0 {
+            if bytes.is_empty() {
                 return Ok(());
             }
             // 尝试读取剩余的字节数
@@ -67,12 +70,11 @@ mod imp {
             } else if result == 0 {
                 // 意外到达文件末尾
                 return Err(io_error("failed to fill buffer"));
-            } else {
-                // 成功读取了部分字节
-                let n = result as usize;
-                // 更新剩余需要读取的部分
-                bytes = &mut bytes[n..];
             }
+            // 成功读取了部分字节
+            let n = result as usize;
+            // 更新剩余需要读取的部分
+            bytes = &mut bytes[n..];
         }
     }
 

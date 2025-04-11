@@ -37,7 +37,7 @@ mod imp {
                     offset as _,
                 )
             };
-            if ptr == libc::MAP_FAILED {
+            if core::ptr::eq(ptr, libc::MAP_FAILED) {
                 return Err(map_error("mmap failed"));
             }
             Ok(unsafe { NonNull::new_unchecked(ptr) })
@@ -59,7 +59,7 @@ mod imp {
                     0,
                 )
             };
-            if ptr == libc::MAP_FAILED {
+            if core::ptr::eq(ptr, libc::MAP_FAILED) {
                 return Err(map_error("mmap anonymous failed"));
             }
             Ok(unsafe { NonNull::new_unchecked(ptr) })

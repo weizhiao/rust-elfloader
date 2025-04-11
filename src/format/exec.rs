@@ -96,12 +96,14 @@ impl ElfExec {
         let mut helper = Vec::new();
         if let Some(symtab) = self.symtab() {
             helper.push(unsafe {
-                core::mem::transmute(RelocateHelper {
-                    base: self.base(),
-                    symtab,
-                    #[cfg(feature = "log")]
-                    lib_name: self.name(),
-                })
+                core::mem::transmute::<RelocateHelper<'_>, RelocateHelper<'static>>(
+                    RelocateHelper {
+                        base: self.base(),
+                        symtab,
+                        #[cfg(feature = "log")]
+                        lib_name: self.name(),
+                    },
+                )
             });
         }
         scope.clone().for_each(|lib| {
@@ -112,9 +114,8 @@ impl ElfExec {
                 lib_name: lib.name(),
             })
         });
-        let scope_clone = scope.clone();
         let wrapper =
-            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
+            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
         Ok(RelocatedExec {
             entry: self.entry,
             core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,

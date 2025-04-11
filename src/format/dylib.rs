@@ -77,7 +77,7 @@ impl ElfDylib {
     /// * During relocation, the symbol is first searched in the function closure `pre_find`.
     /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * Typically, the `scope` should also contain the current dynamic library itself,
-    /// relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    ///   relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
         self,
@@ -103,9 +103,8 @@ impl ElfDylib {
                 lib_name: lib.name(),
             })
             .collect();
-        let scope_clone = scope.clone();
         let wrapper =
-            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope_clone.clone());
+            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
         Ok(RelocatedDylib {
             core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
@@ -201,6 +200,8 @@ impl RelocatedDylib<'_> {
         &self.core
     }
 
+    /// # Safety
+    /// The caller needs to ensure that the parameters passed in come from a valid dynamic library.
     #[inline]
     pub unsafe fn new_uncheck(
         name: CString,

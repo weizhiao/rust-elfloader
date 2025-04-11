@@ -19,7 +19,7 @@ impl<'bytes> ElfBinary<'bytes> {
 
 impl<'bytes> ElfObject for ElfBinary<'bytes> {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
-        buf.copy_from_slice(&self.bytes[offset..offset + &buf.len()]);
+        buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
         Ok(())
     }
 

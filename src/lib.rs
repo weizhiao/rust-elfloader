@@ -9,27 +9,40 @@
 //! ```rust, ignore
 //! use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
 //! use std::collections::HashMap;
-//! fn main() {
-//!     fn print(s: &str) {
-//!         println!("{}", s);
-//!     }
-//! 	// Symbols required by dynamic library liba.so
-//!     let mut map = HashMap::new();
-//!     map.insert("print", print as _);
-//!     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-//! 	// Load dynamic library liba.so
-//! 	let mut loader = Loader::<MmapImpl>::new();
-//!     let liba = loader
-//!         .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-//!         .unwrap();
-//! 	// Relocate symbols in liba.so
-//!     let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
-//! 	// Call function a in liba.so
-//!     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
-//!     f();
+//!
+//! fn print(s: &str) {
+//!     println!("{}", s);
 //! }
+//! // Symbols required by dynamic library liba.so
+//! let mut map = HashMap::new();
+//! map.insert("print", print as _);
+//! let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+//! // Load dynamic library liba.so
+//! let mut loader = Loader::<MmapImpl>::new();
+//! let liba = loader
+//!     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+//!     .unwrap();
+//!     // Relocate symbols in liba.so
+//! let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+//! // Call function a in liba.so
+//! let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
+//! f();
 //! ```
 #![no_std]
+#![warn(
+    clippy::unnecessary_wraps,
+	clippy::unnecessary_lazy_evaluations,
+    clippy::collapsible_if,
+    clippy::cast_lossless,
+    clippy::explicit_iter_loop,
+    clippy::manual_assert,
+    clippy::needless_question_mark,
+    clippy::needless_return,
+    clippy::needless_update,
+	clippy::redundant_clone,
+    clippy::redundant_else,
+    clippy::redundant_static_lifetimes
+)]
 extern crate alloc;
 
 #[cfg(not(any(
@@ -172,8 +185,8 @@ fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any>) -> Error {
 ///
 /// # Parameters
 /// - `f`: A function that takes a symbol name as a parameter and returns an optional raw pointer.
-///        If the symbol is found in the global scope, the function should return `Some(raw_pointer)`,
-///        otherwise, it should return `None`.
+///   If the symbol is found in the global scope, the function should return `Some(raw_pointer)`,
+///   otherwise, it should return `None`.
 ///
 /// # Return
 /// This function does not return a value. It sets the global scope for lazy binding.
