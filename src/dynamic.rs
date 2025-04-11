@@ -69,7 +69,7 @@ impl ElfDynamic {
                     }
                     DT_RELR => relr_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_RELA | DT_REL => {
-                        is_rela = Some(dynamic.d_tag == DT_RELA);
+                        is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
                         rel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
                     DT_RELASZ | DT_RELSZ => {

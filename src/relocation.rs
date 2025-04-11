@@ -71,11 +71,12 @@ where
     'find: 'lib,
 {
     let symtab = common.symtab().unwrap();
-    let relocation = &common.relocation;
-    relocation.relocate_relative(&common);
-    relocation.relocate_dynrel(&common, symtab, &scope, pre_find, &deal_unknown)?;
+    let relocation = common.relocation();
+    let core = common.core_component_ref();
+    relocation.relocate_relative(core);
+    relocation.relocate_dynrel(core, symtab, &scope, pre_find, &deal_unknown)?;
     if common.is_lazy() {
-        relocation.relocate_pltrel_lazy(&common, common.got.unwrap().as_ptr());
+        relocation.relocate_pltrel_lazy(core, common.got().unwrap().as_ptr());
         assert!(
             relocation.pltrel.is_empty()
                 || local_lazy_scope.is_some()
@@ -83,18 +84,17 @@ where
             "neither local lazy scope nor global scope is set"
         );
         if let Some(lazy_scope) = local_lazy_scope {
-            common.set_lazy_scope(lazy_scope);
+            common.core_component_ref().set_lazy_scope(lazy_scope);
         }
     } else {
-        relocation.relocate_pltrel(&common, symtab, &scope, pre_find, &deal_unknown)?;
-        if let Some(relro) = common.relro {
+        relocation.relocate_pltrel(core, symtab, &scope, pre_find, &deal_unknown)?;
+        if let Some(relro) = common.relro() {
             relro.relro()?;
         }
     }
-    common.init.call_init();
-    common.core.set_init();
+    common.init();
     Ok(Relocated {
-        core: common.core,
+        core: common.core_component(),
         _marker: PhantomData,
     })
 }

@@ -11,11 +11,6 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
-/// An unrelocated executable file
-pub struct ElfExec {
-    pub(crate) common: ElfCommonPart,
-}
-
 impl Deref for ElfExec {
     type Target = ElfCommonPart;
 
@@ -24,11 +19,16 @@ impl Deref for ElfExec {
     }
 }
 
+/// An unrelocated executable file
+pub struct ElfExec {
+    pub(crate) common: ElfCommonPart,
+}
+
 impl Debug for ElfExec {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExec")
-            .field("name", &self.core.inner.name)
-            .field("needed_libs", &self.core.inner.needed_libs)
+            .field("name", &self.common.name())
+            .field("needed_libs", &self.common.needed_libs())
             .finish()
     }
 }
@@ -84,21 +84,21 @@ impl ElfExec {
         'iter: 'lib,
         'find: 'lib,
     {
-        if self.relocation.is_empty() {
+        if self.common.relocation().is_empty() {
             return Ok(RelocatedExec {
-                entry: self.entry,
+                entry: self.common.entry,
                 core: Relocated {
-                    core: self.common.core,
+                    core: self.common.core_component(),
                     _marker: PhantomData,
                 },
             });
         }
         let mut helper = Vec::new();
-        if let Some(symtab) = self.symtab() {
+        if let Some(symtab) = self.common.symtab() {
             helper.push(unsafe {
                 core::mem::transmute::<RelocateHelper<'_>, RelocateHelper<'static>>(
                     RelocateHelper {
-                        base: self.base(),
+                        base: self.common.base(),
                         symtab,
                         #[cfg(feature = "log")]
                         lib_name: self.name(),
@@ -117,7 +117,7 @@ impl ElfExec {
         let wrapper =
             |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
         Ok(RelocatedExec {
-            entry: self.entry,
+            entry: self.common.entry,
             core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
     }

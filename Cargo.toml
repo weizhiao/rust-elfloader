@@ -20,7 +20,12 @@ license = "MIT/Apache-2.0"
 rust-version = "1.85.0"
 
 [workspace]
-members = ["example_dylib/a", "example_dylib/b", "example_dylib/c"]
+members = [
+	"example_dylib/a",
+	"example_dylib/b",
+	"example_dylib/c",
+]
+exclude = ["mini-loader"]
 
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }
@@ -46,6 +51,7 @@ optional = true
 [dependencies]
 bitflags = "2.9.0"
 cfg-if = '1.0'
+delegate = "0.13.3"
 
 [dev-dependencies]
 criterion = "0.5.1"

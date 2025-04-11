@@ -31,7 +31,7 @@
 #![no_std]
 #![warn(
     clippy::unnecessary_wraps,
-	clippy::unnecessary_lazy_evaluations,
+    clippy::unnecessary_lazy_evaluations,
     clippy::collapsible_if,
     clippy::cast_lossless,
     clippy::explicit_iter_loop,
@@ -39,10 +39,11 @@
     clippy::needless_question_mark,
     clippy::needless_return,
     clippy::needless_update,
-	clippy::redundant_clone,
+    clippy::redundant_clone,
     clippy::redundant_else,
     clippy::redundant_static_lifetimes
 )]
+#![allow(clippy::len_without_is_empty, clippy::unnecessary_cast)]
 extern crate alloc;
 
 #[cfg(not(any(

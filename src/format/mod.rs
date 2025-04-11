@@ -21,13 +21,16 @@ use alloc::{
 };
 use core::{
     any::Any,
+    cell::LazyCell,
     ffi::{CStr, c_int},
     fmt::Debug,
     marker::PhantomData,
+    mem::forget,
     ops::Deref,
     ptr::{NonNull, null},
     sync::atomic::{AtomicBool, Ordering},
 };
+use delegate::delegate;
 use dylib::{ElfDylib, RelocatedDylib};
 use elf::abi::PT_LOAD;
 use exec::{ElfExec, RelocatedExec};
@@ -92,7 +95,7 @@ pub(crate) struct ElfInit {
 
 impl ElfInit {
     #[inline]
-    pub(crate) fn call_init(self) {
+    pub(crate) fn call_init(&self) {
         if let Some(init_params) = self.init_param {
             self.init_fn
                 .iter()
@@ -385,7 +388,7 @@ impl CoreComponent {
     /// Gets the memory length of the elf object map.
     #[inline]
     pub fn map_len(&self) -> usize {
-        self.inner.segments.mmap_len()
+        self.inner.segments.len()
     }
 
     /// Gets the program headers of the elf object.
@@ -453,35 +456,37 @@ impl Debug for CoreComponent {
     }
 }
 
-impl Deref for ElfCommonPart {
-    type Target = CoreComponent;
+struct ElfExtraData {
+    /// lazy binding
+    lazy: bool,
+    /// .got.plt
+    got: Option<NonNull<usize>>,
+    /// rela.dyn and rela.plt
+    relocation: ElfRelocation,
+    /// GNU_RELRO segment
+    relro: Option<ELFRelro>,
+    /// init
+    init: ElfInit,
+    /// DT_RPATH
+    rpath: Option<&'static str>,
+    /// DT_RUNPATH
+    runpath: Option<&'static str>,
+}
 
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
+struct LazyParse {
+    /// core component
+    core: CoreComponent,
+    /// extra data
+    extra: ElfExtraData,
 }
 
 pub struct ElfCommonPart {
     /// entry
     entry: usize,
-    /// .got.plt
-    pub(crate) got: Option<NonNull<usize>>,
-    /// rela.dyn and rela.plt
-    pub(crate) relocation: ElfRelocation,
-    /// GNU_RELRO segment
-    pub(crate) relro: Option<ELFRelro>,
-    /// init
-    pub(crate) init: ElfInit,
-    /// lazy binding
-    lazy: bool,
-    /// DT_RPATH
-    rpath: Option<&'static str>,
-    /// DT_RUNPATH
-    runpath: Option<&'static str>,
     /// PT_INTERP
     interp: Option<&'static str>,
-    /// core component
-    pub(crate) core: CoreComponent,
+    /// data parse lazy
+    data: LazyCell<Box<LazyParse>, Box<dyn FnOnce() -> Box<LazyParse>>>,
 }
 
 impl ElfCommonPart {
@@ -494,31 +499,31 @@ impl ElfCommonPart {
     /// Gets the core component reference of the elf object
     #[inline]
     pub fn core_component_ref(&self) -> &CoreComponent {
-        &self.core
+        &self.data.core
     }
 
     /// Gets the core component of the elf object
     #[inline]
     pub fn core_component(&self) -> CoreComponent {
-        self.core.clone()
+        self.data.core.clone()
     }
 
     /// Whether lazy binding is enabled for the current elf object.
     #[inline]
     pub fn is_lazy(&self) -> bool {
-        self.lazy
+        self.data.extra.lazy
     }
 
     /// Gets the DT_RPATH value.
     #[inline]
     pub fn rpath(&self) -> Option<&str> {
-        self.rpath
+        self.data.extra.rpath
     }
 
     /// Gets the DT_RUNPATH value.
     #[inline]
     pub fn runpath(&self) -> Option<&str> {
-        self.runpath
+        self.data.extra.runpath
     }
 
     /// Gets the PT_INTERP value.
@@ -526,11 +531,61 @@ impl ElfCommonPart {
     pub fn interp(&self) -> Option<&str> {
         self.interp
     }
+
+    #[inline]
+    pub(crate) fn got(&self) -> Option<NonNull<usize>> {
+        self.data.extra.got
+    }
+
+    #[inline]
+    pub(crate) fn relocation(&self) -> &ElfRelocation {
+        &self.data.extra.relocation
+    }
+
+    #[inline]
+    pub(crate) fn init(&self) {
+        self.data.core.set_init();
+        self.data.extra.init.call_init();
+    }
+
+    #[inline]
+    pub(crate) fn relro(&self) -> Option<&ELFRelro> {
+        self.data.extra.relro.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn user_data_mut(&mut self) -> Option<&mut UserData> {
+        // 因为从LazyCell中获取可变引用是unstable feature，所以这里使用unsafe方法
+        // 获取可变引用，然后通过forget释放掉Arc，避免Arc的计数器减1，导致Arc被释放。
+        let mut temp_inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.data.core.inner)) };
+        let user_data = unsafe {
+            core::mem::transmute::<Option<&mut UserData>, Option<&mut UserData>>(
+                Arc::get_mut(&mut temp_inner).map(|inner| &mut inner.user_data),
+            )
+        };
+        forget(temp_inner);
+        user_data
+    }
+
+    delegate! {
+        to self.data.core{
+            pub(crate) fn symtab(&self) -> Option<&SymbolTable>;
+            pub fn base(&self) -> usize;
+            pub fn name(&self) -> &str;
+            pub fn needed_libs(&self) -> &[&str];
+            pub fn phdrs(&self) -> &[ElfPhdr];
+            pub fn cname(&self) -> &CStr;
+            pub fn shortname(&self)-> &str;
+            pub fn dynamic(&self) -> Option<NonNull<Dyn>>;
+            pub fn map_len(&self) -> usize;
+			pub fn user_data(&self) -> &UserData;
+        }
+    }
 }
 
 impl Builder {
     pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ElfCommonPart> {
-        let common = if let Some(dynamic) = self.dynamic {
+        let common = if let Some(dynamic_ptr) = self.dynamic_ptr {
             let (phdr_start, phdr_end) = self.ehdr.phdr_range();
             // 获取映射到内存中的Phdr
             let phdrs = self.phdr_mmap.unwrap_or_else(|| {
@@ -550,89 +605,103 @@ impl Builder {
                     })
                     .unwrap()
             });
-
-            let relocation = ElfRelocation::new(
-                dynamic.pltrel,
-                dynamic.dynrel,
-                dynamic.relr,
-                dynamic.rel_count,
-            );
-            let symbols = SymbolTable::new(&dynamic);
-            let needed_libs: Vec<&'static str> = dynamic
-                .needed_libs
-                .iter()
-                .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
-                .collect();
             ElfCommonPart {
                 entry: self.ehdr.e_entry as usize,
-                relro: self.relro,
-                relocation,
-                init: ElfInit {
-                    init_param: self.init_params,
-                    init_fn: dynamic.init_fn,
-                    init_array_fn: dynamic.init_array_fn,
-                },
                 interp: self.interp,
-                lazy: self.lazy_bind.unwrap_or(!dynamic.bind_now),
-                got: dynamic.got,
-                rpath: dynamic
-                    .rpath_off
-                    .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
-                runpath: dynamic
-                    .runpath_off
-                    .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
-                core: CoreComponent {
-                    inner: Arc::new(CoreComponentInner {
-                        is_init: AtomicBool::new(false),
-                        name: self.name,
-                        symbols: Some(symbols),
-                        dynamic: NonNull::new(dynamic.dyn_ptr as _),
-                        pltrel: NonNull::new(dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _),
-                        phdrs,
-                        fini_fn: dynamic.fini_fn,
-                        fini_array_fn: dynamic.fini_array_fn,
-                        segments: self.segments,
-                        needed_libs: needed_libs.into_boxed_slice(),
-                        user_data: self.user_data,
-                        lazy_scope: None,
-                    }),
-                },
+                data: LazyCell::new(Box::new(move || {
+                    let dynamic = ElfDynamic::new(dynamic_ptr, &self.segments).unwrap();
+                    let relocation = ElfRelocation::new(
+                        dynamic.pltrel,
+                        dynamic.dynrel,
+                        dynamic.relr,
+                        dynamic.rel_count,
+                    );
+                    let symbols = SymbolTable::new(&dynamic);
+                    let needed_libs: Vec<&'static str> = dynamic
+                        .needed_libs
+                        .iter()
+                        .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
+                        .collect();
+                    Box::new(LazyParse {
+                        extra: ElfExtraData {
+                            lazy: self.lazy_bind.unwrap_or(!dynamic.bind_now),
+                            relro: self.relro,
+                            relocation,
+                            init: ElfInit {
+                                init_param: self.init_params,
+                                init_fn: dynamic.init_fn,
+                                init_array_fn: dynamic.init_array_fn,
+                            },
+                            got: dynamic.got,
+                            rpath: dynamic
+                                .rpath_off
+                                .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
+                            runpath: dynamic
+                                .runpath_off
+                                .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
+                        },
+                        core: CoreComponent {
+                            inner: Arc::new(CoreComponentInner {
+                                is_init: AtomicBool::new(false),
+                                name: self.name,
+                                symbols: Some(symbols),
+                                dynamic: NonNull::new(dynamic.dyn_ptr as _),
+                                pltrel: NonNull::new(
+                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
+                                ),
+                                phdrs,
+                                fini_fn: dynamic.fini_fn,
+                                fini_array_fn: dynamic.fini_array_fn,
+                                segments: self.segments,
+                                needed_libs: needed_libs.into_boxed_slice(),
+                                user_data: self.user_data,
+                                lazy_scope: None,
+                            }),
+                        },
+                    })
+                })),
             }
         } else {
             if is_dylib {
                 return Err(parse_dynamic_error("dylib does not have dynamic"));
             }
-            let relocation = ElfRelocation::new(None, None, None, None);
             ElfCommonPart {
                 entry: self.ehdr.e_entry as usize,
-                relro: self.relro,
-                relocation,
-                init: ElfInit {
-                    init_param: self.init_params,
-                    init_fn: None,
-                    init_array_fn: None,
-                },
+                data: LazyCell::new(Box::new(move || {
+                    let relocation = ElfRelocation::new(None, None, None, None);
+                    Box::new(LazyParse {
+                        core: CoreComponent {
+                            inner: Arc::new(CoreComponentInner {
+                                is_init: AtomicBool::new(false),
+                                name: self.name,
+                                symbols: None,
+                                dynamic: None,
+                                pltrel: None,
+                                phdrs: &[],
+                                fini_fn: None,
+                                fini_array_fn: None,
+                                segments: self.segments,
+                                needed_libs: Box::new([]),
+                                user_data: self.user_data,
+                                lazy_scope: None,
+                            }),
+                        },
+                        extra: ElfExtraData {
+                            lazy: self.lazy_bind.unwrap_or(false),
+                            relro: self.relro,
+                            relocation,
+                            init: ElfInit {
+                                init_param: self.init_params,
+                                init_fn: None,
+                                init_array_fn: None,
+                            },
+                            got: None,
+                            rpath: None,
+                            runpath: None,
+                        },
+                    })
+                })),
                 interp: self.interp,
-                lazy: self.lazy_bind.unwrap_or(false),
-                got: None,
-                rpath: None,
-                runpath: None,
-                core: CoreComponent {
-                    inner: Arc::new(CoreComponentInner {
-                        is_init: AtomicBool::new(false),
-                        name: self.name,
-                        symbols: None,
-                        dynamic: None,
-                        pltrel: None,
-                        phdrs: &[],
-                        fini_fn: None,
-                        fini_array_fn: None,
-                        segments: self.segments,
-                        needed_libs: Box::new([]),
-                        user_data: self.user_data,
-                        lazy_scope: None,
-                    }),
-                },
             }
         };
         Ok(common)

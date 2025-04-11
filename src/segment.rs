@@ -93,7 +93,7 @@ impl ElfSegments {
     }
 
     #[inline]
-    pub fn mmap_len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.len
     }
 

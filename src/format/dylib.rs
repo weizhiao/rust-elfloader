@@ -11,7 +11,7 @@ use crate::{
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{boxed::Box, ffi::CString, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
@@ -30,8 +30,8 @@ impl Deref for ElfDylib {
 impl Debug for ElfDylib {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDylib")
-            .field("name", &self.common.inner.name)
-            .field("needed_libs", &self.common.inner.needed_libs)
+            .field("name", &self.common.name())
+            .field("needed_libs", &self.common.needed_libs())
             .finish()
     }
 }
@@ -40,7 +40,7 @@ impl ElfDylib {
     /// Gets mutable user data from the elf object.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut UserData> {
-        Arc::get_mut(&mut self.common.core.inner).map(|inner| &mut inner.user_data)
+        self.common.user_data_mut()
     }
 
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
