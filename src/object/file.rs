@@ -108,14 +108,18 @@ mod imp {
         let name = CString::from_str(path).unwrap().to_owned();
         #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
         let fd = unsafe {
-            syscalls::syscall!(Sysno::open, name.as_ptr(), RDONLY, 0)
-                .map_err(|err| io_error(err))?
+            from_ret(
+                syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0),
+                "open failed",
+            )?
         };
         #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
         let fd = unsafe {
             const AT_FDCWD: core::ffi::c_int = -100;
-            syscalls::syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0)
-                .map_err(|err| io_error(err))?
+            from_ret(
+                syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0),
+                "openat failed",
+            )?
         };
         Ok(ElfFile { fd: fd as _, name })
     }
@@ -123,7 +127,11 @@ mod imp {
     impl Drop for ElfFile {
         fn drop(&mut self) {
             unsafe {
-                syscalls::syscall!(Sysno::close, self.fd).unwrap();
+                from_ret(
+                    syscalls::raw_syscall!(Sysno::close, self.fd),
+                    "close failed",
+                )
+                .unwrap();
             }
         }
     }
@@ -132,10 +140,14 @@ mod imp {
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
             const SEEK_START: u32 = 0;
             unsafe {
-                syscalls::syscall!(Sysno::lseek, self.fd, offset, SEEK_START)
-                    .map_err(|err| io_error(err))?;
-                let size = syscalls::syscall!(Sysno::read, self.fd, buf.as_mut_ptr(), buf.len())
-                    .map_err(|err| io_error(err))?;
+                from_ret(
+                    syscalls::raw_syscall!(Sysno::lseek, self.fd, offset, SEEK_START),
+                    "lseek failed",
+                )?;
+                let size = from_ret(
+                    syscalls::raw_syscall!(Sysno::read, self.fd, buf.as_mut_ptr(), buf.len()),
+                    "read failed",
+                )?;
                 assert!(size == buf.len());
             }
             Ok(())
@@ -148,6 +160,17 @@ mod imp {
         fn as_fd(&self) -> Option<i32> {
             Some(self.fd)
         }
+    }
+    /// Converts a raw syscall return value to a result.
+    #[inline(always)]
+    fn from_ret(value: usize, msg: &str) -> Result<usize> {
+        if value > -4096isize as usize {
+            // Truncation of the error value is guaranteed to never occur due to
+            // the above check. This is the same check that musl uses:
+            // https://git.musl-libc.org/cgit/musl/tree/src/internal/syscall_ret.c?h=v1.1.15
+            return Err(io_error(msg));
+        }
+        Ok(value)
     }
 }
 

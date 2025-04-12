@@ -20,10 +20,30 @@
 ### ✨ 可以在 `no_std` 环境中工作 ✨
 `elf_loader`不依赖Rust `std`，也不强制依赖`libc`和操作系统，因此它可以在内核和嵌入式设备等`no_std`环境中使用。
 
+### ✨ 体积小 ✨
+`elf_loader`的体积非常小。基于`elf_loader`实现的[mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/mini-loader)编译后的二进制文件大小仅为**26K**。下面是使用`bloat`工具分析二进制文件得到的结果：
+```shell
+cargo bloat --crates --release --target=x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
+    Finished `release` profile [optimized] target(s) in 0.28s
+    Analyzing target/x86_64-unknown-none/release/mini-loader
+
+ File  .text    Size Crate
+23.1%  47.9%  5.9KiB elf_loader
+ 9.1%  18.9%  2.3KiB alloc
+ 7.1%  14.8%  1.8KiB core
+ 3.7%   7.7%    974B [Unknown]
+ 3.2%   6.7%    854B linked_list_allocator
+ 1.5%   3.0%    383B compiler_builtins
+ 0.4%   0.8%    105B __rustc
+48.2% 100.0% 12.4KiB .text section size, the file size is 25.7KiB
+
+Note: numbers above are a result of guesswork. They are not 100% correct and never will be.
+```
+
 ### ✨ 速度快 ✨
 本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。  
 下面是性能测试的结果，你可以在Github Actions中的`bench` job中查看它：
-```
+```shell
 elf_loader:new          time:   [36.333 µs 36.478 µs 36.628 µs]
 Found 9 outliers among 100 measurements (9.00%)
   2 (2.00%) low mild

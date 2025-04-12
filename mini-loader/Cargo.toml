@@ -13,7 +13,7 @@ categories = ["no-std", "os"]
 
 [dependencies]
 syscalls = { version = "0.6.18", default-features = false }
-elf_loader = { version = "=0.10.0", default-features = false, features = [
+elf_loader = { path = "../", default-features = false, features = [
 	"fs",
 	"mmap",
 	"use-syscall",
@@ -23,3 +23,10 @@ elf = { version = "0.7.4", default-features = false }
 
 [[bin]]
 name = "mini-loader"
+
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1

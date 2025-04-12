@@ -12,7 +12,7 @@ Currently only support `x86_64` .
 
 ## Installation
 ```shell
-$ cargo install mini-loader --target x86_64-unknown-none
+$ cargo install mini-loader --target x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
 ```
 
 ## Usage

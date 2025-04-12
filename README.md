@@ -23,11 +23,31 @@ English | [中文](README_zh.md)
 ### ✨ Works in `no_std` environments ✨
 `elf_loader` does not depend on Rust `std`, nor does it enforce `libc` and OS dependencies, so it can be used in `no_std` environments such as kernel and embedded devices.
 
+### ✨ Compact Size ✨
+The `elf_loader` is extremely small in size. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/mini-loader) implemented based on `elf_loader` compiles to a binary file of only **26KB**. Below are the results from analyzing the binary using the `bloat` tool:
+```shell
+cargo bloat --crates --release --target=x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
+    Finished `release` profile [optimized] target(s) in 0.28s
+    Analyzing target/x86_64-unknown-none/release/mini-loader
+
+ File  .text    Size Crate
+23.1%  47.9%  5.9KiB elf_loader
+ 9.1%  18.9%  2.3KiB alloc
+ 7.1%  14.8%  1.8KiB core
+ 3.7%   7.7%    974B [Unknown]
+ 3.2%   6.7%    854B linked_list_allocator
+ 1.5%   3.0%    383B compiler_builtins
+ 0.4%   0.8%    105B __rustc
+48.2% 100.0% 12.4KiB .text section size, the file size is 25.7KiB
+
+Note: numbers above are a result of guesswork. They are not 100% correct and never will be.
+```
+
 ### ✨ Fast speed ✨
 This library draws on the strengths of `musl` and `glibc`'s `ld.so` implementation and fully utilizes some features of Rust (such as static dispatch), allowing it to generate `high-performance` code.   
 Below are the performance test results. You can view them in the `bench` job on GitHub Actions.
 
-```
+```shell
 elf_loader:new          time:   [36.333 µs 36.478 µs 36.628 µs]
 Found 9 outliers among 100 measurements (9.00%)
   2 (2.00%) low mild

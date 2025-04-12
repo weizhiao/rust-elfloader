@@ -97,7 +97,6 @@ mod imp {
         Result,
         mmap::{MapFlags, Mmap, ProtFlags},
     };
-    use alloc::format;
     use core::{
         ffi::{c_int, c_void},
         ptr::NonNull,
@@ -116,12 +115,14 @@ mod imp {
         offset: isize,
     ) -> Result<*mut c_void> {
         let ptr = unsafe {
-			#[cfg(target_pointer_width = "32")]
+            #[cfg(target_pointer_width = "32")]
             let (syscall, offset) = (Sysno::mmap2, offset / crate::segment::PAGE_SIZE as isize);
             #[cfg(not(target_pointer_width = "32"))]
             let syscall = Sysno::mmap;
-            syscalls::syscall!(syscall, addr, len, prot.bits(), flags.bits(), fd, offset)
-                .map_err(|err| map_error(&format!("mmap failed: {:?}", err)))?
+            from_ret(
+                syscalls::raw_syscall!(syscall, addr, len, prot.bits(), flags.bits(), fd, offset),
+                "mmap failed",
+            )?
         };
         Ok(ptr as *mut c_void)
     }
@@ -138,16 +139,18 @@ mod imp {
             let syscall = Sysno::mmap2;
             #[cfg(not(target_pointer_width = "32"))]
             let syscall = Sysno::mmap;
-            syscalls::syscall!(
-                syscall,
-                addr,
-                len,
-                prot.bits(),
-                flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                usize::MAX,
-                0
-            )
-            .map_err(|err| map_error(&format!("mmap anonymous: {:?}", err)))?
+            from_ret(
+                syscalls::raw_syscall!(
+                    syscall,
+                    addr,
+                    len,
+                    prot.bits(),
+                    flags.union(MapFlags::MAP_ANONYMOUS).bits(),
+                    usize::MAX,
+                    0
+                ),
+                "mmap anonymous",
+            )?
         };
         Ok(ptr as *mut c_void)
     }
@@ -155,8 +158,10 @@ mod imp {
     #[inline]
     fn munmap(addr: *mut c_void, len: usize) -> Result<()> {
         unsafe {
-            syscalls::syscall!(Sysno::munmap, addr, len)
-                .map_err(|err| map_error(&format!("munmap failed: {:?}", err)))?;
+            from_ret(
+                syscalls::raw_syscall!(Sysno::munmap, addr, len),
+                "munmap failed",
+            )?;
         }
         Ok(())
     }
@@ -164,8 +169,10 @@ mod imp {
     #[inline]
     fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
         unsafe {
-            syscalls::syscall!(Sysno::mprotect, addr, len, prot.bits())
-                .map_err(|err| map_error(&format!("mprotect failed: {:?}", err)))?;
+            from_ret(
+                syscalls::raw_syscall!(Sysno::mprotect, addr, len, prot.bits()),
+                "mprotect failed",
+            )?;
         }
         Ok(())
     }
@@ -215,6 +222,18 @@ mod imp {
             mprotect(addr.as_ptr(), len, prot)?;
             Ok(())
         }
+    }
+
+    /// Converts a raw syscall return value to a result.
+    #[inline(always)]
+    fn from_ret(value: usize, msg: &str) -> Result<usize> {
+        if value > -4096isize as usize {
+            // Truncation of the error value is guaranteed to never occur due to
+            // the above check. This is the same check that musl uses:
+            // https://git.musl-libc.org/cgit/musl/tree/src/internal/syscall_ret.c?h=v1.1.15
+            return Err(map_error(msg));
+        }
+        Ok(value)
     }
 }
 

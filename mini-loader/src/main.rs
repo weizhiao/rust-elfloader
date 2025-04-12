@@ -8,7 +8,7 @@ use core::{
     ffi::{CStr, c_int},
     fmt,
     panic::PanicInfo,
-    ptr::{addr_of_mut, null},
+    ptr::null,
 };
 use elf_loader::{
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
@@ -16,7 +16,7 @@ use elf_loader::{
     load,
 };
 use linked_list_allocator::LockedHeap;
-use syscalls::{Sysno, syscall};
+use syscalls::{Sysno, raw_syscall};
 
 #[macro_export]
 macro_rules! println {
@@ -27,12 +27,12 @@ macro_rules! println {
 
 fn print(args: fmt::Arguments) {
     let s = &args.to_string();
-    let _ = unsafe { syscall!(Sysno::write, 1, s.as_ptr(), s.len()) }.unwrap();
+    print_str(s);
 }
 
 fn exit(status: c_int) -> ! {
     unsafe {
-        syscall!(Sysno::exit, status).unwrap();
+        from_ret(raw_syscall!(Sysno::exit, status), "exit failed").unwrap();
     }
     unreachable!()
 }
@@ -47,9 +47,6 @@ const AT_EXECFN: u64 = 31;
 
 #[global_allocator]
 static mut ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-const HAEP_SIZE: usize = 4096;
-pub static mut HEAP_BUF: [u8; HAEP_SIZE] = [0; HAEP_SIZE];
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -175,8 +172,10 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         let ptr = (rela.r_offset as usize + base) as *mut usize;
         unsafe { ptr.write(base + rela.r_addend as usize) };
     }
+    const HAEP_SIZE: usize = 4096;
+    let mut heap_buf: [u8; HAEP_SIZE] = [0; HAEP_SIZE];
     // 至此就完成自举，可以进行函数调用了
-    unsafe { ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HAEP_SIZE) };
+    unsafe { ALLOCATOR = LockedHeap::new(heap_buf.as_mut_ptr(), HAEP_SIZE) };
     if argc == 1 {
         panic!("no input file");
     }
@@ -191,7 +190,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
     let phdrs = elf.phdrs();
     // 重新设置aux
-    let mut cur_aux_ptr = auxv as *mut Aux;
+    let mut cur_aux_ptr = auxv;
     let mut cur_aux = unsafe { &mut *cur_aux_ptr };
     loop {
         match cur_aux.tag {
@@ -231,7 +230,25 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
 }
 
+/// Converts a raw syscall return value to a result.
+#[inline(always)]
+fn from_ret(value: usize, msg: &str) -> Result<usize, &str> {
+    if value > -4096isize as usize {
+        // Truncation of the error value is guaranteed to never occur due to
+        // the above check. This is the same check that musl uses:
+        // https://git.musl-libc.org/cgit/musl/tree/src/internal/syscall_ret.c?h=v1.1.15
+        return Err(msg);
+    }
+    Ok(value)
+}
+
 #[inline]
-pub fn print_str(s: &str) {
-    let _ = unsafe { syscall!(Sysno::write, 1, s.as_ptr(), s.len()) }.unwrap();
+fn print_str(s: &str) {
+    unsafe {
+        from_ret(
+            raw_syscall!(Sysno::write, 1, s.as_ptr(), s.len()),
+            "print failed",
+        )
+        .unwrap();
+    }
 }

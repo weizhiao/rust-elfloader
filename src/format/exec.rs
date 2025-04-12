@@ -124,9 +124,9 @@ impl ElfExec {
 }
 
 impl Builder {
-    pub(crate) fn create_exec(self, _phdrs: &[ElfPhdr]) -> Result<ElfExec> {
-        let common = self.create_common(&[], false)?;
-        Ok(ElfExec { common })
+    pub(crate) fn create_exec(self, _phdrs: &[ElfPhdr]) -> ElfExec {
+        let common = self.create_common(&[], false);
+        ElfExec { common }
     }
 }
 
@@ -149,7 +149,7 @@ impl<M: Mmap> Loader<M> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
         let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
-        builder.create_exec(phdrs)
+        Ok(builder.create_exec(phdrs))
     }
 
     /// Load a executable file into memory
@@ -165,7 +165,7 @@ impl<M: Mmap> Loader<M> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
         let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        builder.create_exec(phdrs)
+        Ok(builder.create_exec(phdrs))
     }
 }
 

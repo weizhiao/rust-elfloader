@@ -8,7 +8,6 @@ use crate::{
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
-    parse_dynamic_error,
     relocation::LazyScope,
     segment::ElfSegments,
     symbol::SymbolTable,
@@ -21,7 +20,7 @@ use alloc::{
 };
 use core::{
     any::Any,
-    cell::LazyCell,
+    cell::Cell,
     ffi::{CStr, c_int},
     fmt::Debug,
     marker::PhantomData,
@@ -473,11 +472,151 @@ struct ElfExtraData {
     runpath: Option<&'static str>,
 }
 
-struct LazyParse {
+struct LazyData {
     /// core component
     core: CoreComponent,
     /// extra data
     extra: ElfExtraData,
+}
+
+enum State {
+    Empty,
+    Uninit {
+        is_dylib: bool,
+        phdrs: &'static [ElfPhdr],
+        init_param: Option<InitParams>,
+        name: CString,
+        dynamic_ptr: Option<NonNull<Dyn>>,
+        segments: ElfSegments,
+        relro: Option<ELFRelro>,
+        user_data: UserData,
+        lazy_bind: Option<bool>,
+    },
+    Init(LazyData),
+}
+
+struct LazyParse {
+    state: Cell<State>,
+}
+
+impl Deref for LazyParse {
+    type Target = LazyData;
+
+    fn deref(&self) -> &LazyData {
+        // 快路径加速
+        match unsafe { &*self.state.as_ptr() } {
+            State::Empty | State::Uninit { .. } => {}
+            State::Init(lazy_data) => return lazy_data,
+        }
+
+        let state = self.state.replace(State::Empty);
+        let lazy_data = match state {
+            State::Uninit {
+                name,
+                dynamic_ptr,
+                segments,
+                relro,
+                user_data,
+                lazy_bind,
+                init_param,
+                phdrs,
+                is_dylib,
+            } => {
+                if let Some(dynamic_ptr) = dynamic_ptr {
+                    let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments).unwrap();
+                    let relocation = ElfRelocation::new(
+                        dynamic.pltrel,
+                        dynamic.dynrel,
+                        dynamic.relr,
+                        dynamic.rel_count,
+                    );
+                    let symbols = SymbolTable::new(&dynamic);
+                    let needed_libs: Vec<&'static str> = dynamic
+                        .needed_libs
+                        .iter()
+                        .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
+                        .collect();
+                    LazyData {
+                        extra: ElfExtraData {
+                            lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
+                            relro,
+                            relocation,
+                            init: ElfInit {
+                                init_param,
+                                init_fn: dynamic.init_fn,
+                                init_array_fn: dynamic.init_array_fn,
+                            },
+                            got: dynamic.got,
+                            rpath: dynamic
+                                .rpath_off
+                                .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
+                            runpath: dynamic
+                                .runpath_off
+                                .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
+                        },
+                        core: CoreComponent {
+                            inner: Arc::new(CoreComponentInner {
+                                is_init: AtomicBool::new(false),
+                                name,
+                                symbols: Some(symbols),
+                                dynamic: NonNull::new(dynamic.dyn_ptr as _),
+                                pltrel: NonNull::new(
+                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
+                                ),
+                                phdrs,
+                                fini_fn: dynamic.fini_fn,
+                                fini_array_fn: dynamic.fini_array_fn,
+                                segments,
+                                needed_libs: needed_libs.into_boxed_slice(),
+                                user_data,
+                                lazy_scope: None,
+                            }),
+                        },
+                    }
+                } else {
+                    assert!(!is_dylib, "dylib does not have dynamic");
+                    let relocation = ElfRelocation::new(None, None, None, None);
+                    LazyData {
+                        core: CoreComponent {
+                            inner: Arc::new(CoreComponentInner {
+                                is_init: AtomicBool::new(false),
+                                name,
+                                symbols: None,
+                                dynamic: None,
+                                pltrel: None,
+                                phdrs: &[],
+                                fini_fn: None,
+                                fini_array_fn: None,
+                                segments,
+                                needed_libs: Box::new([]),
+                                user_data,
+                                lazy_scope: None,
+                            }),
+                        },
+                        extra: ElfExtraData {
+                            lazy: lazy_bind.unwrap_or(false),
+                            relro,
+                            relocation,
+                            init: ElfInit {
+                                init_param,
+                                init_fn: None,
+                                init_array_fn: None,
+                            },
+                            got: None,
+                            rpath: None,
+                            runpath: None,
+                        },
+                    }
+                }
+            }
+            State::Empty | State::Init(_) => unreachable!(),
+        };
+        self.state.set(State::Init(lazy_data));
+        match unsafe { &*self.state.as_ptr() } {
+            State::Empty | State::Uninit { .. } => unreachable!(),
+            State::Init(lazy_data) => lazy_data,
+        }
+    }
 }
 
 pub struct ElfCommonPart {
@@ -485,15 +624,17 @@ pub struct ElfCommonPart {
     entry: usize,
     /// PT_INTERP
     interp: Option<&'static str>,
+    /// phdrs
+    phdrs: &'static [ElfPhdr],
     /// data parse lazy
-    data: LazyCell<Box<LazyParse>, Box<dyn FnOnce() -> Box<LazyParse>>>,
+    data: LazyParse,
 }
 
 impl ElfCommonPart {
     /// Gets the entry point of the elf object.
     #[inline]
     pub fn entry(&self) -> usize {
-        self.entry + self.base()
+        self.entry
     }
 
     /// Gets the core component reference of the elf object
@@ -553,6 +694,11 @@ impl ElfCommonPart {
         self.data.extra.relro.as_ref()
     }
 
+    /// Gets the program headers of the elf object.
+    pub fn phdrs(&self) -> &[ElfPhdr] {
+        self.phdrs
+    }
+
     #[inline]
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut UserData> {
         // 因为从LazyCell中获取可变引用是unstable feature，所以这里使用unsafe方法
@@ -573,147 +719,62 @@ impl ElfCommonPart {
             pub fn base(&self) -> usize;
             pub fn name(&self) -> &str;
             pub fn needed_libs(&self) -> &[&str];
-            pub fn phdrs(&self) -> &[ElfPhdr];
             pub fn cname(&self) -> &CStr;
             pub fn shortname(&self)-> &str;
             pub fn dynamic(&self) -> Option<NonNull<Dyn>>;
             pub fn map_len(&self) -> usize;
-			pub fn user_data(&self) -> &UserData;
+            pub fn user_data(&self) -> &UserData;
         }
     }
 }
 
 impl Builder {
-    pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ElfCommonPart> {
-        let common = if let Some(dynamic_ptr) = self.dynamic_ptr {
-            let (phdr_start, phdr_end) = self.ehdr.phdr_range();
-            // 获取映射到内存中的Phdr
-            let phdrs = self.phdr_mmap.unwrap_or_else(|| {
-                phdrs
-                    .iter()
-                    .filter(|phdr| phdr.p_type == PT_LOAD)
-                    .find_map(|phdr| {
-                        let cur_range =
-                            phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
-                        if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
-                            return Some(self.segments.get_slice::<ElfPhdr>(
-                                phdr.p_vaddr as usize + phdr_start - cur_range.start,
-                                self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
-                            ));
-                        }
-                        None
-                    })
-                    .unwrap()
-            });
-            ElfCommonPart {
-                entry: self.ehdr.e_entry as usize,
-                interp: self.interp,
-                data: LazyCell::new(Box::new(move || {
-                    let dynamic = ElfDynamic::new(dynamic_ptr, &self.segments).unwrap();
-                    let relocation = ElfRelocation::new(
-                        dynamic.pltrel,
-                        dynamic.dynrel,
-                        dynamic.relr,
-                        dynamic.rel_count,
-                    );
-                    let symbols = SymbolTable::new(&dynamic);
-                    let needed_libs: Vec<&'static str> = dynamic
-                        .needed_libs
-                        .iter()
-                        .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
-                        .collect();
-                    Box::new(LazyParse {
-                        extra: ElfExtraData {
-                            lazy: self.lazy_bind.unwrap_or(!dynamic.bind_now),
-                            relro: self.relro,
-                            relocation,
-                            init: ElfInit {
-                                init_param: self.init_params,
-                                init_fn: dynamic.init_fn,
-                                init_array_fn: dynamic.init_array_fn,
-                            },
-                            got: dynamic.got,
-                            rpath: dynamic
-                                .rpath_off
-                                .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
-                            runpath: dynamic
-                                .runpath_off
-                                .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
-                        },
-                        core: CoreComponent {
-                            inner: Arc::new(CoreComponentInner {
-                                is_init: AtomicBool::new(false),
-                                name: self.name,
-                                symbols: Some(symbols),
-                                dynamic: NonNull::new(dynamic.dyn_ptr as _),
-                                pltrel: NonNull::new(
-                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
-                                ),
-                                phdrs,
-                                fini_fn: dynamic.fini_fn,
-                                fini_array_fn: dynamic.fini_array_fn,
-                                segments: self.segments,
-                                needed_libs: needed_libs.into_boxed_slice(),
-                                user_data: self.user_data,
-                                lazy_scope: None,
-                            }),
-                        },
-                    })
-                })),
-            }
-        } else {
-            if is_dylib {
-                return Err(parse_dynamic_error("dylib does not have dynamic"));
-            }
-            ElfCommonPart {
-                entry: self.ehdr.e_entry as usize,
-                data: LazyCell::new(Box::new(move || {
-                    let relocation = ElfRelocation::new(None, None, None, None);
-                    Box::new(LazyParse {
-                        core: CoreComponent {
-                            inner: Arc::new(CoreComponentInner {
-                                is_init: AtomicBool::new(false),
-                                name: self.name,
-                                symbols: None,
-                                dynamic: None,
-                                pltrel: None,
-                                phdrs: &[],
-                                fini_fn: None,
-                                fini_array_fn: None,
-                                segments: self.segments,
-                                needed_libs: Box::new([]),
-                                user_data: self.user_data,
-                                lazy_scope: None,
-                            }),
-                        },
-                        extra: ElfExtraData {
-                            lazy: self.lazy_bind.unwrap_or(false),
-                            relro: self.relro,
-                            relocation,
-                            init: ElfInit {
-                                init_param: self.init_params,
-                                init_fn: None,
-                                init_array_fn: None,
-                            },
-                            got: None,
-                            rpath: None,
-                            runpath: None,
-                        },
-                    })
-                })),
-                interp: self.interp,
-            }
-        };
-        Ok(common)
+    pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> ElfCommonPart {
+        let (phdr_start, phdr_end) = self.ehdr.phdr_range();
+        // 获取映射到内存中的Phdr
+        let phdrs = self.phdr_mmap.unwrap_or_else(|| {
+            phdrs
+                .iter()
+                .filter(|phdr| phdr.p_type == PT_LOAD)
+                .find_map(|phdr| {
+                    let cur_range =
+                        phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
+                    if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                        return Some(self.segments.get_slice::<ElfPhdr>(
+                            phdr.p_vaddr as usize + phdr_start - cur_range.start,
+                            self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
+                        ));
+                    }
+                    None
+                })
+                .unwrap()
+        });
+        ElfCommonPart {
+            entry: self.ehdr.e_entry as usize + self.segments.base(),
+            interp: self.interp,
+            phdrs,
+            data: LazyParse {
+                state: Cell::new(State::Uninit {
+                    is_dylib,
+                    phdrs,
+                    init_param: self.init_params,
+                    name: self.name,
+                    dynamic_ptr: self.dynamic_ptr,
+                    segments: self.segments,
+                    relro: self.relro,
+                    user_data: self.user_data,
+                    lazy_bind: self.lazy_bind,
+                }),
+            },
+        }
     }
 
-    pub(crate) fn create_elf(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Result<Elf> {
-        let elf = if is_dylib {
-            Elf::Dylib(self.create_dylib(phdrs)?)
+    pub(crate) fn create_elf(self, phdrs: &[ElfPhdr], is_dylib: bool) -> Elf {
+        if is_dylib {
+            Elf::Dylib(self.create_dylib(phdrs))
         } else {
-            Elf::Exec(self.create_exec(phdrs)?)
-        };
-        Ok(elf)
+            Elf::Exec(self.create_exec(phdrs))
+        }
     }
 }
 
@@ -730,7 +791,7 @@ impl<M: Mmap> Loader<M> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
         let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
-        builder.create_elf(phdrs, is_dylib)
+        Ok(builder.create_elf(phdrs, is_dylib))
     }
 
     /// Load a elf file into memory
@@ -744,6 +805,6 @@ impl<M: Mmap> Loader<M> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
         let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        builder.create_elf(phdrs, is_dylib)
+        Ok(builder.create_elf(phdrs, is_dylib))
     }
 }

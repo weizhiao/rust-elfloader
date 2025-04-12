@@ -295,7 +295,7 @@ pub(crate) struct Builder {
     pub(crate) lazy_bind: Option<bool>,
     pub(crate) ehdr: ElfHeader,
     pub(crate) relro: Option<ELFRelro>,
-    pub(crate) dynamic_ptr: Option<*const Dyn>,
+    pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
     pub(crate) user_data: UserData,
     pub(crate) segments: ElfSegments,
     pub(crate) init_params: Option<InitParams>,
@@ -340,7 +340,10 @@ impl Builder {
     fn parse_other_phdr<M: Mmap>(&mut self, phdr: &Phdr) {
         match phdr.p_type {
             // 解析.dynamic section
-            PT_DYNAMIC => self.dynamic_ptr = Some(self.segments.get_ptr(phdr.p_paddr as usize)),
+            PT_DYNAMIC => {
+                self.dynamic_ptr =
+                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_paddr as usize)).unwrap())
+            }
             PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
             PT_PHDR => {
                 self.phdr_mmap = Some(

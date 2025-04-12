@@ -112,9 +112,9 @@ impl ElfDylib {
 }
 
 impl Builder {
-    pub(crate) fn create_dylib(self, phdrs: &[ElfPhdr]) -> Result<ElfDylib> {
-        let common = self.create_common(phdrs, true)?;
-        Ok(ElfDylib { common })
+    pub(crate) fn create_dylib(self, phdrs: &[ElfPhdr]) -> ElfDylib {
+        let common = self.create_common(phdrs, true);
+        ElfDylib { common }
     }
 }
 
@@ -137,7 +137,7 @@ impl<M: Mmap> Loader<M> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
         let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
-        builder.create_dylib(phdrs)
+        Ok(builder.create_dylib(phdrs))
     }
 
     /// Load a dynamic library into memory
@@ -153,7 +153,7 @@ impl<M: Mmap> Loader<M> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
         let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        builder.create_dylib(phdrs)
+        Ok(builder.create_dylib(phdrs))
     }
 }
 
