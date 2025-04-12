@@ -115,14 +115,14 @@ Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have 
 
 # Architecture Support
 
-| Arch        | Support | Lazy Binding | Test    |
-| ----------- | ------- | ------------ | ------- |
-| x86_64      | ✅       | ✅            | ✅(CI)   |
-| aarch64     | ✅       | ✅            | ✅(CI)   |
-| riscv64     | ✅       | ✅            | ✅(CI)   |
-| loongarch64 | ✅       | ❌            | ✅(QEMU) |
-| x86         | ✅       | ✅            | ✅(CI)   |
-| arm         | ✅       | ✅            | ✅(CI)   |
+| Arch        | Support | Lazy Binding | Test      |
+| ----------- | ------- | ------------ | --------- |
+| x86_64      | ✅       | ✅            | ✅(CI)     |
+| aarch64     | ✅       | ✅            | ✅(CI)     |
+| riscv64     | ✅       | ✅            | ✅(CI)     |
+| loongarch64 | ✅       | ❌            | ✅(Manual) |
+| x86         | ✅       | ✅            | ✅(CI)     |
+| arm         | ✅       | ✅            | ✅(CI)     |
 
 # Example
 ## Load a simple dynamic library
