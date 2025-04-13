@@ -1,7 +1,7 @@
 use crate::{
     ElfObject, Result, UserData,
     arch::{Dyn, E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, PHDR_SIZE, Phdr},
-    format::InitParams,
+    format::InitParam,
     mmap::{self, MapFlags, Mmap, ProtFlags},
     object::ElfObjectAsync,
     parse_ehdr_error, parse_phdr_error,
@@ -298,7 +298,7 @@ pub(crate) struct Builder {
     pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
     pub(crate) user_data: UserData,
     pub(crate) segments: ElfSegments,
-    pub(crate) init_params: Option<InitParams>,
+    pub(crate) init_param: Option<InitParam>,
     pub(crate) interp: Option<&'static str>,
 }
 
@@ -308,7 +308,7 @@ impl Builder {
         name: CString,
         lazy_bind: Option<bool>,
         ehdr: ElfHeader,
-        init_params: Option<InitParams>,
+        init_param: Option<InitParam>,
     ) -> Self {
         Self {
             phdr_mmap: None,
@@ -319,7 +319,7 @@ impl Builder {
             dynamic_ptr: None,
             segments,
             user_data: UserData::empty(),
-            init_params,
+            init_param,
             interp: None,
         }
     }
@@ -437,7 +437,7 @@ pub struct Loader<M>
 where
     M: Mmap,
 {
-    pub(crate) init_params: Option<InitParams>,
+    pub(crate) init_param: Option<InitParam>,
     pub(crate) buf: ElfBuf,
     hook: Option<Hook>,
     _marker: PhantomData<M>,
@@ -453,7 +453,7 @@ impl<M: Mmap> Loader<M> {
     /// Create a new loader
     pub const fn new() -> Self {
         Self {
-            init_params: None,
+            init_param: None,
             hook: None,
             buf: ElfBuf::new(),
             _marker: PhantomData,
@@ -462,7 +462,7 @@ impl<M: Mmap> Loader<M> {
 
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
     pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) {
-        self.init_params = Some(InitParams { argc, argv, envp });
+        self.init_param = Some(InitParam { argc, argv, envp });
     }
 
     /// `hook` functions are called first when a program header is processed
@@ -493,7 +493,7 @@ impl<M: Mmap> Loader<M> {
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
     ) -> Result<(Builder, &[ElfPhdr])> {
-        let init_params = self.init_params;
+        let init_param = self.init_param;
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(phdrs, ehdr.is_dylib());
@@ -509,7 +509,7 @@ impl<M: Mmap> Loader<M> {
             object.file_name().to_owned(),
             lazy_bind,
             ehdr,
-            init_params,
+            init_param,
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs {
@@ -536,7 +536,7 @@ impl<M: Mmap> Loader<M> {
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
     ) -> Result<(Builder, &[ElfPhdr])> {
-        let init_params = self.init_params;
+        let init_param = self.init_param;
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let (param, min_vaddr) = create_segments(phdrs, ehdr.is_dylib());
@@ -552,7 +552,7 @@ impl<M: Mmap> Loader<M> {
             object.file_name().to_owned(),
             lazy_bind,
             ehdr,
-            init_params,
+            init_param,
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs {

@@ -82,7 +82,7 @@ impl ElfStringTable {
     }
 
     #[inline]
-    pub(crate) fn convert_cstr(s: &CStr) -> &str {
+    fn convert_cstr(s: &CStr) -> &str {
         unsafe { core::str::from_utf8_unchecked(s.to_bytes()) }
     }
 
@@ -140,7 +140,7 @@ impl<'symtab> SymbolInfo<'symtab> {
             data: PreCompute::new(name),
             cname: None,
             #[cfg(feature = "version")]
-            version: version.map(|v| crate::version::SymbolVersion::new(v)),
+            version: version.map(crate::version::SymbolVersion::new),
         }
     }
 

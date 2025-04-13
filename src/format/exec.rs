@@ -15,20 +15,20 @@ impl Deref for ElfExec {
     type Target = ElfCommonPart;
 
     fn deref(&self) -> &Self::Target {
-        &self.common
+        &self.inner
     }
 }
 
 /// An unrelocated executable file
 pub struct ElfExec {
-    pub(crate) common: ElfCommonPart,
+    inner: ElfCommonPart,
 }
 
 impl Debug for ElfExec {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExec")
-            .field("name", &self.common.name())
-            .field("needed_libs", &self.common.needed_libs())
+            .field("name", &self.inner.name())
+            .field("needed_libs", &self.inner.needed_libs())
             .finish()
     }
 }
@@ -84,21 +84,21 @@ impl ElfExec {
         'iter: 'lib,
         'find: 'lib,
     {
-        if self.common.relocation().is_empty() {
+        if self.inner.relocation().is_empty() {
             return Ok(RelocatedExec {
-                entry: self.common.entry,
-                core: Relocated {
-                    core: self.common.core_component(),
+                entry: self.inner.entry,
+                inner: Relocated {
+                    core: self.inner.into_core_component(),
                     _marker: PhantomData,
                 },
             });
         }
         let mut helper = Vec::new();
-        if let Some(symtab) = self.common.symtab() {
+        if let Some(symtab) = self.inner.symtab() {
             helper.push(unsafe {
                 core::mem::transmute::<RelocateHelper<'_>, RelocateHelper<'static>>(
                     RelocateHelper {
-                        base: self.common.base(),
+                        base: self.inner.base(),
                         symtab,
                         #[cfg(feature = "log")]
                         lib_name: self.name(),
@@ -117,16 +117,16 @@ impl ElfExec {
         let wrapper =
             |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
         Ok(RelocatedExec {
-            entry: self.common.entry,
-            core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
+            entry: self.inner.entry,
+            inner: relocate_impl(self.inner, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
     }
 }
 
 impl Builder {
     pub(crate) fn create_exec(self, _phdrs: &[ElfPhdr]) -> ElfExec {
-        let common = self.create_common(&[], false);
-        ElfExec { common }
+        let inner = self.create_inner(&[], false);
+        ElfExec { inner }
     }
 }
 
@@ -173,7 +173,7 @@ impl<M: Mmap> Loader<M> {
 #[derive(Clone)]
 pub struct RelocatedExec<'scope> {
     entry: usize,
-    core: Relocated<'scope>,
+    inner: Relocated<'scope>,
 }
 
 impl RelocatedExec<'_> {
@@ -185,7 +185,7 @@ impl RelocatedExec<'_> {
 
 impl Debug for RelocatedExec<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.core.fmt(f)
+        self.inner.fmt(f)
     }
 }
 
@@ -193,6 +193,6 @@ impl Deref for RelocatedExec<'_> {
     type Target = CoreComponent;
 
     fn deref(&self) -> &Self::Target {
-        &self.core
+        &self.inner
     }
 }

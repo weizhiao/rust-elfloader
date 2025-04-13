@@ -16,22 +16,22 @@ use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
-    pub(crate) common: ElfCommonPart,
+    inner: ElfCommonPart,
 }
 
 impl Deref for ElfDylib {
     type Target = ElfCommonPart;
 
     fn deref(&self) -> &Self::Target {
-        &self.common
+        &self.inner
     }
 }
 
 impl Debug for ElfDylib {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDylib")
-            .field("name", &self.common.name())
-            .field("needed_libs", &self.common.needed_libs())
+            .field("name", &self.inner.name())
+            .field("needed_libs", &self.inner.needed_libs())
             .finish()
     }
 }
@@ -40,7 +40,7 @@ impl ElfDylib {
     /// Gets mutable user data from the elf object.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut UserData> {
-        self.common.user_data_mut()
+        self.inner.user_data_mut()
     }
 
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
@@ -106,15 +106,15 @@ impl ElfDylib {
         let wrapper =
             |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
         Ok(RelocatedDylib {
-            core: relocate_impl(self.common, helper, pre_find, &wrapper, local_lazy_scope)?,
+            inner: relocate_impl(self.inner, helper, pre_find, &wrapper, local_lazy_scope)?,
         })
     }
 }
 
 impl Builder {
     pub(crate) fn create_dylib(self, phdrs: &[ElfPhdr]) -> ElfDylib {
-        let common = self.create_common(phdrs, true);
-        ElfDylib { common }
+        let inner = self.create_inner(phdrs, true);
+        ElfDylib { inner }
     }
 }
 
@@ -126,7 +126,7 @@ impl<M: Mmap> Loader<M> {
 
     /// Load a dynamic library into memory
     /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
     pub fn load_dylib(
         &mut self,
         mut object: impl ElfObject,
@@ -142,7 +142,7 @@ impl<M: Mmap> Loader<M> {
 
     /// Load a dynamic library into memory
     /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
     pub async fn load_dylib_async(
         &mut self,
         mut object: impl ElfObjectAsync,
@@ -160,12 +160,12 @@ impl<M: Mmap> Loader<M> {
 /// A dynamic library that has been relocated
 #[derive(Clone)]
 pub struct RelocatedDylib<'scope> {
-    core: Relocated<'scope>,
+    inner: Relocated<'scope>,
 }
 
 impl Debug for RelocatedDylib<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.core.fmt(f)
+        self.inner.fmt(f)
     }
 }
 
@@ -173,7 +173,7 @@ impl Deref for RelocatedDylib<'_> {
     type Target = CoreComponent;
 
     fn deref(&self) -> &Self::Target {
-        &self.core
+        &self.inner
     }
 }
 
@@ -184,7 +184,7 @@ impl RelocatedDylib<'_> {
     #[inline]
     pub unsafe fn from_core_component(core: CoreComponent) -> Self {
         RelocatedDylib {
-            core: Relocated {
+            inner: Relocated {
                 core,
                 _marker: PhantomData,
             },
@@ -197,7 +197,7 @@ impl RelocatedDylib<'_> {
     /// which can cause serious problems.
     #[inline]
     pub unsafe fn core_component_ref(&self) -> &CoreComponent {
-        &self.core
+        &self.inner
     }
 
     /// # Safety
@@ -212,7 +212,7 @@ impl RelocatedDylib<'_> {
         user_data: UserData,
     ) -> Self {
         Self {
-            core: Relocated {
+            inner: Relocated {
                 core: CoreComponent::from_raw(name, base, dynamic, phdrs, segments, user_data),
                 _marker: PhantomData,
             },
@@ -222,7 +222,7 @@ impl RelocatedDylib<'_> {
     /// Gets the symbol table.
     #[inline]
     pub fn symtab(&self) -> &SymbolTable {
-        unsafe { self.core.symtab().unwrap_unchecked() }
+        unsafe { self.inner.symtab().unwrap_unchecked() }
     }
 
     /// Gets a pointer to a function or static variable by symbol name.
@@ -273,7 +273,8 @@ impl RelocatedDylib<'_> {
     }
 
     /// Load a versioned symbol from the elf object.
-    ///
+    /// # Safety
+    /// Users of this API must specify the correct type of the function or variable loaded.
     /// # Examples
     /// ```no_run
     /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};

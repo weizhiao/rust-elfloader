@@ -264,11 +264,7 @@ impl ELFVersion {
         verdefs: Option<(NonZeroUsize, NonZeroUsize)>,
         strtab: &ElfStringTable,
     ) -> Option<ELFVersion> {
-        let version_ids_off = if let Some(off) = version_ids_off {
-            off
-        } else {
-            return None;
-        };
+        let version_ids_off = version_ids_off?;
         let mut versions = Vec::new();
         //记录最大的verison idx
         let mut ndx_max = 0;
@@ -346,19 +342,19 @@ impl<'a> SymbolVersion<'a> {
     /// glibc:_dl_elf_hash
     fn dl_elf_hash(name: &str) -> u32 {
         let bytes = name.as_bytes();
-        let mut hash: u32 = bytes[0] as u32;
+        let mut hash: u32 = u32::from(bytes[0]);
 
         if hash != 0 && bytes.len() > 1 {
-            hash = (hash << 4) + bytes[1] as u32;
+            hash = (hash << 4) + u32::from(bytes[1]);
             if bytes.len() > 2 {
-                hash = (hash << 4) + bytes[2] as u32;
+                hash = (hash << 4) + u32::from(bytes[2]);
                 if bytes.len() > 3 {
-                    hash = (hash << 4) + bytes[3] as u32;
+                    hash = (hash << 4) + u32::from(bytes[3]);
                     if bytes.len() > 4 {
-                        hash = (hash << 4) + bytes[4] as u32;
+                        hash = (hash << 4) + u32::from(bytes[4]);
                         let mut name = &bytes[5..];
                         while let Some(&byte) = name.first() {
-                            hash = (hash << 4) + byte as u32;
+                            hash = (hash << 4) + u32::from(byte);
                             let hi = hash & 0xf0000000;
                             hash ^= hi >> 24;
                             name = &name[1..];

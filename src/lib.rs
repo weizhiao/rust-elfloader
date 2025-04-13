@@ -43,7 +43,11 @@
     clippy::redundant_else,
     clippy::redundant_static_lifetimes
 )]
-#![allow(clippy::len_without_is_empty, clippy::unnecessary_cast)]
+#![allow(
+    clippy::len_without_is_empty,
+    clippy::unnecessary_cast,
+    clippy::uninit_vec
+)]
 extern crate alloc;
 
 #[cfg(not(any(

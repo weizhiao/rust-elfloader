@@ -78,14 +78,14 @@ impl UserData {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct InitParams {
+pub(crate) struct InitParam {
     pub argc: usize,
     pub argv: usize,
     pub envp: usize,
 }
 
 pub(crate) struct ElfInit {
-    init_param: Option<InitParams>,
+    init_param: Option<InitParam>,
     /// .init
     init_fn: Option<extern "C" fn()>,
     /// .init_array
@@ -484,7 +484,7 @@ enum State {
     Uninit {
         is_dylib: bool,
         phdrs: &'static [ElfPhdr],
-        init_param: Option<InitParams>,
+        init_param: Option<InitParam>,
         name: CString,
         dynamic_ptr: Option<NonNull<Dyn>>,
         segments: ElfSegments,
@@ -499,10 +499,8 @@ struct LazyParse {
     state: Cell<State>,
 }
 
-impl Deref for LazyParse {
-    type Target = LazyData;
-
-    fn deref(&self) -> &LazyData {
+impl LazyParse {
+    fn force(&self) -> &LazyData {
         // 快路径加速
         match unsafe { &*self.state.as_ptr() } {
             State::Empty | State::Uninit { .. } => {}
@@ -619,11 +617,22 @@ impl Deref for LazyParse {
     }
 }
 
+impl Deref for LazyParse {
+    type Target = LazyData;
+
+    #[inline]
+    fn deref(&self) -> &LazyData {
+        self.force()
+    }
+}
+
 pub struct ElfCommonPart {
     /// entry
     entry: usize,
     /// PT_INTERP
     interp: Option<&'static str>,
+    /// file name
+    name: &'static CStr,
     /// phdrs
     phdrs: &'static [ElfPhdr],
     /// data parse lazy
@@ -647,6 +656,16 @@ impl ElfCommonPart {
     #[inline]
     pub fn core_component(&self) -> CoreComponent {
         self.data.core.clone()
+    }
+
+    #[inline]
+    /// Gets the core component of the elf object
+    pub fn into_core_component(self) -> CoreComponent {
+        self.data.force();
+        match self.data.state.into_inner() {
+            State::Empty | State::Uninit { .. } => unreachable!(),
+            State::Init(lazy_data) => lazy_data.core,
+        }
     }
 
     /// Whether lazy binding is enabled for the current elf object.
@@ -673,6 +692,29 @@ impl ElfCommonPart {
         self.interp
     }
 
+    /// Gets the name of the elf object.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.name.to_str().unwrap()
+    }
+
+    /// Gets the C-style name of the elf object.
+    #[inline]
+    pub fn cname(&self) -> &CStr {
+        self.name
+    }
+
+    /// Gets the short name of the elf object.
+    #[inline]
+    pub fn shortname(&self) -> &str {
+        self.name().split('/').next_back().unwrap()
+    }
+
+    /// Gets the program headers of the elf object.
+    pub fn phdrs(&self) -> &[ElfPhdr] {
+        self.phdrs
+    }
+
     #[inline]
     pub(crate) fn got(&self) -> Option<NonNull<usize>> {
         self.data.extra.got
@@ -684,7 +726,7 @@ impl ElfCommonPart {
     }
 
     #[inline]
-    pub(crate) fn init(&self) {
+    pub(crate) fn finish(&self) {
         self.data.core.set_init();
         self.data.extra.init.call_init();
     }
@@ -692,11 +734,6 @@ impl ElfCommonPart {
     #[inline]
     pub(crate) fn relro(&self) -> Option<&ELFRelro> {
         self.data.extra.relro.as_ref()
-    }
-
-    /// Gets the program headers of the elf object.
-    pub fn phdrs(&self) -> &[ElfPhdr] {
-        self.phdrs
     }
 
     #[inline]
@@ -716,20 +753,22 @@ impl ElfCommonPart {
     delegate! {
         to self.data.core{
             pub(crate) fn symtab(&self) -> Option<&SymbolTable>;
+            /// Gets the base address of the elf object.
             pub fn base(&self) -> usize;
-            pub fn name(&self) -> &str;
+            /// Gets the needed libs' name of the elf object.
             pub fn needed_libs(&self) -> &[&str];
-            pub fn cname(&self) -> &CStr;
-            pub fn shortname(&self)-> &str;
+            /// Gets the address of the dynamic section.
             pub fn dynamic(&self) -> Option<NonNull<Dyn>>;
+            /// Gets the memory length of the elf object map.
             pub fn map_len(&self) -> usize;
+            /// Gets user data from the elf object.
             pub fn user_data(&self) -> &UserData;
         }
     }
 }
 
 impl Builder {
-    pub(crate) fn create_common(self, phdrs: &[ElfPhdr], is_dylib: bool) -> ElfCommonPart {
+    pub(crate) fn create_inner(self, phdrs: &[ElfPhdr], is_dylib: bool) -> ElfCommonPart {
         let (phdr_start, phdr_end) = self.ehdr.phdr_range();
         // 获取映射到内存中的Phdr
         let phdrs = self.phdr_mmap.unwrap_or_else(|| {
@@ -750,14 +789,15 @@ impl Builder {
                 .unwrap()
         });
         ElfCommonPart {
-            entry: self.ehdr.e_entry as usize + self.segments.base(),
+            entry: self.ehdr.e_entry as usize + if is_dylib { self.segments.base() } else { 0 },
             interp: self.interp,
+            name: unsafe { core::mem::transmute::<&CStr, &CStr>(self.name.as_c_str()) },
             phdrs,
             data: LazyParse {
                 state: Cell::new(State::Uninit {
                     is_dylib,
                     phdrs,
-                    init_param: self.init_params,
+                    init_param: self.init_param,
                     name: self.name,
                     dynamic_ptr: self.dynamic_ptr,
                     segments: self.segments,
