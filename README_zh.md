@@ -117,6 +117,7 @@ Found 11 outliers among 100 measurements (11.00%)
 | x86_64      | ✅    | ✅        | ✅(CI)      |
 | aarch64     | ✅    | ✅        | ✅(CI)      |
 | riscv64     | ✅    | ✅        | ✅(CI)      |
+| riscv32     | ✅    | ✅        | ❌          |
 | loongarch64 | ✅    | ❌        | ✅(Manual ) |
 | x86         | ✅    | ✅        | ✅(CI)      |
 | arm         | ✅    | ✅        | ✅(CI)      |

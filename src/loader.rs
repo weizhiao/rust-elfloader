@@ -1,6 +1,6 @@
 use crate::{
     ElfObject, Result, UserData,
-    arch::{Dyn, E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, PHDR_SIZE, Phdr},
+    arch::{Dyn, E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, Phdr},
     format::InitParam,
     mmap::{self, MapFlags, Mmap, ProtFlags},
     object::ElfObjectAsync,
@@ -12,7 +12,6 @@ use core::{
     any::Any,
     ffi::{CStr, c_void},
     marker::PhantomData,
-    mem::MaybeUninit,
     ops::Deref,
     ptr::NonNull,
 };
@@ -364,43 +363,19 @@ impl Builder {
 }
 
 pub(crate) struct ElfBuf {
-    stack_buf: MaybeUninit<[u8; EHDR_SIZE + 12 * PHDR_SIZE]>,
-    heap_buf: Vec<u8>,
+    buf: Vec<u8>,
 }
 
 impl ElfBuf {
-    const MAX_BUF_SIZE: usize = EHDR_SIZE + 12 * PHDR_SIZE;
-
-    const fn new() -> Self {
-        ElfBuf {
-            stack_buf: MaybeUninit::uninit(),
-            heap_buf: Vec::new(),
-        }
-    }
-
-    #[inline]
-    fn stack_buf(&mut self) -> &mut [u8] {
-        unsafe { &mut *self.stack_buf.as_mut_ptr() }
-    }
-
-    #[inline]
-    fn heap_buf(&mut self) -> &mut Vec<u8> {
-        &mut self.heap_buf
-    }
-
-    #[inline]
-    fn get_phdrs_from_heap(&self) -> &[ElfPhdr] {
-        unsafe {
-            core::slice::from_raw_parts(
-                self.heap_buf.as_ptr().cast::<ElfPhdr>(),
-                self.heap_buf.len() / size_of::<ElfPhdr>(),
-            )
-        }
+    fn new() -> Self {
+        let mut buf = Vec::new();
+        buf.resize(EHDR_SIZE, 0);
+        ElfBuf { buf }
     }
 
     pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
-        object.read(self.stack_buf(), 0)?;
-        ElfHeader::new(self.stack_buf()).cloned()
+        object.read(&mut self.buf[..EHDR_SIZE], 0)?;
+        ElfHeader::new(&self.buf).cloned()
     }
 
     pub(crate) fn prepare_phdr(
@@ -409,21 +384,16 @@ impl ElfBuf {
         object: &mut impl ElfObject,
     ) -> Result<&[ElfPhdr]> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
-        if Self::MAX_BUF_SIZE >= phdr_end {
-            unsafe {
-                Ok(core::slice::from_raw_parts(
-                    self.stack_buf
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(phdr_start)
-                        .cast::<ElfPhdr>(),
-                    (phdr_end - phdr_start) / size_of::<Phdr>(),
-                ))
-            }
-        } else {
-            self.heap_buf().resize(phdr_end - phdr_start, 0);
-            object.read(self.heap_buf(), phdr_start)?;
-            Ok(self.get_phdrs_from_heap())
+        let size = phdr_end - phdr_start;
+        if size > self.buf.len() {
+            self.buf.resize(size, 0);
+        }
+        object.read(&mut self.buf[..size], phdr_start)?;
+		unsafe {
+            Ok(core::slice::from_raw_parts(
+                self.buf.as_ptr().cast::<ElfPhdr>(),
+                self.buf.len() / size_of::<ElfPhdr>(),
+            ))
         }
     }
 }
@@ -451,7 +421,7 @@ impl<M: Mmap> Default for Loader<M> {
 
 impl<M: Mmap> Loader<M> {
     /// Create a new loader
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             init_param: None,
             hook: None,
@@ -471,9 +441,7 @@ impl<M: Mmap> Loader<M> {
     }
 
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
-        let buf = &mut self.buf.stack_buf()[0..EHDR_SIZE];
-        object.read(buf, 0)?;
-        ElfHeader::new(buf).cloned()
+        self.buf.prepare_ehdr(object)
     }
 
     pub fn read_phdr(
@@ -481,10 +449,7 @@ impl<M: Mmap> Loader<M> {
         object: &mut impl ElfObject,
         ehdr: &ElfHeader,
     ) -> Result<&[ElfPhdr]> {
-        let (phdr_start, phdr_end) = ehdr.phdr_range();
-        self.buf.heap_buf().resize(phdr_end - phdr_start, 0);
-        object.read(self.buf.heap_buf(), phdr_start)?;
-        Ok(self.buf.get_phdrs_from_heap())
+        self.buf.prepare_phdr(ehdr, object)
     }
 
     pub(crate) fn load_impl(

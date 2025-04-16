@@ -39,6 +39,10 @@ fn compile() {
             TARGET_TRIPLE
                 .set("riscv64gc-unknown-linux-gnu".to_string())
                 .unwrap();
+        } else if arch.contains("riscv32") {
+            TARGET_TRIPLE
+                .set("riscv32gc-unknown-linux-gnu".to_string())
+                .unwrap();
         } else if arch.contains("aarch64") {
             TARGET_TRIPLE
                 .set("aarch64-unknown-linux-gnu".to_string())
@@ -59,6 +63,7 @@ fn compile() {
                 .arg(name)
                 .arg("--target")
                 .arg(TARGET_TRIPLE.get().unwrap().as_str())
+                .arg("-Zbuild-std=core,alloc")
                 .arg("--")
                 .arg("-C")
                 .arg("panic=abort")

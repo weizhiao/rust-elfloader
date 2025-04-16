@@ -120,6 +120,7 @@ Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have 
 | x86_64      | ✅       | ✅            | ✅(CI)     |
 | aarch64     | ✅       | ✅            | ✅(CI)     |
 | riscv64     | ✅       | ✅            | ✅(CI)     |
+| riscv32     | ✅       | ✅            | ❌         |
 | loongarch64 | ✅       | ❌            | ✅(Manual) |
 | x86         | ✅       | ✅            | ✅(CI)     |
 | arm         | ✅       | ✅            | ✅(CI)     |

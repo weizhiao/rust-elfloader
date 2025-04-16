@@ -54,6 +54,7 @@ extern crate alloc;
     target_arch = "x86_64",
     target_arch = "aarch64",
     target_arch = "riscv64",
+	target_arch = "riscv32",
     target_arch = "loongarch64",
     target_arch = "x86",
     target_arch = "arm",

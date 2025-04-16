@@ -13,7 +13,10 @@ cfg_if::cfg_if! {
     }else if #[cfg(target_arch = "riscv64")]{
         mod riscv64;
         pub use riscv64::*;
-    }else if #[cfg(target_arch="aarch64")]{
+    }else if #[cfg(target_arch = "riscv32")]{
+        mod riscv32;
+        pub use riscv32::*;
+	}else if #[cfg(target_arch="aarch64")]{
         mod aarch64;
         pub use aarch64::*;
     }else if #[cfg(target_arch="loongarch64")]{
@@ -49,7 +52,6 @@ cfg_if::cfg_if! {
         pub(crate) type Sym = elf::symbol::Elf64_Sym;
         pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
         pub(crate) const REL_BIT: usize = 32;
-        pub(crate) const PHDR_SIZE: usize = core::mem::size_of::<elf::segment::Elf64_Phdr>();
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf64_Ehdr>();
     }else{
         pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS32;
@@ -62,7 +64,6 @@ cfg_if::cfg_if! {
         pub(crate) type Sym = Elf32Sym;
         pub(crate) const REL_MASK: usize = 0xFF;
         pub(crate) const REL_BIT: usize = 8;
-        pub(crate) const PHDR_SIZE: usize = core::mem::size_of::<elf::segment::Elf32_Phdr>();
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
     }
 }
