@@ -44,6 +44,18 @@ version = "0.4.27"
 default-features = false
 optional = true
 
+[dependencies.portable-atomic]
+version = "1.3"
+default-features = false
+optional = true
+features = ["require-cas"]
+
+[dependencies.portable-atomic-util]
+version = "0.2"
+default-features = false
+optional = true
+features = ["alloc"]
+
 [dependencies]
 bitflags = "2.9.0"
 cfg-if = '1.0'
@@ -75,7 +87,8 @@ version = []
 log = ["dep:log"]
 # Use rel as the relocation type
 rel = []
-
+# support target without native pointer size atomic operation
+portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
 
 [[example]]
 name = "relocate_dylib"

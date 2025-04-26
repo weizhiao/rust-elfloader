@@ -6,7 +6,7 @@ use crate::{
     relocate_error,
     symbol::SymbolInfo,
 };
-use alloc::{boxed::Box, format, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, format, vec::Vec};
 use core::{
     any::Any,
     marker::PhantomData,
@@ -15,6 +15,11 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 use elf::abi::*;
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
 
 // lazy binding 时会先从这里寻找符号
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
