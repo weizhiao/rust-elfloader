@@ -12,12 +12,7 @@ use crate::{
     segment::ElfSegments,
     symbol::SymbolTable,
 };
-use alloc::{
-    boxed::Box,
-    ffi::CString,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
+use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
     any::Any,
     cell::Cell,
@@ -33,6 +28,11 @@ use delegate::delegate;
 use dylib::{ElfDylib, RelocatedDylib};
 use elf::abi::PT_LOAD;
 use exec::{ElfExec, RelocatedExec};
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::{Arc, Weak};
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::{Arc, Weak};
 
 struct DataItem {
     key: u8,
@@ -177,7 +177,13 @@ pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &F) ->
 where
     F: Fn(&str) -> Option<*const ()>,
 {
-    Arc::new(move |name| {
+    #[cfg(not(feature = "portable-atomic"))]
+    type Ptr<T> = Arc<T>;
+    #[cfg(feature = "portable-atomic")]
+    type Ptr<T> = Box<T>;
+    // workaround unstable CoerceUnsized by create Box<dyn _> then convert using Arc::from
+    // https://github.com/rust-lang/rust/issues/18598
+    let closure: Ptr<dyn for<'a> Fn(&'a str) -> Option<*const ()>> = Ptr::new(move |name| {
         libs.iter().find_map(|lib| {
             pre_find(name).or_else(|| unsafe {
                 RelocatedDylib::from_core_component(lib.upgrade().unwrap())
@@ -185,7 +191,8 @@ where
                     .map(|sym| sym.into_raw())
             })
         })
-    })
+    });
+    closure.into()
 }
 
 impl Elf {
