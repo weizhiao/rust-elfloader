@@ -389,7 +389,7 @@ impl ElfBuf {
             self.buf.resize(size, 0);
         }
         object.read(&mut self.buf[..size], phdr_start)?;
-		unsafe {
+        unsafe {
             Ok(core::slice::from_raw_parts(
                 self.buf.as_ptr().cast::<ElfPhdr>(),
                 self.buf.len() / size_of::<ElfPhdr>(),
@@ -399,7 +399,12 @@ impl ElfBuf {
 }
 
 pub(crate) type Hook = Box<
-    dyn Fn(&CStr, &ElfPhdr, &ElfSegments, &mut UserData) -> core::result::Result<(), Box<dyn Any>>,
+    dyn Fn(
+        &CStr,
+        &ElfPhdr,
+        &ElfSegments,
+        &mut UserData,
+    ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>,
 >;
 
 /// The elf object loader

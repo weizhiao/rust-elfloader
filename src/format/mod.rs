@@ -8,7 +8,7 @@ use crate::{
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
-    relocation::LazyScope,
+    relocation::{DealUnknown, LazyScope},
     segment::ElfSegments,
     symbol::SymbolTable,
 };
@@ -192,13 +192,12 @@ impl Elf {
     /// Relocate the elf file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
         'scope: 'iter,
         'iter: 'lib,
@@ -218,17 +217,15 @@ impl Elf {
     /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
+    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
-        deal_unknown: D,
+        deal_unknown: &mut DealUnknown,
         local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedElf<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRelType, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,

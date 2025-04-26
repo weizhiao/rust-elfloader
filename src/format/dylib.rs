@@ -1,18 +1,18 @@
 use super::{CoreComponentRef, ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, Result, UserData,
-    arch::{ElfPhdr, ElfRelType},
+    arch::ElfPhdr,
     dynamic::ElfDynamic,
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{LazyScope, RelocateHelper, SymDef, relocate_impl},
+    relocation::{DealUnknown, LazyScope, SymDef, relocate_impl},
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
+use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
@@ -46,13 +46,12 @@ impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         pre_find: &'find F,
     ) -> Result<RelocatedDylib<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
         'scope: 'iter,
         'iter: 'lib,
@@ -67,7 +66,7 @@ impl ElfDylib {
         self.relocate(
             scope,
             pre_find,
-            |_, _, _| Err(Box::new(())),
+            &mut |_, _, _| Err(Box::new(())),
             local_lazy_scope,
         )
     }
@@ -79,34 +78,22 @@ impl ElfDylib {
     /// * Typically, the `scope` should also contain the current dynamic library itself,
     ///   relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
+    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
-        deal_unknown: D,
+        deal_unknown: &mut DealUnknown,
         local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedDylib<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRelType, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
     {
-        let helper = scope
-            .clone()
-            .map(|lib| RelocateHelper {
-                base: lib.base(),
-                symtab: lib.symtab(),
-                #[cfg(feature = "log")]
-                lib_name: lib.name(),
-            })
-            .collect();
-        let wrapper =
-            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
+        let helper = scope.collect();
         Ok(RelocatedDylib {
-            inner: relocate_impl(self.inner, helper, pre_find, &wrapper, local_lazy_scope)?,
+            inner: relocate_impl(self.inner, helper, pre_find, deal_unknown, local_lazy_scope)?,
         })
     }
 }

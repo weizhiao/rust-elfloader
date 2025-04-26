@@ -1,15 +1,15 @@
 use super::{CoreComponentRef, ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
-    arch::{ElfPhdr, ElfRelType},
+    arch::ElfPhdr,
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{LazyScope, RelocateHelper, relocate_impl},
+    relocation::{DealUnknown, LazyScope, relocate_impl},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{any::Any, fmt::Debug, marker::PhantomData, ops::Deref};
+use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 impl Deref for ElfExec {
     type Target = ElfCommonPart;
@@ -37,13 +37,12 @@ impl ElfExec {
     /// Relocate the executable file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, S, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         pre_find: &'find F,
     ) -> Result<RelocatedExec<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
         'scope: 'iter,
         'iter: 'lib,
@@ -58,7 +57,7 @@ impl ElfExec {
         self.relocate(
             scope,
             pre_find,
-            |_, _, _| Err(Box::new(())),
+            &mut |_, _, _| Err(Box::new(())),
             local_lazy_scope,
         )
     }
@@ -69,17 +68,15 @@ impl ElfExec {
     /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
     /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    pub fn relocate<'iter, 'scope, 'find, 'lib, S, F, D>(
+    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: S,
+        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
-        deal_unknown: D,
+        deal_unknown: &mut DealUnknown,
         local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedExec<'lib>>
     where
-        S: Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
         F: Fn(&str) -> Option<*const ()>,
-        D: Fn(&ElfRelType, &CoreComponent, S) -> core::result::Result<(), Box<dyn Any>>,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -94,31 +91,14 @@ impl ElfExec {
             });
         }
         let mut helper = Vec::new();
-        if let Some(symtab) = self.inner.symtab() {
-            helper.push(unsafe {
-                core::mem::transmute::<RelocateHelper<'_>, RelocateHelper<'static>>(
-                    RelocateHelper {
-                        base: self.inner.base(),
-                        symtab,
-                        #[cfg(feature = "log")]
-                        lib_name: self.name(),
-                    },
-                )
-            });
+        let temp = unsafe { &RelocatedDylib::from_core_component(self.core_component()) };
+        if self.inner.symtab().is_some() {
+            helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
         }
-        scope.clone().for_each(|lib| {
-            helper.push(RelocateHelper {
-                base: lib.base(),
-                symtab: lib.symtab(),
-                #[cfg(feature = "log")]
-                lib_name: lib.name(),
-            })
-        });
-        let wrapper =
-            |rela: &ElfRelType, core: &CoreComponent| deal_unknown(rela, core, scope.clone());
+        scope.for_each(|lib| helper.push(lib));
         Ok(RelocatedExec {
             entry: self.inner.entry,
-            inner: relocate_impl(self.inner, helper, pre_find, &wrapper, local_lazy_scope)?,
+            inner: relocate_impl(self.inner, helper, pre_find, deal_unknown, local_lazy_scope)?,
         })
     }
 }

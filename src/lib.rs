@@ -54,7 +54,7 @@ extern crate alloc;
     target_arch = "x86_64",
     target_arch = "aarch64",
     target_arch = "riscv64",
-	target_arch = "riscv32",
+    target_arch = "riscv32",
     target_arch = "loongarch64",
     target_arch = "x86",
     target_arch = "arm",
@@ -112,7 +112,7 @@ pub enum Error {
     /// An error occurred during dynamic library relocation.
     RelocateError {
         msg: String,
-        custom_err: Box<dyn Any>,
+        custom_err: Box<dyn Any + Send + Sync>,
     },
     /// An error occurred while parsing dynamic section.
     ParseDynamicError { msg: &'static str },
@@ -121,7 +121,7 @@ pub enum Error {
     /// An error occurred while parsing program header.
     ParsePhdrError {
         msg: String,
-        custom_err: Box<dyn Any>,
+        custom_err: Box<dyn Any + Send + Sync>,
     },
 }
 
@@ -152,7 +152,7 @@ fn io_error(msg: impl ToString) -> Error {
 
 #[cold]
 #[inline(never)]
-fn relocate_error(msg: impl ToString, custom_err: Box<dyn Any>) -> Error {
+fn relocate_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) -> Error {
     Error::RelocateError {
         msg: msg.to_string(),
         custom_err,
@@ -175,7 +175,7 @@ fn parse_ehdr_error(msg: impl ToString) -> Error {
 
 #[cold]
 #[inline(never)]
-fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any>) -> Error {
+fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) -> Error {
     Error::ParsePhdrError {
         msg: msg.to_string(),
         custom_err,

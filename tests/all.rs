@@ -114,7 +114,7 @@ mod fs {
             .relocate(
                 [&a].into_iter(),
                 &pre_find,
-                |_, _, _| Err(Box::new(())),
+                &mut |_, _, _| Err(Box::new(())),
                 Some(Arc::new(|name| unsafe {
                     a.get::<()>(name)
                         .map(|sym| sym.into_raw())

@@ -1,10 +1,10 @@
 //! Relocation of elf objects
 use crate::{
-    CoreComponent, Error, Result,
+    CoreComponent, Error, RelocatedDylib, Result,
     arch::*,
     format::{CoreComponentInner, ElfCommonPart, Relocated},
     relocate_error,
-    symbol::{SymbolInfo, SymbolTable},
+    symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, format, sync::Arc, vec::Vec};
 use core::{
@@ -45,24 +45,20 @@ impl<'temp> SymDef<'temp> {
     }
 }
 
-pub(crate) struct RelocateHelper<'core> {
-    pub base: usize,
-    pub symtab: &'core SymbolTable,
-    #[cfg(feature = "log")]
-    pub lib_name: &'core str,
-}
-
 pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
-type DealUnknown<'deal> =
-    &'deal dyn Fn(&ElfRelType, &CoreComponent) -> core::result::Result<(), Box<dyn Any>>;
+pub(crate) type DealUnknown = dyn Fn(
+    &ElfRelType,
+    &CoreComponent,
+    &[&RelocatedDylib],
+) -> core::result::Result<(), Box<dyn Any + Send + Sync>>;
 
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
     elf: ElfCommonPart,
-    scope: Vec<RelocateHelper<'iter>>,
+    scope: Vec<&'iter RelocatedDylib>,
     pre_find: &'find F,
-    deal_unknown: DealUnknown,
+    deal_unknown: &mut DealUnknown,
     local_lazy_scope: Option<LazyScope<'lib>>,
 ) -> Result<Relocated<'lib>>
 where
@@ -71,7 +67,7 @@ where
     'find: 'lib,
 {
     elf.relocate_relative()
-        .relocate_dynrel(&scope, pre_find, &deal_unknown)?
+        .relocate_dynrel(&scope, pre_find, deal_unknown)?
         .relocate_pltrel(local_lazy_scope, &scope, pre_find, deal_unknown)?
         .finish();
     Ok(Relocated {
@@ -136,7 +132,7 @@ pub(crate) struct ElfRelocation {
 
 fn find_symdef<'iter, 'temp>(
     core: &'temp CoreComponent,
-    libs: &[RelocateHelper<'iter>],
+    libs: &[&'iter RelocatedDylib],
     dynsym: &'temp ElfSymbol,
     syminfo: &SymbolInfo,
 ) -> Option<SymDef<'temp>>
@@ -151,17 +147,17 @@ where
     } else {
         libs.iter()
             .find_map(|lib| {
-                lib.symtab.lookup_filter(syminfo).map(|sym| {
+                lib.symtab().lookup_filter(syminfo).map(|sym| {
                     #[cfg(feature = "log")]
                     log::trace!(
                         "binding file [{}] to [{}]: symbol [{}]",
                         core.name(),
-                        lib.lib_name,
+                        lib.name(),
                         syminfo.name()
                     );
                     SymDef {
                         sym: Some(sym),
-                        base: lib.base,
+                        base: lib.base(),
                     }
                 })
             })
@@ -189,7 +185,7 @@ where
 fn reloc_error(
     r_type: usize,
     r_sym: usize,
-    custom_err: Box<dyn Any>,
+    custom_err: Box<dyn Any + Send + Sync>,
     lib: &CoreComponent,
 ) -> Error {
     if r_sym == 0 {
@@ -218,9 +214,9 @@ impl ElfCommonPart {
     fn relocate_pltrel<F>(
         &self,
         local_lazy_scope: Option<LazyScope<'_>>,
-        scope: &[RelocateHelper],
+        scope: &[&RelocatedDylib],
         pre_find: &F,
-        deal_unknown: DealUnknown,
+        deal_unknown: &mut DealUnknown,
     ) -> Result<&Self>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -285,7 +281,7 @@ impl ElfCommonPart {
                     write_val(base, rel.r_offset(), ifunc());
                     continue;
                 }
-                deal_unknown(rel, core)
+                deal_unknown(rel, core, scope)
                     .map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;
             }
             if let Some(relro) = self.relro() {
@@ -340,9 +336,9 @@ impl ElfCommonPart {
 
     fn relocate_dynrel<F>(
         &self,
-        scope: &[RelocateHelper],
+        scope: &[&RelocatedDylib],
         pre_find: &F,
-        deal_unknown: DealUnknown,
+        deal_unknown: &mut DealUnknown,
     ) -> Result<&Self>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -399,7 +395,8 @@ impl ElfCommonPart {
             if unlikely(r_type == REL_NONE) {
                 continue;
             }
-            deal_unknown(rel, core).map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;
+            deal_unknown(rel, core, scope)
+                .map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;
         }
         Ok(self)
     }
