@@ -1,41 +1,19 @@
 #![no_std]
 #![no_main]
-extern crate alloc;
 
-use alloc::string::ToString;
 use core::{
-    arch::global_asm,
-    ffi::{CStr, c_int},
-    fmt,
+    ffi::CStr,
     panic::PanicInfo,
-    ptr::null,
+    ptr::{addr_of_mut, null},
 };
 use elf_loader::{
     abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
     arch::{Dyn, ElfPhdr, REL_RELATIVE},
     load,
 };
+use itoa::Buffer;
 use linked_list_allocator::LockedHeap;
-use syscalls::{Sysno, raw_syscall};
-
-#[macro_export]
-macro_rules! println {
-    ($fmt: literal $(, $($arg: tt)+)?) => {
-        $crate::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?))
-    }
-}
-
-fn print(args: fmt::Arguments) {
-    let s = &args.to_string();
-    print_str(s);
-}
-
-fn exit(status: c_int) -> ! {
-    unsafe {
-        from_ret(raw_syscall!(Sysno::exit, status), "exit failed").unwrap();
-    }
-    unreachable!()
-}
+use mini_loader::{exit, print_str, println};
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
@@ -48,47 +26,30 @@ const AT_EXECFN: u64 = 31;
 #[global_allocator]
 static mut ALLOCATOR: LockedHeap = LockedHeap::empty();
 
+const HAEP_SIZE: usize = 4096;
+static mut HEAP_BUF: [u8; HAEP_SIZE] = [0; HAEP_SIZE];
+static mut HEAP_INIT: bool = false;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let location = info.location().unwrap();
-    println!(
-        "{}:{}:{}   panic: {}",
-        location.file(),
-        location.line(),
-        location.column(),
-        info.message()
-    );
+    let mut buf = Buffer::new();
+    print_str(location.file());
+    print_str(":");
+    print_str(buf.format(location.line()));
+    print_str(":");
+    print_str(buf.format(location.column()));
+    print_str(" ");
+    if let Some(msg) = info.message().as_str() {
+        print_str(msg);
+        print_str("\n");
+    } else {
+        if unsafe { HEAP_INIT } {
+            println!("{}", info.message())
+        }
+    }
     exit(-1);
 }
-
-global_asm!(
-    "    
-	.text
-	.globl	_start
-	.hidden	_start
-	.type	_start,@function
-_start:
-	mov	rdi, rsp
-.weak _DYNAMIC
-.hidden _DYNAMIC
-	lea rsi, [rip + _DYNAMIC]
-	call rust_main
-	hlt"
-);
-
-global_asm!(
-    "	
-	.text
-	.align	4
-	.globl	trampoline
-	.type	trampoline,@function
-trampoline:
-	xor rdx, rdx
-	mov	rsp, rsi
-	jmp	rdi
-	/* Should not reach. */
-	hlt"
-);
 
 #[repr(C)]
 struct Aux {
@@ -172,10 +133,12 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         let ptr = (rela.r_offset as usize + base) as *mut usize;
         unsafe { ptr.write(base + rela.r_addend as usize) };
     }
-    const HAEP_SIZE: usize = 4096;
-    let mut heap_buf: [u8; HAEP_SIZE] = [0; HAEP_SIZE];
     // 至此就完成自举，可以进行函数调用了
-    unsafe { ALLOCATOR = LockedHeap::new(heap_buf.as_mut_ptr(), HAEP_SIZE) };
+    unsafe {
+        ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HAEP_SIZE);
+        HEAP_INIT = true;
+    }
+
     if argc == 1 {
         panic!("no input file");
     }
@@ -227,28 +190,5 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         } else {
             trampoline(elf.entry(), sp);
         }
-    }
-}
-
-/// Converts a raw syscall return value to a result.
-#[inline(always)]
-fn from_ret(value: usize, msg: &str) -> Result<usize, &str> {
-    if value > -4096isize as usize {
-        // Truncation of the error value is guaranteed to never occur due to
-        // the above check. This is the same check that musl uses:
-        // https://git.musl-libc.org/cgit/musl/tree/src/internal/syscall_ret.c?h=v1.1.15
-        return Err(msg);
-    }
-    Ok(value)
-}
-
-#[inline]
-fn print_str(s: &str) {
-    unsafe {
-        from_ret(
-            raw_syscall!(Sysno::write, 1, s.as_ptr(), s.len()),
-            "print failed",
-        )
-        .unwrap();
     }
 }

@@ -7,13 +7,15 @@ license = "MIT/Apache-2.0"
 rust-version = "1.85.0"
 readme = "README.md"
 description = "The mini-loader is capable of loading and executing ELF files, including Executable file and Position-Independent Executable file"
-version = "1.1.2"
+version = "1.2.0"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os"]
 
 [dependencies]
+cfg-if = '1.0'
+itoa = "1.0.15"
 syscalls = { version = "0.6.18", default-features = false }
-elf_loader = { version = "=0.10.1", default-features = false, features = [
+elf_loader = { version = "0.10.1", default-features = false, features = [
 	"fs",
 	"mmap",
 	"use-syscall",
@@ -23,7 +25,6 @@ elf = { version = "0.7.4", default-features = false }
 
 [[bin]]
 name = "mini-loader"
-
 
 [profile.release]
 panic = "abort"

@@ -273,7 +273,7 @@ pub(crate) struct CoreComponentInner {
     /// rela.plt
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     /// phdrs
-    phdrs: &'static [ElfPhdr],
+    phdrs: ElfPhdrs,
     /// .fini
     fini_fn: Option<extern "C" fn()>,
     /// .fini_array
@@ -397,7 +397,10 @@ impl CoreComponent {
     /// Gets the program headers of the elf object.
     #[inline]
     pub fn phdrs(&self) -> &[ElfPhdr] {
-        self.inner.phdrs
+        match &self.inner.phdrs {
+            ElfPhdrs::Mmap(phdrs) => &phdrs,
+            ElfPhdrs::Vec(phdrs) => &phdrs,
+        }
     }
 
     /// Gets the address of the dynamic section.
@@ -439,7 +442,7 @@ impl CoreComponent {
                 symbols: Some(SymbolTable::new(&dynamic)),
                 pltrel: None,
                 dynamic: NonNull::new(dynamic.dyn_ptr as _),
-                phdrs,
+                phdrs: ElfPhdrs::Mmap(phdrs),
                 segments,
                 fini_fn: None,
                 fini_array_fn: None,
@@ -487,7 +490,7 @@ enum State {
     Empty,
     Uninit {
         is_dylib: bool,
-        phdrs: &'static [ElfPhdr],
+        phdrs: ElfPhdrs,
         init_param: Option<InitParam>,
         name: CString,
         dynamic_ptr: Option<NonNull<Dyn>>,
@@ -586,7 +589,7 @@ impl LazyParse {
                                 symbols: None,
                                 dynamic: None,
                                 pltrel: None,
-                                phdrs: &[],
+                                phdrs: ElfPhdrs::Mmap(&[]),
                                 fini_fn: None,
                                 fini_array_fn: None,
                                 segments,
@@ -630,6 +633,12 @@ impl Deref for LazyParse {
     }
 }
 
+#[derive(Clone)]
+enum ElfPhdrs {
+    Mmap(&'static [ElfPhdr]),
+    Vec(Vec<ElfPhdr>),
+}
+
 pub struct ElfCommonPart {
     /// entry
     entry: usize,
@@ -638,7 +647,7 @@ pub struct ElfCommonPart {
     /// file name
     name: &'static CStr,
     /// phdrs
-    phdrs: &'static [ElfPhdr],
+    phdrs: ElfPhdrs,
     /// data parse lazy
     data: LazyParse,
 }
@@ -716,7 +725,10 @@ impl ElfCommonPart {
 
     /// Gets the program headers of the elf object.
     pub fn phdrs(&self) -> &[ElfPhdr] {
-        self.phdrs
+        match &self.phdrs {
+            ElfPhdrs::Mmap(phdrs) => &phdrs,
+            ElfPhdrs::Vec(phdrs) => &phdrs,
+        }
     }
 
     #[inline]
@@ -775,28 +787,31 @@ impl Builder {
     pub(crate) fn create_inner(self, phdrs: &[ElfPhdr], is_dylib: bool) -> ElfCommonPart {
         let (phdr_start, phdr_end) = self.ehdr.phdr_range();
         // 获取映射到内存中的Phdr
-        let phdrs = self.phdr_mmap.unwrap_or_else(|| {
-            phdrs
-                .iter()
-                .filter(|phdr| phdr.p_type == PT_LOAD)
-                .find_map(|phdr| {
-                    let cur_range =
-                        phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
-                    if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
-                        return Some(self.segments.get_slice::<ElfPhdr>(
-                            phdr.p_vaddr as usize + phdr_start - cur_range.start,
-                            self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
-                        ));
-                    }
-                    None
-                })
-                .unwrap()
-        });
+        let phdrs = self
+            .phdr_mmap
+            .or_else(|| {
+                phdrs
+                    .iter()
+                    .filter(|phdr| phdr.p_type == PT_LOAD)
+                    .find_map(|phdr| {
+                        let cur_range =
+                            phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
+                        if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                            return Some(self.segments.get_slice::<ElfPhdr>(
+                                phdr.p_vaddr as usize + phdr_start - cur_range.start,
+                                self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
+                            ));
+                        }
+                        None
+                    })
+            })
+            .map(|phdrs| ElfPhdrs::Mmap(phdrs))
+            .unwrap_or_else(|| ElfPhdrs::Vec(Vec::from(phdrs)));
         ElfCommonPart {
             entry: self.ehdr.e_entry as usize + if is_dylib { self.segments.base() } else { 0 },
             interp: self.interp,
             name: unsafe { core::mem::transmute::<&CStr, &CStr>(self.name.as_c_str()) },
-            phdrs,
+            phdrs: phdrs.clone(),
             data: LazyParse {
                 state: Cell::new(State::Uninit {
                     is_dylib,
