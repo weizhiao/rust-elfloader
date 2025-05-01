@@ -101,15 +101,16 @@ The `elf_loader` supports the RELR relative relocation format. For detailed info
 
 # Feature
 
-| Feature     | Description                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs          | Enable support for filesystems                                                                                                                                                    |
-| use-libc    | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend, otherwise it will just use `linux syscalls` |
-| use-syscall | This feature works when the `fs` or `mmap `feature is enabled. If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend                                 |
-| mmap        | Use the default implementation on platforms with mmap when loading ELF files                                                                                                      |
-| version     | Use the version information of symbols when resolving them.                                                                                                                       |
-| log         | Enable logging                                                                                                                                                                    |
-| rel         | Use rel as the relocation type                                                                                                                                                    |
+| Feature         | Description                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fs              | Enable support for filesystems                                                                                                                    |
+| use-libc        | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend              |
+| use-syscall     | This feature works when the `fs` or `mmap `feature is enabled. If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend |
+| mmap            | Use the default implementation on platforms with mmap when loading ELF files                                                                      |
+| version         | Use the version information of symbols when resolving them.                                                                                       |
+| log             | Enable logging                                                                                                                                    |
+| rel             | Use rel as the relocation type                                                                                                                    |
+| portable-atomic | support target without native pointer size atomic operation                                                                                       |
 
 Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have an operating system.
 

@@ -1,4 +1,4 @@
-use super::{CoreComponentRef, ElfCommonPart, Relocated, create_lazy_scope};
+use super::{ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::ElfPhdr,
@@ -7,7 +7,7 @@ use crate::{
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{DealUnknown, LazyScope, SymDef, relocate_impl},
+    relocation::{LazyScope, SymDef, UnknownHandler, relocate_impl},
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
@@ -48,7 +48,7 @@ impl ElfDylib {
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedDylib<'lib>>
     where
@@ -57,14 +57,23 @@ impl ElfDylib {
         'iter: 'lib,
         'find: 'lib,
     {
-        let local_lazy_scope: Option<LazyScope> = if self.is_lazy() {
-            let libs: Vec<CoreComponentRef> = scope.clone().map(|lib| lib.downgrade()).collect();
+        let iter = scope.into_iter();
+        let mut helper = Vec::new();
+        let local_lazy_scope = if self.is_lazy() {
+            let mut libs = Vec::new();
+            iter.for_each(|lib| {
+                libs.push(lib.downgrade());
+                helper.push(lib);
+            });
             Some(create_lazy_scope(libs, pre_find))
         } else {
+            iter.for_each(|lib| {
+                helper.push(lib);
+            });
             None
         };
         self.relocate(
-            scope,
+            helper,
             pre_find,
             &mut |_, _, _| Err(Box::new(())),
             local_lazy_scope,
@@ -80,9 +89,9 @@ impl ElfDylib {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
         pre_find: &'find F,
-        deal_unknown: &mut DealUnknown,
+        deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedDylib<'lib>>
     where
@@ -91,9 +100,14 @@ impl ElfDylib {
         'iter: 'lib,
         'find: 'lib,
     {
-        let helper = scope.collect();
         Ok(RelocatedDylib {
-            inner: relocate_impl(self.inner, helper, pre_find, deal_unknown, local_lazy_scope)?,
+            inner: relocate_impl(
+                self.inner,
+                scope.as_ref(),
+                pre_find,
+                deal_unknown,
+                local_lazy_scope,
+            )?,
         })
     }
 }

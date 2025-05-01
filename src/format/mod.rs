@@ -8,7 +8,7 @@ use crate::{
     loader::Builder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
-    relocation::{DealUnknown, LazyScope},
+    relocation::{LazyScope, UnknownHandler},
     segment::ElfSegments,
     symbol::SymbolTable,
 };
@@ -201,7 +201,7 @@ impl Elf {
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
     where
@@ -226,9 +226,9 @@ impl Elf {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
         pre_find: &'find F,
-        deal_unknown: &mut DealUnknown,
+        deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedElf<'lib>>
     where

@@ -6,7 +6,7 @@ use crate::{
     relocate_error,
     symbol::SymbolInfo,
 };
-use alloc::{boxed::Box, format, vec::Vec};
+use alloc::{boxed::Box, format};
 use core::{
     any::Any,
     marker::PhantomData,
@@ -52,7 +52,7 @@ impl<'temp> SymDef<'temp> {
 
 pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
-pub(crate) type DealUnknown = dyn Fn(
+pub(crate) type UnknownHandler = dyn FnMut(
     &ElfRelType,
     &CoreComponent,
     &[&RelocatedDylib],
@@ -61,9 +61,9 @@ pub(crate) type DealUnknown = dyn Fn(
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
     elf: ElfCommonPart,
-    scope: Vec<&'iter RelocatedDylib>,
+    scope: &[&'iter RelocatedDylib],
     pre_find: &'find F,
-    deal_unknown: &mut DealUnknown,
+    deal_unknown: &mut UnknownHandler,
     local_lazy_scope: Option<LazyScope<'lib>>,
 ) -> Result<Relocated<'lib>>
 where
@@ -221,7 +221,7 @@ impl ElfCommonPart {
         local_lazy_scope: Option<LazyScope<'_>>,
         scope: &[&RelocatedDylib],
         pre_find: &F,
-        deal_unknown: &mut DealUnknown,
+        deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -343,7 +343,7 @@ impl ElfCommonPart {
         &self,
         scope: &[&RelocatedDylib],
         pre_find: &F,
-        deal_unknown: &mut DealUnknown,
+        deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
     where
         F: Fn(&str) -> Option<*const ()>,

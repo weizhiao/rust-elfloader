@@ -90,13 +90,13 @@ fn main() {
     let liba = load_dylib!(&lib_path("liba.so")).unwrap();
     let libb = load_dylib!(&lib_path("libb.so")).unwrap();
     let libc = load_dylib!(&lib_path("libc.so")).unwrap();
-    let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+    let a = liba.easy_relocate([], &pre_find).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
-    let b = libb.easy_relocate([&a].into_iter(), &pre_find).unwrap();
+    let b = libb.easy_relocate([&a], &pre_find).unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
-    let c = libc.easy_relocate([&b].into_iter(), &pre_find).unwrap();
+    let c = libc.easy_relocate([&b], &pre_find).unwrap();
     let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
 }

@@ -1,4 +1,4 @@
-use super::{CoreComponentRef, ElfCommonPart, Relocated, create_lazy_scope};
+use super::{ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
     arch::ElfPhdr,
@@ -6,7 +6,7 @@ use crate::{
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{DealUnknown, LazyScope, relocate_impl},
+    relocation::{LazyScope, UnknownHandler, relocate_impl},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
@@ -39,41 +39,8 @@ impl ElfExec {
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>> + Clone,
+        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
         pre_find: &'find F,
-    ) -> Result<RelocatedExec<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        let local_lazy_scope: Option<LazyScope> = if self.is_lazy() {
-            let libs: Vec<CoreComponentRef> = scope.clone().map(|lib| lib.downgrade()).collect();
-            Some(create_lazy_scope(libs, pre_find))
-        } else {
-            None
-        };
-        self.relocate(
-            scope,
-            pre_find,
-            &mut |_, _, _| Err(Box::new(())),
-            local_lazy_scope,
-        )
-    }
-
-    /// Relocate the executable file with the given dynamic libraries and function closure.
-    /// # Note
-    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
-    /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
-    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
-        self,
-        scope: impl Iterator<Item = &'iter RelocatedDylib<'scope>>,
-        pre_find: &'find F,
-        deal_unknown: &mut DealUnknown,
-        local_lazy_scope: Option<LazyScope<'lib>>,
     ) -> Result<RelocatedExec<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -95,10 +62,69 @@ impl ElfExec {
         if self.inner.symtab().is_some() {
             helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
         }
-        scope.for_each(|lib| helper.push(lib));
+        let iter = scope.into_iter();
+        let local_lazy_scope = if self.is_lazy() {
+            let mut libs = Vec::new();
+            iter.for_each(|lib| {
+                libs.push(lib.downgrade());
+                helper.push(lib);
+            });
+            Some(create_lazy_scope(libs, pre_find))
+        } else {
+            iter.for_each(|lib| {
+                helper.push(lib);
+            });
+            None
+        };
         Ok(RelocatedExec {
             entry: self.inner.entry,
-            inner: relocate_impl(self.inner, helper, pre_find, deal_unknown, local_lazy_scope)?,
+            inner: relocate_impl(
+                self.inner,
+                &helper,
+                pre_find,
+                &mut |_, _, _| Err(Box::new(())),
+                local_lazy_scope,
+            )?,
+        })
+    }
+
+    /// Relocate the executable file with the given dynamic libraries and function closure.
+    /// # Note
+    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
+    /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
+    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
+        self,
+        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
+        pre_find: &'find F,
+        deal_unknown: &mut UnknownHandler,
+        local_lazy_scope: Option<LazyScope<'lib>>,
+    ) -> Result<RelocatedExec<'lib>>
+    where
+        F: Fn(&str) -> Option<*const ()>,
+        'scope: 'iter,
+        'iter: 'lib,
+        'find: 'lib,
+    {
+        if self.inner.relocation().is_empty() {
+            return Ok(RelocatedExec {
+                entry: self.inner.entry,
+                inner: Relocated {
+                    core: self.inner.into_core_component(),
+                    _marker: PhantomData,
+                },
+            });
+        }
+        Ok(RelocatedExec {
+            entry: self.inner.entry,
+            inner: relocate_impl(
+                self.inner,
+                scope.as_ref(),
+                pre_find,
+                deal_unknown,
+                local_lazy_scope,
+            )?,
         })
     }
 }

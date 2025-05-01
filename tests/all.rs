@@ -112,7 +112,7 @@ mod fs {
         let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
         let b = libb
             .relocate(
-                [&a].into_iter(),
+                [&a],
                 &pre_find,
                 &mut |_, _, _| Err(Box::new(())),
                 Some(Arc::new(|name| unsafe {

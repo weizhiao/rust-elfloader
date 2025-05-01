@@ -436,13 +436,15 @@ impl<M: Mmap> Loader<M> {
     }
 
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
-    pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) {
+    pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) -> &mut Self {
         self.init_param = Some(InitParam { argc, argv, envp });
+        self
     }
 
     /// `hook` functions are called first when a program header is processed
-    pub fn set_hook(&mut self, hook: Hook) {
-        self.hook = Some(hook)
+    pub fn set_hook(&mut self, hook: Hook) -> &mut Self {
+        self.hook = Some(hook);
+        self
     }
 
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
