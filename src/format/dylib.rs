@@ -262,7 +262,7 @@ impl RelocatedDylib<'_> {
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
         self.symtab()
-            .lookup_filter(&SymbolInfo::from_str(name, None))
+            .lookup_filter(&SymbolInfo::from_str(name, None, &self.symtab().hashtab))
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
