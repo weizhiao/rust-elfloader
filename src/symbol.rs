@@ -399,7 +399,6 @@ impl SymbolTable {
         None
     }
 
-    #[inline]
     /// Use the symbol index to get the symbols in the symbol table.
     pub fn symbol_idx<'symtab>(
         &'symtab self,
