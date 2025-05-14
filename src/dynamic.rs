@@ -151,18 +151,18 @@ impl ElfDynamic {
         });
         let verneed = verneed_off.map(|verneed_off| unsafe {
             (
-                verneed_off.checked_add(segments.base()).unwrap_unchecked(),
+                verneed_off.checked_add(base).unwrap_unchecked(),
                 verneed_num.unwrap_unchecked(),
             )
         });
         let verdef = verdef_off.map(|verdef_off| unsafe {
             (
-                verdef_off.checked_add(segments.base()).unwrap_unchecked(),
+                verdef_off.checked_add(base).unwrap_unchecked(),
                 verdef_num.unwrap_unchecked(),
             )
         });
-        let version_idx = version_ids_off
-            .map(|off| unsafe { off.checked_add(segments.base()).unwrap_unchecked() });
+        let version_idx =
+            version_ids_off.map(|off| unsafe { off.checked_add(base).unwrap_unchecked() });
         Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
             hashtab: hash_off + base,

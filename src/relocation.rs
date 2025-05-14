@@ -135,6 +135,21 @@ pub(crate) struct ElfRelocation {
     dynrel: &'static [ElfRelType],
 }
 
+fn find_weak(base: usize, dynsym: &ElfSymbol) -> Option<SymDef> {
+    // 弱符号 + WEAK 用 0 填充rela offset
+    if dynsym.is_weak() && dynsym.is_undef() {
+        assert!(dynsym.st_value() == 0);
+        Some(SymDef { sym: None, base })
+    } else if dynsym.st_value() != 0 {
+        Some(SymDef {
+            sym: Some(dynsym),
+            base,
+        })
+    } else {
+        None
+    }
+}
+
 fn find_symdef<'iter, 'temp>(
     core: &'temp CoreComponent,
     libs: &[&'iter RelocatedDylib],
@@ -150,39 +165,21 @@ where
             base: core.base(),
         })
     } else {
-        libs.iter()
-            .find_map(|lib| {
-                lib.symtab().lookup_filter(syminfo).map(|sym| {
-                    #[cfg(feature = "log")]
-                    log::trace!(
-                        "binding file [{}] to [{}]: symbol [{}]",
-                        core.name(),
-                        lib.name(),
-                        syminfo.name()
-                    );
-                    SymDef {
-                        sym: Some(sym),
-                        base: lib.base(),
-                    }
-                })
-            })
-            .or_else(|| {
-                // 弱符号 + WEAK 用 0 填充rela offset
-                if dynsym.is_weak() && dynsym.is_undef() {
-                    assert!(dynsym.st_value() == 0);
-                    Some(SymDef {
-                        sym: None,
-                        base: core.base(),
-                    })
-                } else if dynsym.st_value() != 0 {
-                    Some(SymDef {
-                        sym: Some(dynsym),
-                        base: core.base(),
-                    })
-                } else {
-                    None
+        libs.iter().find_map(|lib| {
+            lib.symtab().lookup_filter(syminfo).map(|sym| {
+                #[cfg(feature = "log")]
+                log::trace!(
+                    "binding file [{}] to [{}]: symbol [{}]",
+                    core.name(),
+                    lib.name(),
+                    syminfo.name()
+                );
+                SymDef {
+                    sym: Some(sym),
+                    base: lib.base(),
                 }
             })
+        })
     }
 }
 
@@ -276,7 +273,9 @@ impl ElfCommonPart {
                 if likely(r_type == REL_JUMP_SLOT) {
                     let (dynsym, syminfo) = symbol.symbol_idx(r_sym);
                     if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                        find_symdef(core, scope, dynsym, &syminfo).map(|symdef| symdef.convert())
+                        find_symdef(core, scope, dynsym, &syminfo)
+                            .or_else(|| find_weak(base, dynsym))
+                            .map(|symdef| symdef.convert())
                     }) {
                         write_val(base, rel.r_offset(), symbol as usize);
                         continue;
@@ -367,7 +366,9 @@ impl ElfCommonPart {
                 REL_GOT | REL_SYMBOLIC => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
                     if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                        find_symdef(core, scope, dynsym, &syminfo).map(|symdef| symdef.convert())
+                        find_symdef(core, scope, dynsym, &syminfo)
+                            .or_else(|| find_weak(base, dynsym))
+                            .map(|symdef| symdef.convert())
                     }) {
                         write_val(base, rel.r_offset(), symbol as usize);
                         continue;
@@ -375,7 +376,9 @@ impl ElfCommonPart {
                 }
                 REL_DTPOFF => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-                    if let Some(symdef) = find_symdef(core, scope, dynsym, &syminfo) {
+                    if let Some(symdef) = find_symdef(core, scope, dynsym, &syminfo)
+                        .or_else(|| find_weak(base, dynsym))
+                    {
                         // offset in tls
                         let tls_val = (symdef.sym.unwrap().st_value() + r_addend)
                             .wrapping_sub(TLS_DTV_OFFSET);
@@ -385,7 +388,9 @@ impl ElfCommonPart {
                 }
                 REL_COPY => {
                     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-                    if let Some(symbol) = find_symdef(core, scope, dynsym, &syminfo) {
+                    if let Some(symbol) = find_symdef(core, scope, dynsym, &syminfo)
+                        .or_else(|| find_weak(base, dynsym))
+                    {
                         let len = symbol.sym.unwrap().st_size();
                         let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
                         let src = core
@@ -395,10 +400,8 @@ impl ElfCommonPart {
                         continue;
                     }
                 }
+                REL_NONE => continue,
                 _ => {}
-            }
-            if unlikely(r_type == REL_NONE) {
-                continue;
             }
             deal_unknown(rel, core, scope)
                 .map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;

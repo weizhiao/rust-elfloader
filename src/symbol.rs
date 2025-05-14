@@ -121,7 +121,6 @@ struct PreCompute {
 }
 
 impl PreCompute {
-    #[inline]
     fn new(name: &str) -> Self {
         let hash = ElfGnuHash::gnu_hash(name.as_bytes());
         PreCompute {
@@ -245,7 +244,6 @@ impl SymbolTable {
         None
     }
 
-    #[inline]
     /// Use the symbol index to get the symbols in the symbol table.
     pub fn symbol_idx<'symtab>(
         &'symtab self,
