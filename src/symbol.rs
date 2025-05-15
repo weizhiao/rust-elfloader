@@ -370,8 +370,7 @@ impl SymbolTable {
                         return None;
                     }
                     let chain_ptr = unsafe { hashtab.chains.add(chain_idx) };
-                    let chain_val = unsafe { chain_ptr.read() as usize };
-                    let cur_symbol = unsafe { &*self.symtab.add(chain_val) };
+                    let cur_symbol = unsafe { &*self.symtab.add(chain_idx) };
                     let sym_name = self.strtab.get_str(cur_symbol.st_name());
                     #[cfg(feature = "version")]
                     if sym_name == symbol.name && self.check_match(sym_idx, &symbol.version) {
@@ -381,7 +380,7 @@ impl SymbolTable {
                     if sym_name == symbol.name {
                         return Some(cur_symbol);
                     }
-                    chain_idx = chain_val;
+                    chain_idx = unsafe { chain_ptr.read() as usize };
                 }
             }
         }
