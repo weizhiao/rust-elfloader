@@ -8,6 +8,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::{
     num::NonZeroUsize,
+    ops::{Add, AddAssign, Sub, SubAssign},
     ptr::{NonNull, null_mut},
 };
 use elf::abi::*;
@@ -17,7 +18,8 @@ impl ElfDynamic {
         // 这两个是一个格式正常的elf动态库中必须存在的
         let mut symtab_off = 0;
         let mut strtab_off = 0;
-        let mut hash_off = None;
+        let mut elf_hash_off = None;
+        let mut gnu_hash_off = None;
         let mut got_off = None;
         let mut pltrel_size = None;
         let mut pltrel_off = None;
@@ -55,7 +57,8 @@ impl ElfDynamic {
                     DT_NEEDED => {
                         needed_libs.push(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
-                    DT_GNU_HASH => hash_off = Some(dynamic.d_un as usize),
+                    DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
+                    DT_GNU_HASH => gnu_hash_off = Some(dynamic.d_un as usize),
                     DT_SYMTAB => symtab_off = dynamic.d_un as usize,
                     DT_STRTAB => strtab_off = dynamic.d_un as usize,
                     DT_PLTRELSZ => {
@@ -129,9 +132,15 @@ impl ElfDynamic {
                     || !is_rela && size_of::<ElfRelType>() == size_of::<ElfRel>()
             );
         }
-        let hash_off = hash_off.ok_or(parse_dynamic_error(
-            "dynamic section does not have DT_GNU_HASH",
-        ))?;
+        let hash_off = if let Some(off) = gnu_hash_off {
+            ElfDynamicHashTab::Gnu(off)
+        } else if let Some(off) = elf_hash_off {
+            ElfDynamicHashTab::Elf(off)
+        } else {
+            return Err(parse_dynamic_error(
+                "dynamic section does not have DT_GNU_HASH nor DT_HASH",
+            ));
+        };
         let pltrel = pltrel_off
             .map(|pltrel_off| segments.get_slice(pltrel_off.get(), pltrel_size.unwrap().get()));
         let dynrel =
@@ -192,11 +201,65 @@ impl ElfDynamic {
     }
 }
 
+pub enum ElfDynamicHashTab {
+    Gnu(usize),
+    Elf(usize),
+}
+
+impl Into<usize> for ElfDynamicHashTab {
+    fn into(self) -> usize {
+        match self {
+            ElfDynamicHashTab::Gnu(off) => off,
+            ElfDynamicHashTab::Elf(off) => off,
+        }
+    }
+}
+
+impl Add<usize> for ElfDynamicHashTab {
+    type Output = ElfDynamicHashTab;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        match self {
+            ElfDynamicHashTab::Gnu(off) => ElfDynamicHashTab::Gnu(off + rhs),
+            ElfDynamicHashTab::Elf(off) => ElfDynamicHashTab::Elf(off + rhs),
+        }
+    }
+}
+
+impl Sub<usize> for ElfDynamicHashTab {
+    type Output = ElfDynamicHashTab;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        match self {
+            ElfDynamicHashTab::Gnu(off) => ElfDynamicHashTab::Gnu(off - rhs),
+            ElfDynamicHashTab::Elf(off) => ElfDynamicHashTab::Elf(off - rhs),
+        }
+    }
+}
+
+impl AddAssign<usize> for ElfDynamicHashTab {
+    fn add_assign(&mut self, rhs: usize) {
+        match self {
+            ElfDynamicHashTab::Gnu(off) => *off += rhs,
+            ElfDynamicHashTab::Elf(off) => *off += rhs,
+        }
+    }
+}
+
+impl SubAssign<usize> for ElfDynamicHashTab {
+    fn sub_assign(&mut self, rhs: usize) {
+        match self {
+            ElfDynamicHashTab::Gnu(off) => *off -= rhs,
+            ElfDynamicHashTab::Elf(off) => *off -= rhs,
+        }
+    }
+}
+
 /// Information in the dynamic section after mapping to the real address
 pub struct ElfDynamic {
     pub dyn_ptr: *const Dyn,
     /// DT_GNU_HASH
-    pub hashtab: usize,
+    pub hashtab: ElfDynamicHashTab,
     /// DT_STMTAB
     pub symtab: usize,
     /// DT_STRTAB

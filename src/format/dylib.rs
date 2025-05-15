@@ -261,8 +261,10 @@ impl RelocatedDylib<'_> {
     /// ```
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, None);
+        let mut precompute = syminfo.precompute();
         self.symtab()
-            .lookup_filter(&SymbolInfo::from_str(name, None))
+            .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
@@ -292,8 +294,10 @@ impl RelocatedDylib<'_> {
         name: &str,
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, Some(version));
+        let mut precompute = syminfo.precompute();
         self.symtab()
-            .lookup_filter(&SymbolInfo::from_str(name, Some(version)))
+            .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
