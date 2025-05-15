@@ -139,7 +139,7 @@ impl ElfHashTable for ElfHash {
 
     fn precompute(name: &[u8]) -> PreCompute {
         PreCompute::Elf {
-            hash: ElfGnuHash::hash(name),
+            hash: ElfHash::hash(name),
         }
     }
 }
