@@ -172,20 +172,20 @@ impl ElfStringTable {
     }
 }
 
-pub(crate) enum SymbolTableHashTab {
+pub(crate) enum SymbolTableHashTable {
     /// .gnu.hash
     Gnu(ElfGnuHash),
     /// .hash
     Elf(ElfHash),
 }
 
-impl SymbolTableHashTab {
+impl SymbolTableHashTable {
     #[inline]
     #[allow(dead_code)]
     fn hash(&self, name: &[u8]) -> u32 {
         match &self {
-            SymbolTableHashTab::Gnu(_) => ElfGnuHash::hash(name),
-            SymbolTableHashTab::Elf(_) => ElfHash::hash(name),
+            SymbolTableHashTable::Gnu(_) => ElfGnuHash::hash(name),
+            SymbolTableHashTable::Elf(_) => ElfHash::hash(name),
         }
     }
 
@@ -193,16 +193,16 @@ impl SymbolTableHashTab {
     #[allow(dead_code)]
     fn count_syms(&self) -> usize {
         match &self {
-            SymbolTableHashTab::Gnu(hashtab) => hashtab.count_syms(),
-            SymbolTableHashTab::Elf(hashtab) => hashtab.count_syms(),
+            SymbolTableHashTable::Gnu(hashtab) => hashtab.count_syms(),
+            SymbolTableHashTable::Elf(hashtab) => hashtab.count_syms(),
         }
     }
 
     #[inline]
     fn precompute(&self, name: &[u8]) -> PreCompute {
         match &self {
-            SymbolTableHashTab::Gnu(_) => ElfGnuHash::precompute(name),
-            SymbolTableHashTab::Elf(_) => ElfHash::precompute(name),
+            SymbolTableHashTable::Gnu(_) => ElfGnuHash::precompute(name),
+            SymbolTableHashTable::Elf(_) => ElfHash::precompute(name),
         }
     }
 }
@@ -210,7 +210,7 @@ impl SymbolTableHashTab {
 /// Symbol table of elf file.
 pub struct SymbolTable {
     /// .gnu.hash / .hash
-    pub(crate) hashtab: SymbolTableHashTab,
+    pub(crate) hashtab: SymbolTableHashTable,
     /// .dynsym
     symtab: *const ElfSymbol,
     /// .dynstr
@@ -245,7 +245,7 @@ impl<'symtab> SymbolInfo<'symtab> {
     pub(crate) fn from_str(
         name: &'symtab str,
         version: Option<&'symtab str>,
-        hashtab: &'symtab SymbolTableHashTab,
+        hashtab: &'symtab SymbolTableHashTable,
     ) -> Self {
         SymbolInfo {
             name,
@@ -273,10 +273,10 @@ impl SymbolTable {
     pub(crate) fn new(dynamic: &ElfDynamic) -> Self {
         let hashtab = match dynamic.hashtab {
             ElfDynamicHashTab::Gnu(off) => {
-                SymbolTableHashTab::Gnu(ElfGnuHash::parse(off as *const u8))
+                SymbolTableHashTable::Gnu(ElfGnuHash::parse(off as *const u8))
             }
             ElfDynamicHashTab::Elf(off) => {
-                SymbolTableHashTab::Elf(ElfHash::parse(off as *const u8))
+                SymbolTableHashTable::Elf(ElfHash::parse(off as *const u8))
             }
         };
         let symtab = dynamic.symtab as *const ElfSymbol;
@@ -304,7 +304,7 @@ impl SymbolTable {
     /// Use the symbol specific information to get the symbol in the symbol table
     pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
         match &self.hashtab {
-            SymbolTableHashTab::Gnu(hashtab) => {
+            SymbolTableHashTable::Gnu(hashtab) => {
                 let (hash, fofs, fmask) = match symbol.data {
                     PreCompute::Gnu { hash, fofs, fmask } => (hash, fofs, fmask),
                     _ => unreachable!(),
@@ -355,7 +355,7 @@ impl SymbolTable {
                     dynsym_idx += 1;
                 }
             }
-            SymbolTableHashTab::Elf(hashtab) => {
+            SymbolTableHashTable::Elf(hashtab) => {
                 let hash = match symbol.data {
                     PreCompute::Elf { hash } => hash,
                     _ => unreachable!(),
@@ -419,8 +419,8 @@ impl SymbolTable {
     #[inline]
     pub fn count_syms(&self) -> usize {
         match &self.hashtab {
-            SymbolTableHashTab::Gnu(hashtab) => hashtab.count_syms(),
-            SymbolTableHashTab::Elf(hashtab) => hashtab.count_syms(),
+            SymbolTableHashTable::Gnu(hashtab) => hashtab.count_syms(),
+            SymbolTableHashTable::Elf(hashtab) => hashtab.count_syms(),
         }
     }
 }
