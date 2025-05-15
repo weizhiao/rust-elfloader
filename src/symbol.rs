@@ -19,10 +19,9 @@ pub(crate) struct ElfGnuHash {
     chains: *const u32,
 }
 
-pub(crate) trait ElfHashTable {
+trait ElfHashTable {
     fn hash(name: &[u8]) -> u32;
     fn count_syms(&self) -> usize;
-    fn precompute(name: &[u8]) -> PreCompute;
 }
 
 impl ElfGnuHash {
@@ -72,15 +71,6 @@ impl ElfHashTable for ElfGnuHash {
             }
         }
         nsym + 1
-    }
-
-    fn precompute(name: &[u8]) -> PreCompute {
-        let hash = ElfGnuHash::hash(name);
-        PreCompute::Gnu {
-            hash,
-            fofs: hash as usize / usize::BITS as usize,
-            fmask: 1 << (hash % (8 * size_of::<usize>() as u32)),
-        }
     }
 }
 
@@ -135,12 +125,6 @@ impl ElfHashTable for ElfHash {
     #[inline]
     fn count_syms(&self) -> usize {
         self.header.nchain as usize
-    }
-
-    fn precompute(name: &[u8]) -> PreCompute {
-        PreCompute::Elf {
-            hash: ElfHash::hash(name),
-        }
     }
 }
 
@@ -197,14 +181,6 @@ impl SymbolTableHashTable {
             SymbolTableHashTable::Elf(hashtab) => hashtab.count_syms(),
         }
     }
-
-    #[inline]
-    fn precompute(&self, name: &[u8]) -> PreCompute {
-        match &self {
-            SymbolTableHashTable::Gnu(_) => ElfGnuHash::precompute(name),
-            SymbolTableHashTable::Elf(_) => ElfHash::precompute(name),
-        }
-    }
 }
 
 /// Symbol table of elf file.
@@ -223,21 +199,16 @@ pub struct SymbolTable {
 /// Symbol specific information, including symbol name and version name.
 pub struct SymbolInfo<'symtab> {
     name: &'symtab str,
-    data: PreCompute,
     cname: Option<&'symtab CStr>,
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'symtab>>,
 }
 
-pub(crate) enum PreCompute {
-    /// .gnu.hash computed hash
-    Gnu {
-        hash: u32,
-        fofs: usize,
-        fmask: usize,
-    },
-    /// .hash computed hash
-    Elf { hash: u32 },
+pub struct PreCompute {
+    gnuhash: u32,
+    fofs: usize,
+    fmask: usize,
+    hash: Option<u32>,
 }
 
 impl<'symtab> SymbolInfo<'symtab> {
@@ -245,11 +216,9 @@ impl<'symtab> SymbolInfo<'symtab> {
     pub(crate) fn from_str(
         name: &'symtab str,
         version: Option<&'symtab str>,
-        hashtab: &'symtab SymbolTableHashTable,
     ) -> Self {
         SymbolInfo {
             name,
-            data: hashtab.precompute(name.as_bytes()),
             cname: None,
             #[cfg(feature = "version")]
             version: version.map(crate::version::SymbolVersion::new),
@@ -266,6 +235,17 @@ impl<'symtab> SymbolInfo<'symtab> {
     #[inline]
     pub fn cname(&self) -> Option<&CStr> {
         self.cname
+    }
+
+    #[inline]
+    pub fn precompute(&self) -> PreCompute {
+        let gnuhash = ElfGnuHash::hash(self.name.as_bytes());
+        PreCompute {
+            gnuhash,
+            fofs: gnuhash as usize / usize::BITS as usize,
+            fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
+            hash: None,
+        }
     }
 }
 
@@ -302,13 +282,12 @@ impl SymbolTable {
     }
 
     /// Use the symbol specific information to get the symbol in the symbol table
-    pub fn lookup(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
+    pub fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
         match &self.hashtab {
             SymbolTableHashTable::Gnu(hashtab) => {
-                let (hash, fofs, fmask) = match symbol.data {
-                    PreCompute::Gnu { hash, fofs, fmask } => (hash, fofs, fmask),
-                    _ => unreachable!(),
-                };
+                let hash = precompute.gnuhash;
+                let fofs = precompute.fofs;
+                let fmask = precompute.fmask;
                 let bloom_idx = fofs & (hashtab.header.nbloom - 1) as usize;
                 let filter = unsafe { hashtab.blooms.add(bloom_idx).read() };
                 if filter & fmask == 0 {
@@ -356,9 +335,12 @@ impl SymbolTable {
                 }
             }
             SymbolTableHashTable::Elf(hashtab) => {
-                let hash = match symbol.data {
-                    PreCompute::Elf { hash } => hash,
-                    _ => unreachable!(),
+                let hash = if let Some(hash) = precompute.hash {
+                    hash
+                } else {
+                    let hash = ElfHash::hash(symbol.name.as_bytes());
+                    precompute.hash = Some(hash);
+                    hash
                 };
                 let bucket_idx = (hash as usize) % hashtab.header.nbucket as usize;
                 let bucket_ptr = unsafe { hashtab.buckets.add(bucket_idx) };
@@ -371,7 +353,7 @@ impl SymbolTable {
                     let cur_symbol = unsafe { &*self.symtab.add(chain_idx) };
                     let sym_name = self.strtab.get_str(cur_symbol.st_name());
                     #[cfg(feature = "version")]
-                    if sym_name == symbol.name && self.check_match(sym_idx, &symbol.version) {
+                    if sym_name == symbol.name && self.check_match(chain_idx, &symbol.version) {
                         return Some(cur_symbol);
                     }
                     #[cfg(not(feature = "version"))]
@@ -387,8 +369,12 @@ impl SymbolTable {
 
     /// Use the symbol specific information to get the symbol which can be used for relocation in the symbol table
     #[inline]
-    pub fn lookup_filter(&self, symbol: &SymbolInfo) -> Option<&ElfSymbol> {
-        if let Some(sym) = self.lookup(symbol) {
+    pub fn lookup_filter(
+        &self,
+        symbol: &SymbolInfo,
+        precompute: &mut PreCompute,
+    ) -> Option<&ElfSymbol> {
+        if let Some(sym) = self.lookup(symbol, precompute) {
             if !sym.is_undef() && sym.is_ok_bind() && sym.is_ok_type() {
                 return Some(sym);
             }
@@ -408,7 +394,6 @@ impl SymbolTable {
             symbol,
             SymbolInfo {
                 name,
-                data: self.hashtab.precompute(name.as_bytes()),
                 cname: Some(cname),
                 #[cfg(feature = "version")]
                 version: self.get_requirement(idx),

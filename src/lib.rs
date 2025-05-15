@@ -100,6 +100,7 @@ pub use format::dylib::{ElfDylib, RelocatedDylib, Symbol};
 pub use format::exec::{ElfExec, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, UserData};
 pub use loader::Loader;
+pub use relocation::find_symdef;
 
 /// elf_loader error types
 #[derive(Debug)]
