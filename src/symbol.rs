@@ -237,9 +237,7 @@ pub(crate) enum PreCompute {
         fmask: usize,
     },
     /// .hash computed hash
-    Elf {
-        hash: u32,
-    },
+    Elf { hash: u32 },
 }
 
 impl<'symtab> SymbolInfo<'symtab> {
