@@ -19,8 +19,7 @@ use core::{
     ffi::{CStr, c_int},
     fmt::Debug,
     marker::PhantomData,
-    mem::forget,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     ptr::{NonNull, null},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -502,20 +501,9 @@ enum State {
     Init(LazyData),
 }
 
-struct LazyParse {
-    state: Cell<State>,
-}
-
-impl LazyParse {
-    fn force(&self) -> &LazyData {
-        // 快路径加速
-        match unsafe { &*self.state.as_ptr() } {
-            State::Empty | State::Uninit { .. } => {}
-            State::Init(lazy_data) => return lazy_data,
-        }
-
-        let state = self.state.replace(State::Empty);
-        let lazy_data = match state {
+impl State {
+    fn init(self) -> Self {
+        let lazy_data = match self {
             State::Uninit {
                 name,
                 dynamic_ptr,
@@ -616,8 +604,34 @@ impl LazyParse {
             }
             State::Empty | State::Init(_) => unreachable!(),
         };
-        self.state.set(State::Init(lazy_data));
+        State::Init(lazy_data)
+    }
+}
+
+struct LazyParse {
+    state: Cell<State>,
+}
+
+impl LazyParse {
+    fn force(&self) -> &LazyData {
+        // 快路径加速
+        if let State::Init(lazy_data) = unsafe { &*self.state.as_ptr() } {
+            return lazy_data;
+        }
+        self.state.set(self.state.replace(State::Empty).init());
         match unsafe { &*self.state.as_ptr() } {
+            State::Empty | State::Uninit { .. } => unreachable!(),
+            State::Init(lazy_data) => lazy_data,
+        }
+    }
+
+    fn force_mut(&mut self) -> &mut LazyData {
+        // 快路径加速
+        if let State::Init(lazy_data) = self.state.get_mut() {
+            return unsafe { core::mem::transmute(lazy_data) };
+        }
+        self.state.set(self.state.replace(State::Empty).init());
+        match unsafe { &mut *self.state.as_ptr() } {
             State::Empty | State::Uninit { .. } => unreachable!(),
             State::Init(lazy_data) => lazy_data,
         }
@@ -633,12 +647,19 @@ impl Deref for LazyParse {
     }
 }
 
+impl DerefMut for LazyParse {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.force_mut()
+    }
+}
+
 #[derive(Clone)]
 enum ElfPhdrs {
     Mmap(&'static [ElfPhdr]),
     Vec(Vec<ElfPhdr>),
 }
 
+/// A common part of elf object
 pub struct ElfCommonPart {
     /// entry
     entry: usize,
@@ -756,14 +777,7 @@ impl ElfCommonPart {
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut UserData> {
         // 因为从LazyCell中获取可变引用是unstable feature，所以这里使用unsafe方法
         // 获取可变引用，然后通过forget释放掉Arc，避免Arc的计数器减1，导致Arc被释放。
-        let mut temp_inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.data.core.inner)) };
-        let user_data = unsafe {
-            core::mem::transmute::<Option<&mut UserData>, Option<&mut UserData>>(
-                Arc::get_mut(&mut temp_inner).map(|inner| &mut inner.user_data),
-            )
-        };
-        forget(temp_inner);
-        user_data
+        Arc::get_mut(&mut self.data.core.inner).map(|inner| &mut inner.user_data)
     }
 
     delegate! {

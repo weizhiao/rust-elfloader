@@ -262,10 +262,12 @@ impl<M: Mmap> Loader<M> {
         self
     }
 
+	/// Read the elf header
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
         self.buf.prepare_ehdr(object)
     }
 
+	/// Read the program header table
     pub fn read_phdr(
         &mut self,
         object: &mut impl ElfObject,
