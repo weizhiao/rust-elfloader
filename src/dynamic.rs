@@ -42,6 +42,7 @@ impl ElfDynamic {
         let mut rpath_off = None;
         let mut runpath_off = None;
         let mut flags = 0;
+        let mut flags_1 = 0;
         let mut is_rela = None;
         let mut needed_libs = Vec::new();
 
@@ -53,6 +54,7 @@ impl ElfDynamic {
             loop {
                 match dynamic.d_tag as _ {
                     DT_FLAGS => flags = dynamic.d_un as usize,
+                    DT_FLAGS_1 => flags_1 = dynamic.d_un as usize,
                     DT_PLTGOT => got_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
                     DT_NEEDED => {
                         needed_libs.push(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
@@ -177,7 +179,7 @@ impl ElfDynamic {
             hashtab: hash_off + base,
             symtab: symtab_off + base,
             strtab: strtab_off + base,
-            bind_now: flags & DF_BIND_NOW as usize != 0,
+            bind_now: flags & DF_BIND_NOW as usize != 0 || flags_1 & DF_1_NOW as usize != 0,
             got: NonNull::new(
                 got_off
                     .map(|off| (base + off.get()) as *mut usize)
