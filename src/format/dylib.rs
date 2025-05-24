@@ -268,7 +268,7 @@ impl RelocatedDylib<'_> {
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
-                    base: self.base(),
+                    lib: self,
                 }
                 .convert() as _,
                 pd: PhantomData,
@@ -301,7 +301,7 @@ impl RelocatedDylib<'_> {
             .map(|sym| Symbol {
                 ptr: SymDef {
                     sym: Some(sym),
-                    base: self.base(),
+                    lib: self,
                 }
                 .convert() as _,
                 pd: PhantomData,

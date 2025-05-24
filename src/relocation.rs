@@ -24,9 +24,9 @@ use portable_atomic_util::Arc;
 // lazy binding 时会先从这里寻找符号
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
 
-pub struct SymDef<'temp> {
-    pub sym: Option<&'temp ElfSymbol>,
-    pub base: usize,
+pub struct SymDef<'lib> {
+    pub sym: Option<&'lib ElfSymbol>,
+    pub lib: &'lib CoreComponent,
 }
 
 impl<'temp> SymDef<'temp> {
@@ -34,13 +34,13 @@ impl<'temp> SymDef<'temp> {
     #[inline(always)]
     pub fn convert(self) -> *const () {
         if likely(self.sym.is_some()) {
+            let base = self.lib.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
             if likely(sym.st_type() != STT_GNU_IFUNC) {
-                (self.base + sym.st_value()) as _
+                (base + sym.st_value()) as _
             } else {
                 // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
-                let ifunc: fn() -> usize =
-                    unsafe { core::mem::transmute(self.base + sym.st_value()) };
+                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + sym.st_value()) };
                 ifunc() as _
             }
         } else {
@@ -135,15 +135,15 @@ pub(crate) struct ElfRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-fn find_weak(base: usize, dynsym: &ElfSymbol) -> Option<SymDef> {
+fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<SymDef<'lib>> {
     // 弱符号 + WEAK 用 0 填充rela offset
     if dynsym.is_weak() && dynsym.is_undef() {
         assert!(dynsym.st_value() == 0);
-        Some(SymDef { sym: None, base })
+        Some(SymDef { sym: None, lib })
     } else if dynsym.st_value() != 0 {
         Some(SymDef {
             sym: Some(dynsym),
-            base,
+            lib,
         })
     } else {
         None
@@ -172,11 +172,10 @@ fn find_symdef_impl<'iter, 'lib>(
 where
     'iter: 'lib,
 {
-    let base = core.base();
     if unlikely(dynsym.is_local()) {
         Some(SymDef {
             sym: Some(dynsym),
-            base,
+            lib: core,
         })
     } else {
         let mut precompute = syminfo.precompute();
@@ -194,11 +193,11 @@ where
                         );
                         SymDef {
                             sym: Some(sym),
-                            base: lib.base(),
+                            lib: &lib,
                         }
                     })
             })
-            .or_else(|| find_weak(base, dynsym))
+            .or_else(|| find_weak(core, dynsym))
     }
 }
 
