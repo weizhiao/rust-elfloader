@@ -1,4 +1,5 @@
 use std::{collections::HashMap, ffi::CStr};
+
 use windows_elf_loader::WinElfLoader;
 
 fn main() {
@@ -12,22 +13,13 @@ fn main() {
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let mut loader = WinElfLoader::new();
     let liba = loader
-        .load_dylib(
-            "liba",
-            include_bytes!("../../target/x86_64-unknown-linux-gnu/release/liba.so"),
-        )
+        .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
         .unwrap();
     let libb = loader
-        .load_dylib(
-            "libb",
-            include_bytes!("../../target/x86_64-unknown-linux-gnu/release/libb.so"),
-        )
+        .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
         .unwrap();
     let libc = loader
-        .load_dylib(
-            "libc",
-            include_bytes!("../../target/x86_64-unknown-linux-gnu/release/libc.so"),
-        )
+        .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
         .unwrap();
     let a = liba.easy_relocate([], &pre_find).unwrap();
     let f = unsafe { a.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

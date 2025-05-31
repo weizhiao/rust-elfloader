@@ -15,9 +15,10 @@ English | [中文](README_zh.md)
 
 # Usage
 `elf_loader` can load various ELF files and provides interfaces for extended functionality. It can be used in the following areas:
-* Use it as an ELF file loader in operating system kernels
-* Use it to implement a Rust version of the dynamic linker
-* Use it to load ELF dynamic libraries on embedded devices
+* Use it as an ELF file loader in operating system kernels.
+* Use it to implement a Rust version of the dynamic linker.
+* Use it to load ELF dynamic libraries on embedded devices.
+* Use it to load elf files on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/windows-elf-loader).
 
 # Capabilities
 ### ✨ Works in `no_std` environments ✨
@@ -111,6 +112,7 @@ The `elf_loader` supports the RELR relative relocation format. For detailed info
 | log             | Enable logging                                                                                                                                    |
 | rel             | Use rel as the relocation type                                                                                                                    |
 | portable-atomic | support target without native pointer size atomic operation                                                                                       |
+| lazy            | Enable lazy binding                                                                                                                               |
 
 Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have an operating system.
 

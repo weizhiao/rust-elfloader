@@ -13,10 +13,7 @@ fn main() {
     let mut loader: WinElfLoader = WinElfLoader::new();
     // Load and relocate dynamic library liba.so
     let liba = loader
-        .load_dylib(
-            "liba",
-            include_bytes!("../../target/x86_64-unknown-linux-gnu/release/liba.so"),
-        )
+        .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
         .unwrap()
         .easy_relocate([], &pre_find)
         .unwrap();

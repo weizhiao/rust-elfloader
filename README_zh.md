@@ -107,7 +107,8 @@ Found 11 outliers among 100 measurements (11.00%)
 | version         | 在解析符号时使用符号的版本信息                                                                |
 | log             | 启用日志                                                                                      |
 | rel             | 将rel作为重定位条目的格式                                                                     |
-| portable-atomic | 支持没有native指针大小原子操作的目标                                                            |
+| portable-atomic | 支持没有native指针大小原子操作的目标                                                          |
+| lazy            | 启用延迟绑定                                                                                  |
 
 在没有操作系统的情况下请关闭`fs`，`use-syscall`，`use-libc`和`mmap`这四个feature。
 
