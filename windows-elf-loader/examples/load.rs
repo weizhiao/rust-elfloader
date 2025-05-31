@@ -1,0 +1,26 @@
+use std::{collections::HashMap, ffi::CStr};
+use windows_elf_loader::WinElfLoader;
+
+fn main() {
+    extern "sysv64" fn print(s: *const i8) {
+        let s = unsafe { CStr::from_ptr(s).to_str().unwrap() };
+        println!("{}", s);
+    }
+    // Symbols required by dynamic library liba.so
+    let mut map = HashMap::new();
+    map.insert("print", print as _);
+    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    let mut loader: WinElfLoader = WinElfLoader::new();
+    // Load and relocate dynamic library liba.so
+    let liba = loader
+        .load_dylib(
+            "liba",
+            include_bytes!("../../target/x86_64-unknown-linux-gnu/release/liba.so"),
+        )
+        .unwrap()
+        .easy_relocate([], &pre_find)
+        .unwrap();
+    // Call function a in liba.so
+    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
+    println!("{}", f());
+}
