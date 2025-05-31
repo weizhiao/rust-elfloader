@@ -1,4 +1,3 @@
-use core::arch::global_asm;
 
 // https://loongson.github.io/LoongArch-Documentation/LoongArch-ELF-ABI-CN.html
 
@@ -26,7 +25,8 @@ pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
 
 pub const REL_GOT: u32 = u32::MAX;
 
-global_asm!(
+#[cfg(feature = "lazy")]
+core::arch::global_asm!(
     "
     .text
     .globl dl_runtime_resolve
@@ -36,6 +36,7 @@ dl_runtime_resolve:
 "
 );
 
+#[cfg(feature = "lazy")]
 #[inline]
 pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     unsafe extern "C" {

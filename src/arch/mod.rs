@@ -16,7 +16,7 @@ cfg_if::cfg_if! {
     }else if #[cfg(target_arch = "riscv32")]{
         mod riscv32;
         pub use riscv32::*;
-	}else if #[cfg(target_arch="aarch64")]{
+    }else if #[cfg(target_arch="aarch64")]{
         mod aarch64;
         pub use aarch64::*;
     }else if #[cfg(target_arch="loongarch64")]{
@@ -30,6 +30,9 @@ cfg_if::cfg_if! {
         pub use arm::*;
     }
 }
+
+#[cfg(not(feature = "lazy"))]
+pub(crate) fn prepare_lazy_bind(_got: *mut usize, _dylib: usize) {}
 
 pub const REL_NONE: u32 = 0;
 const OK_BINDS: usize = 1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE;

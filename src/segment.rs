@@ -103,23 +103,25 @@ async fn mmap_segment_async<M: Mmap>(
         )
     }?;
     if need_copy {
-        let dest = unsafe {
-            core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz)
-        };
-        object.read_async(dest, param.file.offset).await?;
-        unsafe { M::mprotect(ptr, param.len, param.prot) }?;
+        unsafe {
+            let dest =
+                core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
+            object.read(dest, param.file.offset)?;
+            M::mprotect(ptr, param.len, param.prot)?;
+        }
     }
     Ok(ptr)
 }
 
 #[inline]
-fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize) {
+fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize, usize) {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
     // 最小偏移地址对应内容在文件中的偏移
     let mut min_off = 0;
     let mut min_filesz = 0;
     let mut min_prot = 0;
+    let mut min_memsz = 0;
 
     //找到最小的偏移地址和最大的偏移地址
     for phdr in phdrs {
@@ -131,6 +133,7 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize) {
                 min_off = phdr.p_offset as usize;
                 min_prot = phdr.p_flags;
                 min_filesz = phdr.p_filesz as usize;
+                min_memsz = phdr.p_memsz as usize;
             }
             if vaddr_end > max_vaddr {
                 max_vaddr = vaddr_end;
@@ -155,6 +158,7 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize) {
             },
         },
         min_vaddr,
+        roundup(min_vaddr + min_memsz),
     )
 }
 
@@ -246,10 +250,29 @@ impl ElfSegments {
         phdrs: &[ElfPhdr],
         is_dylib: bool,
     ) -> Result<Self> {
-        let (param, min_vaddr) = parse_segments(phdrs, is_dylib);
-        let memory = mmap_segment::<M>(&param, object)?;
+        let (param, min_vaddr, min_memsz) = parse_segments(phdrs, is_dylib);
+        let mut need_copy = false;
+        let ptr = unsafe {
+            M::mmap(
+                param.addr,
+                param.len,
+                param.prot,
+                param.flags,
+                param.file.offset,
+                object.as_fd(),
+                &mut need_copy,
+            )
+        }?;
+        if need_copy {
+            unsafe {
+                let dest =
+                    core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
+                object.read(dest, param.file.offset)?;
+                M::mprotect(ptr, min_memsz, param.prot)?;
+            }
+        }
         Ok(ElfSegments {
-            memory,
+            memory: ptr,
             offset: min_vaddr,
             len: param.len,
             munmap: M::munmap,
@@ -261,10 +284,29 @@ impl ElfSegments {
         phdrs: &[ElfPhdr],
         is_dylib: bool,
     ) -> Result<Self> {
-        let (param, min_vaddr) = parse_segments(phdrs, is_dylib);
-        let memory = mmap_segment_async::<M>(&param, object).await?;
+        let (param, min_vaddr, min_memsz) = parse_segments(phdrs, is_dylib);
+        let mut need_copy = false;
+        let ptr = unsafe {
+            M::mmap(
+                param.addr,
+                param.len,
+                param.prot,
+                param.flags,
+                param.file.offset,
+                object.as_fd(),
+                &mut need_copy,
+            )
+        }?;
+        if need_copy {
+            unsafe {
+                let dest =
+                    core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
+                object.read_async(dest, param.file.offset).await?;
+                M::mprotect(ptr, min_memsz, param.prot)?;
+            }
+        }
         Ok(ElfSegments {
-            memory,
+            memory: ptr,
             offset: min_vaddr,
             len: param.len,
             munmap: M::munmap,

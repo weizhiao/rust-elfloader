@@ -5,7 +5,7 @@ use crate::{
     ELFRelro, ElfRelocation, Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
-    loader::Builder,
+    loader::{Builder, FnArray},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     relocation::{LazyScope, UnknownHandler},
@@ -16,7 +16,7 @@ use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
     any::Any,
     cell::Cell,
-    ffi::{CStr, c_int},
+    ffi::CStr,
     fmt::Debug,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -73,42 +73,6 @@ impl UserData {
             }
             None
         })
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct InitParam {
-    pub argc: usize,
-    pub argv: usize,
-    pub envp: usize,
-}
-
-pub(crate) struct ElfInit {
-    init_param: Option<InitParam>,
-    /// .init
-    init_fn: Option<extern "C" fn()>,
-    /// .init_array
-    init_array_fn: Option<&'static [extern "C" fn()]>,
-}
-
-impl ElfInit {
-    #[inline]
-    pub(crate) fn call_init(&self) {
-        if let Some(init_params) = self.init_param {
-            self.init_fn
-                .iter()
-                .chain(self.init_array_fn.unwrap_or(&[]).iter())
-                .for_each(|init| unsafe {
-                    core::mem::transmute::<extern "C" fn(), extern "C" fn(c_int, usize, usize)>(
-                        *init,
-                    )(init_params.argc as _, init_params.argv, init_params.envp);
-                });
-        } else {
-            self.init_fn
-                .iter()
-                .chain(self.init_array_fn.unwrap_or(&[]).iter())
-                .for_each(|init| init());
-        }
     }
 }
 
@@ -270,13 +234,12 @@ pub(crate) struct CoreComponentInner {
     /// dynamic
     dynamic: Option<NonNull<Dyn>>,
     /// rela.plt
+    #[allow(unused)]
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     /// phdrs
     phdrs: ElfPhdrs,
-    /// .fini
-    fini_fn: Option<extern "C" fn()>,
-    /// .fini_array
-    fini_array_fn: Option<&'static [extern "C" fn()]>,
+    /// .fini and .fini_array
+    fini: Box<dyn Fn()>,
     /// needed libs' name
     needed_libs: Box<[&'static str]>,
     /// user data
@@ -290,10 +253,7 @@ pub(crate) struct CoreComponentInner {
 impl Drop for CoreComponentInner {
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
-            self.fini_fn
-                .iter()
-                .chain(self.fini_array_fn.unwrap_or(&[]).iter())
-                .for_each(|fini| fini());
+            (self.fini)();
         }
     }
 }
@@ -443,8 +403,7 @@ impl CoreComponent {
                 dynamic: NonNull::new(dynamic.dyn_ptr as _),
                 phdrs: ElfPhdrs::Mmap(phdrs),
                 segments,
-                fini_fn: None,
-                fini_array_fn: None,
+                fini: Box::new(|| {}),
                 needed_libs: Box::new([]),
                 user_data,
                 lazy_scope: None,
@@ -471,7 +430,7 @@ struct ElfExtraData {
     /// GNU_RELRO segment
     relro: Option<ELFRelro>,
     /// init
-    init: ElfInit,
+    init: Box<dyn Fn()>,
     /// DT_RPATH
     rpath: Option<&'static str>,
     /// DT_RUNPATH
@@ -490,7 +449,8 @@ enum State {
     Uninit {
         is_dylib: bool,
         phdrs: ElfPhdrs,
-        init_param: Option<InitParam>,
+        init_fn: FnArray,
+        fini_fn: FnArray,
         name: CString,
         dynamic_ptr: Option<NonNull<Dyn>>,
         segments: ElfSegments,
@@ -511,7 +471,8 @@ impl State {
                 relro,
                 user_data,
                 lazy_bind,
-                init_param,
+                init_fn,
+                fini_fn,
                 phdrs,
                 is_dylib,
             } => {
@@ -534,11 +495,7 @@ impl State {
                             lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
                             relro,
                             relocation,
-                            init: ElfInit {
-                                init_param,
-                                init_fn: dynamic.init_fn,
-                                init_array_fn: dynamic.init_array_fn,
-                            },
+                            init: Box::new(move || init_fn(dynamic.init_fn, dynamic.init_array_fn)),
                             got: dynamic.got,
                             rpath: dynamic
                                 .rpath_off
@@ -557,8 +514,9 @@ impl State {
                                     dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
                                 ),
                                 phdrs,
-                                fini_fn: dynamic.fini_fn,
-                                fini_array_fn: dynamic.fini_array_fn,
+                                fini: Box::new(move || {
+                                    fini_fn(dynamic.fini_fn, dynamic.fini_array_fn)
+                                }),
                                 segments,
                                 needed_libs: needed_libs.into_boxed_slice(),
                                 user_data,
@@ -578,8 +536,7 @@ impl State {
                                 dynamic: None,
                                 pltrel: None,
                                 phdrs: ElfPhdrs::Mmap(&[]),
-                                fini_fn: None,
-                                fini_array_fn: None,
+                                fini: Box::new(|| {}),
                                 segments,
                                 needed_libs: Box::new([]),
                                 user_data,
@@ -590,11 +547,7 @@ impl State {
                             lazy: lazy_bind.unwrap_or(false),
                             relro,
                             relocation,
-                            init: ElfInit {
-                                init_param,
-                                init_fn: None,
-                                init_array_fn: None,
-                            },
+                            init: Box::new(|| {}),
                             got: None,
                             rpath: None,
                             runpath: None,
@@ -765,7 +718,7 @@ impl ElfCommonPart {
     #[inline]
     pub(crate) fn finish(&self) {
         self.data.core.set_init();
-        self.data.extra.init.call_init();
+        (self.data.extra.init)();
     }
 
     #[inline]
@@ -830,7 +783,8 @@ impl Builder {
                 state: Cell::new(State::Uninit {
                     is_dylib,
                     phdrs,
-                    init_param: self.init_param,
+                    init_fn: self.init_fn,
+                    fini_fn: self.fini_fn,
                     name: self.name,
                     dynamic_ptr: self.dynamic_ptr,
                     segments: self.segments,

@@ -2,7 +2,7 @@
 use crate::{
     CoreComponent, Error, RelocatedDylib, Result,
     arch::*,
-    format::{CoreComponentInner, ElfCommonPart, Relocated},
+    format::{ElfCommonPart, Relocated},
     relocate_error,
     symbol::SymbolInfo,
 };
@@ -89,8 +89,9 @@ fn write_val(base: usize, offset: usize, val: usize) {
     };
 }
 
+#[cfg(feature = "lazy")]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
+unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_idx: usize) -> usize {
     let rela = unsafe { &*dylib.pltrel.unwrap().add(rela_idx).as_ptr() };
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
@@ -245,7 +246,11 @@ impl ElfCommonPart {
         let base = core.base();
         let reloc = self.relocation();
         let symbol = self.symtab().unwrap();
-        if self.is_lazy() {
+		#[cfg(feature = "lazy")]
+		let is_lazy = self.is_lazy();
+		# [cfg(not(feature = "lazy"))]
+		let is_lazy = false;
+        if is_lazy {
             // 开启lazy bind后会跳过plt相关的重定位
             for rel in reloc.pltrel {
                 let r_type = rel.r_type() as u32;

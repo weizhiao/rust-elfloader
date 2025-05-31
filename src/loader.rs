@@ -1,13 +1,12 @@
 use crate::{
     ElfObject, Result, UserData,
     arch::{Dyn, E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, Phdr},
-    format::InitParam,
     mmap::Mmap,
     object::ElfObjectAsync,
     parse_ehdr_error, parse_phdr_error,
     segment::{ELFRelro, ElfSegments},
 };
-use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, sync::Arc, vec::Vec};
 use core::{any::Any, ffi::CStr, marker::PhantomData, ops::Deref, ptr::NonNull};
 use elf::abi::{
     EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP,
@@ -112,7 +111,8 @@ pub(crate) struct Builder {
     pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
     pub(crate) user_data: UserData,
     pub(crate) segments: ElfSegments,
-    pub(crate) init_param: Option<InitParam>,
+    pub(crate) init_fn: FnArray,
+    pub(crate) fini_fn: FnArray,
     pub(crate) interp: Option<&'static str>,
 }
 
@@ -122,7 +122,8 @@ impl Builder {
         name: CString,
         lazy_bind: Option<bool>,
         ehdr: ElfHeader,
-        init_param: Option<InitParam>,
+        init_fn: FnArray,
+        fini_fn: FnArray,
     ) -> Self {
         Self {
             phdr_mmap: None,
@@ -133,7 +134,8 @@ impl Builder {
             dynamic_ptr: None,
             segments,
             user_data: UserData::empty(),
-            init_param,
+            init_fn,
+            fini_fn,
             interp: None,
         }
     }
@@ -222,13 +224,16 @@ pub(crate) type Hook = Box<
     ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>,
 >;
 
+pub(crate) type FnArray = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
+
 /// The elf object loader
 pub struct Loader<M>
 where
     M: Mmap,
 {
-    pub(crate) init_param: Option<InitParam>,
     pub(crate) buf: ElfBuf,
+    init_fn: FnArray,
+    fini_fn: FnArray,
     hook: Option<Hook>,
     _marker: PhantomData<M>,
 }
@@ -242,17 +247,28 @@ impl<M: Mmap> Default for Loader<M> {
 impl<M: Mmap> Loader<M> {
     /// Create a new loader
     pub fn new() -> Self {
+        let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
+            func.iter()
+                .chain(func_array.unwrap_or(&[]).iter())
+                .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
+        });
         Self {
-            init_param: None,
             hook: None,
+            init_fn: c_abi.clone(),
+            fini_fn: c_abi,
             buf: ElfBuf::new(),
             _marker: PhantomData,
         }
     }
 
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
-    pub fn set_init_params(&mut self, argc: usize, argv: usize, envp: usize) -> &mut Self {
-        self.init_param = Some(InitParam { argc, argv, envp });
+    pub fn set_init(&mut self, init_fn: FnArray) -> &mut Self {
+        self.init_fn = init_fn;
+        self
+    }
+
+    pub fn set_fini(&mut self, fini_fn: FnArray) -> &mut Self {
+        self.fini_fn = fini_fn;
         self
     }
 
@@ -262,12 +278,12 @@ impl<M: Mmap> Loader<M> {
         self
     }
 
-	/// Read the elf header
+    /// Read the elf header
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
         self.buf.prepare_ehdr(object)
     }
 
-	/// Read the program header table
+    /// Read the program header table
     pub fn read_phdr(
         &mut self,
         object: &mut impl ElfObject,
@@ -282,7 +298,8 @@ impl<M: Mmap> Loader<M> {
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
     ) -> Result<(Builder, &[ElfPhdr])> {
-        let init_param = self.init_param;
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let segments = ElfSegments::create_segments::<M>(&mut object, phdrs, ehdr.is_dylib())?;
@@ -291,7 +308,8 @@ impl<M: Mmap> Loader<M> {
             object.file_name().to_owned(),
             lazy_bind,
             ehdr,
-            init_param,
+            init_fn,
+            fini_fn,
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs {
@@ -313,7 +331,8 @@ impl<M: Mmap> Loader<M> {
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
     ) -> Result<(Builder, &[ElfPhdr])> {
-        let init_param = self.init_param;
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let segments =
@@ -323,7 +342,8 @@ impl<M: Mmap> Loader<M> {
             object.file_name().to_owned(),
             lazy_bind,
             ehdr,
-            init_param,
+            init_fn,
+            fini_fn,
         );
         // 根据Phdr的类型进行不同操作
         for phdr in phdrs {

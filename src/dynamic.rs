@@ -271,13 +271,13 @@ pub struct ElfDynamic {
     /// DT_PLTGOT
     pub got: Option<NonNull<usize>>,
     /// DT_INIT
-    pub init_fn: Option<extern "C" fn()>,
+    pub init_fn: Option<fn()>,
     /// DT_INIT_ARRAY
-    pub init_array_fn: Option<&'static [extern "C" fn()]>,
+    pub init_array_fn: Option<&'static [fn()]>,
     /// DT_FINI
-    pub fini_fn: Option<extern "C" fn()>,
+    pub fini_fn: Option<fn()>,
     /// DT_FINI_ARRAY
-    pub fini_array_fn: Option<&'static [extern "C" fn()]>,
+    pub fini_array_fn: Option<&'static [fn()]>,
     /// DT_JMPREL
     pub pltrel: Option<&'static [ElfRelType]>,
     /// DT_RELA

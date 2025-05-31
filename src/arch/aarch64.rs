@@ -1,4 +1,3 @@
-use core::arch::global_asm;
 use elf::abi::*;
 
 pub const EM_ARCH: u16 = EM_AARCH64;
@@ -14,7 +13,8 @@ pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 pub const REL_COPY: u32 = R_AARCH64_COPY;
 pub const REL_TPOFF:u32 = R_AARCH64_TLS_TPREL;
 
-global_asm!(
+#[cfg(feature = "lazy")]
+core::arch::global_asm!(
     "
     .text
     .globl dl_runtime_resolve
@@ -47,6 +47,7 @@ dl_runtime_resolve:
 "
 );
 
+#[cfg(feature = "lazy")]
 pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     unsafe extern "C" {
         fn dl_runtime_resolve();
