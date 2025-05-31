@@ -21,21 +21,33 @@ mod imp {
             fd: Option<i32>,
             need_copy: &mut bool,
         ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
-            let (flags, prot, fd) = if let Some(fd) = fd {
-                (flags, prot, fd)
+            let ptr = if let Some(fd) = fd {
+                unsafe {
+                    mmap(
+                        addr.unwrap_or(0) as _,
+                        len,
+                        prot.bits(),
+                        flags.bits(),
+                        fd,
+                        offset as _,
+                    )
+                }
             } else {
                 *need_copy = true;
-                (flags | MapFlags::MAP_ANONYMOUS, ProtFlags::PROT_WRITE, -1)
-            };
-            let ptr = unsafe {
-                mmap(
-                    addr.unwrap_or(0) as _,
-                    len,
-                    prot.bits(),
-                    flags.bits(),
-                    fd,
-                    offset as _,
-                )
+                if let Some(addr) = addr {
+                    addr as _
+                } else {
+                    unsafe {
+                        mmap(
+                            addr.unwrap_or(0) as _,
+                            len,
+                            ProtFlags::PROT_WRITE.bits(),
+                            (flags | MapFlags::MAP_ANONYMOUS).bits(),
+                            -1,
+                            0,
+                        )
+                    }
+                }
             };
             if core::ptr::eq(ptr, libc::MAP_FAILED) {
                 return Err(map_error("mmap failed"));
@@ -191,7 +203,11 @@ mod imp {
                 mmap(addr.unwrap_or(0) as _, len, prot, flags, fd, offset as _)?
             } else {
                 *need_copy = true;
-                mmap_anonymous(addr.unwrap_or(0) as _, len, ProtFlags::PROT_WRITE, flags)?
+                if let Some(addr) = addr {
+                    addr as _
+                } else {
+                    mmap_anonymous(0 as _, len, ProtFlags::PROT_WRITE, flags)?
+                }
             };
             Ok(unsafe { NonNull::new_unchecked(ptr) })
         }
