@@ -1,23 +1,12 @@
 use elf_loader::load_dylib;
 use std::collections::HashMap;
 use std::env::consts;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const TARGET_DIR: Option<&'static str> = option_env!("CARGO_TARGET_DIR");
 static TARGET_TRIPLE: OnceLock<String> = OnceLock::new();
 
-fn lib_path(file_name: &str) -> String {
-    let path: PathBuf = TARGET_DIR.unwrap_or("target").into();
-    path.join(TARGET_TRIPLE.get().unwrap())
-        .join("release")
-        .join(file_name)
-        .to_str()
-        .unwrap()
-        .to_string()
-}
-
-const PACKAGE_NAME: [&str; 3] = ["a", "b", "c"];
+const FILE_NAME: [&str; 3] = ["liba.rs", "libb.rs", "libc.rs"];
+const DIR_PATH: &str = "test-dylib";
 
 fn compile() {
     static ONCE: ::std::sync::Once = ::std::sync::Once::new();
@@ -55,20 +44,18 @@ fn compile() {
             unimplemented!()
         }
 
-        for name in PACKAGE_NAME {
-            let mut cmd = ::std::process::Command::new("cargo");
-            cmd.arg("rustc")
-                .arg("-r")
-                .arg("-p")
-                .arg(name)
+        for name in FILE_NAME {
+            let mut cmd = ::std::process::Command::new("rustc");
+            cmd.arg("-O")
                 .arg("--target")
                 .arg(TARGET_TRIPLE.get().unwrap().as_str())
-                .arg("-Zbuild-std=core,alloc")
-                .arg("--")
                 .arg("-C")
                 .arg("panic=abort")
                 .arg("-C")
-                .arg("link-args=-Wl,--pack-dyn-relocs=relr");
+                .arg("link-args=-Wl,--pack-dyn-relocs=relr")
+                .arg(format!("{}/{}", DIR_PATH, name))
+                .arg("--out-dir")
+                .arg("target");
             assert!(
                 cmd.status()
                     .expect("could not compile the test helpers!")
@@ -87,9 +74,9 @@ fn main() {
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    let liba = load_dylib!(&lib_path("liba.so")).unwrap();
-    let libb = load_dylib!(&lib_path("libb.so")).unwrap();
-    let libc = load_dylib!(&lib_path("libc.so")).unwrap();
+    let liba = load_dylib!("target/liba.so").unwrap();
+    let libb = load_dylib!("target/libb.so").unwrap();
+    let libc = load_dylib!("target/libc.so").unwrap();
     let a = liba.easy_relocate([], &pre_find).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

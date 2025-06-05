@@ -25,9 +25,3 @@ elf = { version = "0.7.4", default-features = false }
 
 [[bin]]
 name = "mini-loader"
-
-[profile.release]
-panic = "abort"
-opt-level = "s"
-lto = "thin"
-codegen-units = 1

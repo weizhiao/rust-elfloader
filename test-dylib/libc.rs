@@ -1,4 +1,6 @@
 #![no_std]
+#![crate_type = "cdylib"]
+#![crate_name = "c"]
 
 use core::panic::PanicInfo;
 
@@ -9,15 +11,13 @@ fn panic(_info: &PanicInfo) -> ! {
 
 unsafe extern "Rust" {
     fn print(s: &str);
-    fn a() -> i32;
-    static HELLO: &'static str;
+    fn b() -> i32;
 }
 
 #[unsafe(no_mangle)]
-fn b() -> i32 {
+fn c() -> i32 {
     unsafe {
-        print("call b()");
-        print(HELLO);
-        a() + 1
+        print("call c()");
+        b() + 1
     }
 }

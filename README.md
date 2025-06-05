@@ -18,7 +18,7 @@ English | [中文](README_zh.md)
 * Use it as an ELF file loader in operating system kernels.
 * Use it to implement a Rust version of the dynamic linker.
 * Use it to load ELF dynamic libraries on embedded devices.
-* Use it to load elf files on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/windows-elf-loader).
+* Use it to load elf files on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader).
 
 # Capabilities
 ### ✨ Works in `no_std` environments ✨

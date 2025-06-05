@@ -36,6 +36,9 @@ jobs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
+    - name: Install LLD
+      run: 
+          sudo apt update && sudo apt install lld -y && ld.lld --version 
     - env:
         TARGET: ${{ matrix.target }}
         CHANNEL: ${{ matrix.channel }}
@@ -55,6 +58,9 @@ jobs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
+    - name: Install LLD
+      run: 
+          sudo apt update && sudo apt install lld -y && ld.lld --version 
     - env:
        TARGET: ${{ matrix.target }}
        CHANNEL: ${{ matrix.channel }}
@@ -74,6 +80,9 @@ jobs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
+    - name: Install LLD
+      run: 
+          sudo apt update && sudo apt install lld -y && ld.lld --version 
     - env:
         TARGET: ${{ matrix.target }}
         CHANNEL: ${{ matrix.channel }}

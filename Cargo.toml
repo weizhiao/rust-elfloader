@@ -20,8 +20,7 @@ license = "MIT/Apache-2.0"
 rust-version = "1.85.0"
 
 [workspace]
-members = ["example_dylib/a", "example_dylib/b", "example_dylib/c", "windows-elf-loader"]
-exclude = ["mini-loader"]
+members = ["crates/windows-elf-loader", "crates/mini-loader"]
 
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }
@@ -99,3 +98,15 @@ required-features = ["fs", "mmap"]
 [[example]]
 name = "load_dylib"
 required-features = ["mmap"]
+
+[workspace.metadata.cross]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get --assume-yes install lld:$CROSS_DEB_ARCH"
+]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1

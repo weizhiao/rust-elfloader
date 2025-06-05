@@ -1,4 +1,6 @@
 #![no_std]
+#![crate_type = "cdylib"]
+#![crate_name = "a"]
 
 use core::panic::PanicInfo;
 
