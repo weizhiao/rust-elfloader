@@ -99,12 +99,6 @@ required-features = ["fs", "mmap"]
 name = "load_dylib"
 required-features = ["mmap"]
 
-[workspace.metadata.cross]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install lld:$CROSS_DEB_ARCH"
-]
-
 [profile.release]
 panic = "abort"
 opt-level = "s"
