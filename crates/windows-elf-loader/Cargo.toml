@@ -11,13 +11,5 @@ keywords = ["elf", "windows", "loader"]
 categories = ["os", "embedded"]
 
 [dependencies.elf_loader]
-version = "=0.12.0"
+path = "../../"
 default-features = false
-
-[dependencies.windows-sys]
-version = "0.59"
-features = [
-    'Win32_Foundation',
-    'Win32_System_Memory',
-	'Win32_System_SystemInformation',
-]

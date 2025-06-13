@@ -61,15 +61,6 @@ extern crate alloc;
 )))]
 compile_error!("unsupport arch");
 
-#[cfg(all(
-    any(feature = "fs", feature = "mmap"),
-    not(any(feature = "use-libc", feature = "use-syscall"))
-))]
-compile_error!("use at least one of libc and syscall");
-
-#[cfg(all(feature = "use-libc", feature = "use-syscall"))]
-compile_error!("only one of use-libc and use-syscall can be used");
-
 pub mod arch;
 pub mod dynamic;
 mod format;

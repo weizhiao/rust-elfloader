@@ -223,18 +223,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "syscalls",
-]
-
-[[package]]
-name = "elf_loader"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30a0da8db95cff71e500b3d7015c2441a4eb628e0df788b23d1b8d1243314342"
-dependencies = [
- "bitflags",
- "cfg-if",
- "delegate",
- "elf",
+ "windows-sys",
 ]
 
 [[package]]
@@ -671,8 +660,7 @@ dependencies = [
 name = "windows-elf-loader"
 version = "0.1.0"
 dependencies = [
- "elf_loader 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "windows-sys",
+ "elf_loader 0.12.0",
 ]
 
 [[package]]

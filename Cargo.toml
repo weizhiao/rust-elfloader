@@ -25,6 +25,13 @@ members = ["crates/windows-elf-loader", "crates/mini-loader"]
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    'Win32_Foundation',
+    'Win32_System_Memory',
+    'Win32_System_SystemInformation',
+] }
+
 [dependencies.libc]
 version = "0.2.171"
 default-features = false

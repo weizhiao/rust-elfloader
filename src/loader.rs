@@ -111,8 +111,8 @@ pub(crate) struct Builder {
     pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
     pub(crate) user_data: UserData,
     pub(crate) segments: ElfSegments,
-    pub(crate) init_fn: FnArray,
-    pub(crate) fini_fn: FnArray,
+    pub(crate) init_fn: FnHandler,
+    pub(crate) fini_fn: FnHandler,
     pub(crate) interp: Option<&'static str>,
 }
 
@@ -122,8 +122,8 @@ impl Builder {
         name: CString,
         lazy_bind: Option<bool>,
         ehdr: ElfHeader,
-        init_fn: FnArray,
-        fini_fn: FnArray,
+        init_fn: FnHandler,
+        fini_fn: FnHandler,
     ) -> Self {
         Self {
             phdr_mmap: None,
@@ -224,7 +224,7 @@ pub(crate) type Hook = Box<
     ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>,
 >;
 
-pub(crate) type FnArray = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
+pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 
 /// The elf object loader
 pub struct Loader<M>
@@ -232,8 +232,8 @@ where
     M: Mmap,
 {
     pub(crate) buf: ElfBuf,
-    init_fn: FnArray,
-    fini_fn: FnArray,
+    init_fn: FnHandler,
+    fini_fn: FnHandler,
     hook: Option<Hook>,
     _marker: PhantomData<M>,
 }
@@ -262,12 +262,12 @@ impl<M: Mmap> Loader<M> {
     }
 
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
-    pub fn set_init(&mut self, init_fn: FnArray) -> &mut Self {
+    pub fn set_init(&mut self, init_fn: FnHandler) -> &mut Self {
         self.init_fn = init_fn;
         self
     }
 
-    pub fn set_fini(&mut self, fini_fn: FnArray) -> &mut Self {
+    pub fn set_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
         self.fini_fn = fini_fn;
         self
     }

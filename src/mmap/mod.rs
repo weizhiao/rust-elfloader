@@ -1,9 +1,25 @@
 //! Map memory to address space
+
+#[cfg(all(feature = "use-libc", feature = "use-syscall"))]
+compile_error!("only one of use-libc and use-syscall can be used");
+
+#[cfg(all(
+    any(feature = "fs", feature = "mmap"),
+    not(any(feature = "use-libc", feature = "use-syscall")),
+    not(target_os = "windows")
+))]
+compile_error!("use at least one of libc and syscall");
+
 cfg_if::cfg_if! {
-    if #[cfg(feature = "mmap")]{
-        #[path = "mmap.rs"]
-        pub(crate) mod mmap_impl;
-        pub use mmap_impl::MmapImpl;
+    if #[cfg(target_os = "windows")]{
+        pub(crate) mod windows;
+        pub use windows::MmapImpl;
+    }else if #[cfg(all(feature = "mmap", feature = "use-libc"))]{
+        pub(crate) mod libc;
+        pub use libc::MmapImpl;
+    }else if #[cfg(all(feature = "mmap", feature = "use-syscall"))]{
+        pub(crate) mod linux_syscall;
+        pub use linux_syscall::MmapImpl;
     }else {
         #[path = "no_mmap.rs"]
         pub(crate) mod no_mmap_impl;

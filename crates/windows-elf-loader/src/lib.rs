@@ -1,7 +1,5 @@
-use elf_loader::{ElfDylib, Loader, object::ElfBinary};
-use mmap::WindowsMmap;
+use elf_loader::{ElfDylib, Loader, mmap::MmapImpl as WindowsMmap, object::ElfBinary};
 use std::sync::Arc;
-mod mmap;
 
 /// elf loader
 pub struct WinElfLoader {
