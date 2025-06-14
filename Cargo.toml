@@ -32,10 +32,8 @@ windows-sys = { version = "0.59", features = [
     'Win32_System_SystemInformation',
 ] }
 
-[dependencies.libc]
-version = "0.2.171"
-default-features = false
-optional = true
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.171", default-features = false }
 
 [dependencies.syscalls]
 workspace = true
@@ -74,19 +72,12 @@ libloading = "0.8.5"
 [[bench]]
 name = "benchmark"
 harness = false
-required-features = ["fs", "mmap"]
 
 [features]
-default = ["fs", "mmap", "use-libc", "lazy"]
+default = ["lazy"]
 
-# Enable support for filesystems
-fs = []
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
-# Use libc as the backend
-use-libc = ["dep:libc"]
-# Use the default implementation on platforms with mmap when loading ELF files
-mmap = []
 # Use the version information of symbols when resolving them.
 version = []
 # Enable logging.
@@ -100,11 +91,9 @@ portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
 
 [[example]]
 name = "relocate_dylib"
-required-features = ["fs", "mmap"]
 
 [[example]]
 name = "load_dylib"
-required-features = ["mmap"]
 
 [profile.release]
 panic = "abort"

@@ -14,11 +14,13 @@
 * 在操作系统内核中使用它作为elf文件的加载器
 * 使用它实现Rust版本的动态链接器
 * 在嵌入式设备上使用它加载elf动态库  
-......
 
 # 优势
 ### ✨ 可以在 `no_std` 环境中工作 ✨
 `elf_loader`不依赖Rust `std`，也不强制依赖`libc`和操作系统，因此它可以在内核和嵌入式设备等`no_std`环境中使用。
+
+### ✨ 可以在Windows上加载elf动态库 ✨
+详细内容可以看[windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader)
 
 ### ✨ 体积小 ✨
 `elf_loader`的体积非常小。基于`elf_loader`实现的[mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/mini-loader)编译后的二进制文件大小仅为**26K**。下面是使用`bloat`工具分析二进制文件得到的结果：
@@ -98,19 +100,16 @@ Found 11 outliers among 100 measurements (11.00%)
 
 # Feature
 
-| 特性            | 描述                                                                                          |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| fs              | 启用对文件系统的支持                                                                          |
-| use-libc        | 该feature在开启`fs`或者`mmap` feature时生效。开启`use-libc`时`elf_loader`会使用`libc`作为后端 |
-| use-syscall     | 该feature在开启`fs`或者`mmap` feature时生效。使用`linux syscalls`作为后端                     |
-| mmap            | 在加载elf文件时，使用有mmap的平台上的默认实现                                                 |
-| version         | 在解析符号时使用符号的版本信息                                                                |
-| log             | 启用日志                                                                                      |
-| rel             | 将rel作为重定位条目的格式                                                                     |
-| portable-atomic | 支持没有native指针大小原子操作的目标                                                          |
-| lazy            | 启用延迟绑定                                                                                  |
+| 特性            | 描述                                                                      |
+| --------------- | ------------------------------------------------------------------------- |
+| use-syscall     | 该feature在开启`fs`或者`mmap` feature时生效。使用`linux syscalls`作为后端 |
+| version         | 在解析符号时使用符号的版本信息                                            |
+| log             | 启用日志                                                                  |
+| rel             | 将rel作为重定位条目的格式                                                 |
+| portable-atomic | 支持没有native指针大小原子操作的目标                                      |
+| lazy            | 启用延迟绑定                                                              |
 
-在没有操作系统的情况下请关闭`fs`，`use-syscall`，`use-libc`和`mmap`这四个feature。
+在没有操作系统的情况下请关闭`use-syscall`这个feature。
 
 # 指令集支持
 

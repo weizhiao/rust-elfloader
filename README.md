@@ -18,11 +18,13 @@ English | [中文](README_zh.md)
 * Use it as an ELF file loader in operating system kernels.
 * Use it to implement a Rust version of the dynamic linker.
 * Use it to load ELF dynamic libraries on embedded devices.
-* Use it to load elf files on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader).
 
 # Capabilities
 ### ✨ Works in `no_std` environments ✨
 `elf_loader` does not depend on Rust `std`, nor does it enforce `libc` and OS dependencies, so it can be used in `no_std` environments such as kernel and embedded devices.
+
+### ✨ Load ELF dynamic libraries on  Windows ✨
+`elf_loader` can load ELF dynamic libraries on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader).
 
 ### ✨ Compact Size ✨
 The `elf_loader` is extremely small in size. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/mini-loader) implemented based on `elf_loader` compiles to a binary file of only **26KB**. Below are the results from analyzing the binary using the `bloat` tool:
@@ -104,17 +106,14 @@ The `elf_loader` supports the RELR relative relocation format. For detailed info
 
 | Feature         | Description                                                                                                                                       |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs              | Enable support for filesystems                                                                                                                    |
-| use-libc        | This feature works when the `fs` or `mmap `feature is enabled. If `use-libc` is enabled, `elf_loader` will use `libc` as the backend              |
 | use-syscall     | This feature works when the `fs` or `mmap `feature is enabled. If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend |
-| mmap            | Use the default implementation on platforms with mmap when loading ELF files                                                                      |
 | version         | Use the version information of symbols when resolving them.                                                                                       |
 | log             | Enable logging                                                                                                                                    |
 | rel             | Use rel as the relocation type                                                                                                                    |
 | portable-atomic | support target without native pointer size atomic operation                                                                                       |
 | lazy            | Enable lazy binding                                                                                                                               |
 
-Disable the `fs`,`use-libc`,`use-syscall` and `mmap` features if you don't have an operating system.
+Disable the `use-syscall` feature if you don't have an operating system.
 
 # Architecture Support
 

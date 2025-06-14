@@ -27,7 +27,7 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
         channel: [ 1.85.0, stable ]
-        features: [ "fs,mmap,use-syscall", "fs,mmap,use-libc", "version", "log" ]
+        features: [ "use-syscall", "version", "log" ]
 
   test-rela:
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
         channel: [ 1.85.0, stable ]
-        features: [ "fs,mmap,use-syscall,lazy", "fs,mmap,use-libc,lazy" ]
+        features: [ "use-syscall,lazy", "lazy" ]
 
   test-rel:
     runs-on: ubuntu-latest
@@ -65,7 +65,7 @@ jobs:
       matrix:
          target: [ i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
          channel: [ 1.85.0, stable ]
-         features: [ "fs,mmap,use-syscall,rel,lazy", "fs,mmap,use-libc,rel,lazy" ]
+         features: [ "use-syscall,rel,lazy", "rel,lazy" ]
 
   bench:
     runs-on: ubuntu-latest
@@ -84,4 +84,4 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu ]
         channel: [ stable ]
-        features: [ "fs,mmap,use-syscall,lazy", "fs,mmap,use-libc,lazy" ]
+        features: [ "use-syscall,lazy", "lazy" ]

@@ -1,6 +1,7 @@
 use crate::{
     Error, Result,
     mmap::{MapFlags, Mmap, ProtFlags},
+    object::ElfFile,
 };
 use alloc::format;
 use core::{
@@ -92,4 +93,8 @@ impl Mmap for MmapImpl {
         }
         Ok(())
     }
+}
+
+pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
+    todo!()
 }

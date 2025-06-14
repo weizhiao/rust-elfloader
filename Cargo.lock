@@ -197,19 +197,6 @@ checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
 
 [[package]]
 name = "elf_loader"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a5b4a86c599d19b95725e2189970a95fc1051d4df1fe721eb14d9659bd6f02a"
-dependencies = [
- "bitflags",
- "cfg-if",
- "delegate",
- "elf",
- "syscalls",
-]
-
-[[package]]
-name = "elf_loader"
 version = "0.12.0"
 dependencies = [
  "bitflags",
@@ -331,7 +318,7 @@ version = "1.2.0"
 dependencies = [
  "cfg-if",
  "elf",
- "elf_loader 0.10.1",
+ "elf_loader",
  "itoa",
  "linked_list_allocator",
  "syscalls",
@@ -660,7 +647,7 @@ dependencies = [
 name = "windows-elf-loader"
 version = "0.1.0"
 dependencies = [
- "elf_loader 0.12.0",
+ "elf_loader",
 ]
 
 [[package]]

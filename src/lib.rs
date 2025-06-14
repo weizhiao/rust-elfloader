@@ -68,6 +68,7 @@ mod loader;
 mod macros;
 pub mod mmap;
 pub mod object;
+mod os;
 mod relocation;
 pub mod segment;
 mod symbol;
@@ -97,7 +98,6 @@ pub use relocation::find_symdef;
 #[derive(Debug)]
 pub enum Error {
     /// An error occurred while opening or reading or writing elf files.
-    #[cfg(feature = "fs")]
     IOError { msg: String },
     /// An error occurred while memory mapping.
     MmapError { msg: String },
@@ -120,7 +120,6 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            #[cfg(feature = "fs")]
             Error::IOError { msg } => write!(f, "{msg}"),
             Error::MmapError { msg } => write!(f, "{msg}"),
             Error::RelocateError { msg, .. } => write!(f, "{msg}"),
@@ -133,9 +132,9 @@ impl Display for Error {
 
 impl core::error::Error for Error {}
 
-#[cfg(feature = "fs")]
 #[cold]
 #[inline(never)]
+#[allow(unused)]
 fn io_error(msg: impl ToString) -> Error {
     Error::IOError {
         msg: msg.to_string(),
