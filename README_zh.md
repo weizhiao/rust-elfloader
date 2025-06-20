@@ -100,14 +100,14 @@ Found 11 outliers among 100 measurements (11.00%)
 
 # Feature
 
-| 特性            | 描述                                                                      |
-| --------------- | ------------------------------------------------------------------------- |
-| use-syscall     | 该feature在开启`fs`或者`mmap` feature时生效。使用`linux syscalls`作为后端 |
-| version         | 在解析符号时使用符号的版本信息                                            |
-| log             | 启用日志                                                                  |
-| rel             | 将rel作为重定位条目的格式                                                 |
-| portable-atomic | 支持没有native指针大小原子操作的目标                                      |
-| lazy            | 启用延迟绑定                                                              |
+| 特性            | 描述                                 |
+| --------------- | ------------------------------------ |
+| use-syscall     | 使用`linux syscalls`作为后端         |
+| version         | 在解析符号时使用符号的版本信息       |
+| log             | 启用日志                             |
+| rel             | 将rel作为重定位条目的格式            |
+| portable-atomic | 支持没有native指针大小原子操作的目标 |
+| lazy            | 启用延迟绑定                         |
 
 在没有操作系统的情况下请关闭`use-syscall`这个feature。
 

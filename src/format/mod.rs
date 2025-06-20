@@ -238,8 +238,12 @@ pub(crate) struct CoreComponentInner {
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     /// phdrs
     phdrs: ElfPhdrs,
-    /// .fini and .fini_array
-    fini: Box<dyn Fn()>,
+    /// .fini
+    fini: Option<fn()>,
+    /// .fini_array
+    fini_array: Option<&'static [fn()]>,
+    /// custom fini
+    fini_handler: FnHandler,
     /// needed libs' name
     needed_libs: Box<[&'static str]>,
     /// user data
@@ -253,7 +257,7 @@ pub(crate) struct CoreComponentInner {
 impl Drop for CoreComponentInner {
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
-            (self.fini)();
+            (self.fini_handler)(self.fini, self.fini_array);
         }
     }
 }
@@ -403,7 +407,9 @@ impl CoreComponent {
                 dynamic: NonNull::new(dynamic.dyn_ptr as _),
                 phdrs: ElfPhdrs::Mmap(phdrs),
                 segments,
-                fini: Box::new(|| {}),
+                fini: None,
+                fini_array: None,
+                fini_handler: Arc::new(|_, _| {}),
                 needed_libs: Box::new([]),
                 user_data,
                 lazy_scope: None,
@@ -449,8 +455,8 @@ enum State {
     Uninit {
         is_dylib: bool,
         phdrs: ElfPhdrs,
-        init_fn: FnHandler,
-        fini_fn: FnHandler,
+        init_handler: FnHandler,
+        fini_handler: FnHandler,
         name: CString,
         dynamic_ptr: Option<NonNull<Dyn>>,
         segments: ElfSegments,
@@ -471,8 +477,8 @@ impl State {
                 relro,
                 user_data,
                 lazy_bind,
-                init_fn,
-                fini_fn,
+                init_handler,
+                fini_handler,
                 phdrs,
                 is_dylib,
             } => {
@@ -495,7 +501,9 @@ impl State {
                             lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
                             relro,
                             relocation,
-                            init: Box::new(move || init_fn(dynamic.init_fn, dynamic.init_array_fn)),
+                            init: Box::new(move || {
+                                init_handler(dynamic.init_fn, dynamic.init_array_fn)
+                            }),
                             got: dynamic.got,
                             rpath: dynamic
                                 .rpath_off
@@ -514,9 +522,9 @@ impl State {
                                     dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
                                 ),
                                 phdrs,
-                                fini: Box::new(move || {
-                                    fini_fn(dynamic.fini_fn, dynamic.fini_array_fn)
-                                }),
+                                fini: dynamic.fini_fn,
+                                fini_array: dynamic.fini_array_fn,
+                                fini_handler,
                                 segments,
                                 needed_libs: needed_libs.into_boxed_slice(),
                                 user_data,
@@ -536,7 +544,9 @@ impl State {
                                 dynamic: None,
                                 pltrel: None,
                                 phdrs: ElfPhdrs::Mmap(&[]),
-                                fini: Box::new(|| {}),
+                                fini: None,
+                                fini_array: None,
+                                fini_handler: Arc::new(|_, _| {}),
                                 segments,
                                 needed_libs: Box::new([]),
                                 user_data,
@@ -783,8 +793,8 @@ impl Builder {
                 state: Cell::new(State::Uninit {
                     is_dylib,
                     phdrs,
-                    init_fn: self.init_fn,
-                    fini_fn: self.fini_fn,
+                    init_handler: self.init_fn,
+                    fini_handler: self.fini_fn,
                     name: self.name,
                     dynamic_ptr: self.dynamic_ptr,
                     segments: self.segments,

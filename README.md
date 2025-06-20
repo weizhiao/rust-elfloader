@@ -104,14 +104,14 @@ The `elf_loader` supports the RELR relative relocation format. For detailed info
 
 # Feature
 
-| Feature         | Description                                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| use-syscall     | This feature works when the `fs` or `mmap `feature is enabled. If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend |
-| version         | Use the version information of symbols when resolving them.                                                                                       |
-| log             | Enable logging                                                                                                                                    |
-| rel             | Use rel as the relocation type                                                                                                                    |
-| portable-atomic | support target without native pointer size atomic operation                                                                                       |
-| lazy            | Enable lazy binding                                                                                                                               |
+| Feature         | Description                                                                        |
+| --------------- | ---------------------------------------------------------------------------------- |
+| use-syscall     | If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend |
+| version         | Use the version information of symbols when resolving them.                        |
+| log             | Enable logging                                                                     |
+| rel             | Use rel as the relocation type                                                     |
+| portable-atomic | support target without native pointer size atomic operation                        |
+| lazy            | Enable lazy binding                                                                |
 
 Disable the `use-syscall` feature if you don't have an operating system.
 
