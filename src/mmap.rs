@@ -64,7 +64,7 @@ pub trait Mmap {
         prot: ProtFlags,
         flags: MapFlags,
         offset: usize,
-        fd: Option<i32>,
+        fd: Option<isize>,
         need_copy: &mut bool,
     ) -> Result<NonNull<c_void>>;
 

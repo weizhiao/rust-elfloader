@@ -96,11 +96,11 @@ impl Mmap for MmapImpl {
         prot: ProtFlags,
         flags: MapFlags,
         offset: usize,
-        fd: Option<i32>,
+        fd: Option<isize>,
         need_copy: &mut bool,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         let ptr = if let Some(fd) = fd {
-            mmap(addr.unwrap_or(0) as _, len, prot, flags, fd, offset as _)?
+            mmap(addr.unwrap_or(0) as _, len, prot, flags, fd as i32, offset as _)?
         } else {
             *need_copy = true;
             if let Some(addr) = addr {
@@ -211,8 +211,8 @@ impl ElfObject for ElfFile {
         &self.name
     }
 
-    fn as_fd(&self) -> Option<i32> {
-        Some(self.fd)
+    fn as_fd(&self) -> Option<isize> {
+        Some(self.fd as isize)
     }
 }
 /// Converts a raw syscall return value to a result.

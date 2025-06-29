@@ -10,7 +10,7 @@ pub trait ElfObject {
     /// Read data from the elf object
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
     /// Extracts the raw file descriptor.
-    fn as_fd(&self) -> Option<i32>;
+    fn as_fd(&self) -> Option<isize>;
 }
 
 /// The original elf object
@@ -48,7 +48,7 @@ impl<'bytes> ElfObject for ElfBinary<'bytes> {
         &self.name
     }
 
-    fn as_fd(&self) -> Option<i32> {
+    fn as_fd(&self) -> Option<isize> {
         None
     }
 }
@@ -58,7 +58,7 @@ pub struct ElfFile {
     #[allow(unused)]
     pub(crate) name: CString,
     #[allow(unused)]
-    pub(crate) fd: i32,
+    pub(crate) fd: isize,
 }
 
 impl ElfFile {
@@ -68,7 +68,7 @@ impl ElfFile {
     pub unsafe fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
         ElfFile {
             name: CString::new(path).unwrap(),
-            fd: raw_fd,
+            fd: raw_fd as isize,
         }
     }
 

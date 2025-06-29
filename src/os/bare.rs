@@ -17,7 +17,7 @@ impl Mmap for MmapImpl {
         _prot: ProtFlags,
         flags: MapFlags,
         _offset: usize,
-        _fd: Option<i32>,
+        _fd: Option<isize>,
         need_copy: &mut bool,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         *need_copy = true;

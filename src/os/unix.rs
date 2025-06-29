@@ -17,7 +17,7 @@ impl Mmap for MmapImpl {
         prot: ProtFlags,
         flags: MapFlags,
         offset: usize,
-        fd: Option<i32>,
+        fd: Option<isize>,
         need_copy: &mut bool,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         let ptr = if let Some(fd) = fd {
@@ -27,7 +27,7 @@ impl Mmap for MmapImpl {
                     len,
                     prot.bits(),
                     flags.bits(),
-                    fd,
+                    fd as i32,
                     offset as _,
                 )
             }
@@ -99,7 +99,7 @@ impl Mmap for MmapImpl {
 
 impl Drop for ElfFile {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd) };
+        unsafe { libc::close(self.fd as i32) };
     }
 }
 
@@ -109,7 +109,7 @@ pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
     if fd == -1 {
         return Err(io_error("open failed"));
     }
-    Ok(ElfFile { name, fd })
+    Ok(ElfFile { name, fd: fd as isize })
 }
 
 fn lseek(fd: i32, offset: usize) -> Result<()> {
@@ -146,8 +146,8 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
 
 impl ElfObject for ElfFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
-        lseek(self.fd, offset)?;
-        read_exact(self.fd, buf)?;
+        lseek(self.fd as i32, offset)?;
+        read_exact(self.fd as i32, buf)?;
         Ok(())
     }
 
@@ -155,7 +155,7 @@ impl ElfObject for ElfFile {
         &self.name
     }
 
-    fn as_fd(&self) -> Option<i32> {
+    fn as_fd(&self) -> Option<isize> {
         Some(self.fd)
     }
 }
