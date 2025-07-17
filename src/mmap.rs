@@ -124,5 +124,23 @@ pub trait Mmap {
     ///
     /// # Safety
     /// This depends on the correctness of the trait implementation.
+    #[cfg(windows)]
     unsafe fn mmap_reserve(addr: Option<usize>, len: usize) -> Result<NonNull<c_void>>;
+    #[cfg(not(windows))]
+    unsafe fn mmap_reserve(
+        addr: Option<usize>,
+        len: usize,
+    ) -> Result<NonNull<c_void>> {
+        let mut need_copy = false;
+        // PROT_NONE + MAP_PRIVATE | MAP_ANONYMOUS, fd=None, offset=0
+        unsafe { Self::mmap(
+            addr,
+            len,
+            ProtFlags::PROT_NONE,
+            MapFlags::MAP_PRIVATE.union(MapFlags::MAP_ANONYMOUS),
+            0,
+            None,
+            &mut need_copy,
+        ) }
+    }
 }
