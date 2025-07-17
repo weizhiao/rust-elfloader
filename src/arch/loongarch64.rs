@@ -1,4 +1,3 @@
-
 // https://loongson.github.io/LoongArch-Documentation/LoongArch-ELF-ABI-CN.html
 
 const EM_LARCH: u16 = 258;

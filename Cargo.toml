@@ -30,6 +30,10 @@ windows-sys = { version = "0.59", features = [
     'Win32_Foundation',
     'Win32_System_Memory',
     'Win32_System_SystemInformation',
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_Storage",
+    "Win32_Storage_FileSystem"
 ] }
 
 [target.'cfg(unix)'.dependencies]

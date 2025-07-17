@@ -13,13 +13,13 @@ fn main() {
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let mut loader = WinElfLoader::new();
     let liba = loader
-        .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
+        .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
         .unwrap();
     let libb = loader
-        .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
+        .load_file(r".\crates\windows-elf-loader\example_dylib\libb.so")
         .unwrap();
     let libc = loader
-        .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
+        .load_file(r".\crates\windows-elf-loader\example_dylib\libc.so")
         .unwrap();
     let a = liba.easy_relocate([], &pre_find).unwrap();
     let f = unsafe { a.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

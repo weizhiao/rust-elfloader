@@ -64,7 +64,7 @@ pub trait Mmap {
         prot: ProtFlags,
         flags: MapFlags,
         offset: usize,
-        fd: Option<i32>,
+        fd: Option<isize>,
         need_copy: &mut bool,
     ) -> Result<NonNull<c_void>>;
 
@@ -105,4 +105,24 @@ pub trait Mmap {
     /// # Safety
     /// This depends on the correctness of the trait implementation.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
+
+    /// Reserves a region of memory for future use without committing physical storage.
+    ///
+    /// This function reserves a memory region in the process's virtual address space
+    /// but does not allocate physical memory nor create any actual mapping. The reserved
+    /// region can later be committed with additional mapping operations.
+    ///
+    /// # Arguments
+    /// * `addr` - An optional starting address for the reservation. If `Some`, the function
+    ///   attempts to reserve memory at the specified address. If `None`, the system
+    ///   chooses an appropriate address.
+    /// * `len` - The length of the memory region to reserve. Will be rounded up to page size.
+    ///
+    /// # Returns
+    /// * `Ok(NonNull<c_void>)` - Pointer to the reserved memory region
+    /// * `Err` - If the reservation fails
+    ///
+    /// # Safety
+    /// This depends on the correctness of the trait implementation.
+    unsafe fn mmap_reserve(addr: Option<usize>, len: usize) -> Result<NonNull<c_void>>;
 }

@@ -29,4 +29,9 @@ impl WinElfLoader {
         let object = ElfBinary::new(name, bytes.as_ref());
         self.loader.load_dylib(object, Some(false))
     }
+
+    pub fn load_file(&mut self, name: &str) -> Result<ElfDylib, elf_loader::Error> {
+        let object = elf_loader::object::ElfFile::from_path(name)?;
+        self.loader.load_dylib(object, None)
+    }
 }
