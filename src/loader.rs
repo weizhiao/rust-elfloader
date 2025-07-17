@@ -312,17 +312,39 @@ impl<M: Mmap> Loader<M> {
             fini_fn,
         );
         // 根据Phdr的类型进行不同操作
-        for phdr in phdrs {
-            if let Some(hook) = &self.hook {
-                builder.exec_hook(hook, phdr)?;
+        #[cfg(target_os = "windows")]
+        {
+            let mut last_addr = builder.segments.memory;
+            for phdr in phdrs {
+                if let Some(hook) = &self.hook {
+                    builder.exec_hook(hook, phdr)?;
+                }
+                match phdr.p_type {
+                    // 将segment加载到内存中
+                    PT_LOAD => {
+                        builder
+                            .segments
+                            .load_segment::<M>(&mut object, phdr, &mut last_addr)?
+                    }
+                    _ => builder.parse_other_phdr::<M>(phdr),
+                }
             }
-            match phdr.p_type {
-                // 将segment加载到内存中
-                PT_LOAD => builder.segments.load_segment::<M>(&mut object, phdr)?,
-                _ => builder.parse_other_phdr::<M>(phdr),
-            }
+            Ok((builder, phdrs))
         }
-        Ok((builder, phdrs))
+        #[cfg(not(target_os = "windows"))]
+        {
+            for phdr in phdrs {
+                if let Some(hook) = &self.hook {
+                    builder.exec_hook(hook, phdr)?;
+                }
+                match phdr.p_type {
+                    // 将segment加载到内存中
+                    PT_LOAD => builder.segments.load_segment::<M>(&mut object, phdr)?,
+                    _ => builder.parse_other_phdr::<M>(phdr),
+                }
+            }
+            Ok((builder, phdrs))
+        }
     }
 
     pub(crate) async fn load_async_impl(
@@ -346,21 +368,44 @@ impl<M: Mmap> Loader<M> {
             fini_fn,
         );
         // 根据Phdr的类型进行不同操作
-        for phdr in phdrs {
-            if let Some(hook) = self.hook.as_ref() {
-                builder.exec_hook(hook, phdr)?;
-            }
-            match phdr.p_type {
-                // 将segment加载到内存中
-                PT_LOAD => {
-                    builder
-                        .segments
-                        .load_segment_async::<M>(&mut object, phdr)
-                        .await?;
+        #[cfg(target_os = "windows")]
+        {
+            let mut last_addr = builder.segments.memory;
+            for phdr in phdrs {
+                if let Some(hook) = &self.hook {
+                    builder.exec_hook(hook, phdr)?;
                 }
-                _ => builder.parse_other_phdr::<M>(phdr),
+                match phdr.p_type {
+                    // 将segment加载到内存中
+                    PT_LOAD => {
+                        builder
+                            .segments
+                            .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
+                            .await?
+                    }
+                    _ => builder.parse_other_phdr::<M>(phdr),
+                }
             }
+            Ok((builder, phdrs))
         }
-        Ok((builder, phdrs))
+        #[cfg(not(target_os = "windows"))]
+        {
+            for phdr in phdrs {
+                if let Some(hook) = self.hook.as_ref() {
+                    builder.exec_hook(hook, phdr)?;
+                }
+                match phdr.p_type {
+                    // 将segment加载到内存中
+                    PT_LOAD => {
+                        builder
+                            .segments
+                            .load_segment_async::<M>(&mut object, phdr)
+                            .await?;
+                    }
+                    _ => builder.parse_other_phdr::<M>(phdr),
+                }
+            }
+            Ok((builder, phdrs))
+        }
     }
 }

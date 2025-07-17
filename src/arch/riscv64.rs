@@ -14,7 +14,7 @@ pub const REL_JUMP_SLOT: u32 = R_RISCV_JUMP_SLOT;
 pub const REL_DTPOFF: u32 = R_RISCV_TLS_DTPREL64;
 pub const REL_IRELATIVE: u32 = R_RISCV_IRELATIVE;
 pub const REL_COPY: u32 = R_RISCV_COPY;
-pub const REL_TPOFF:u32 = R_RISCV_TLS_TPREL64;
+pub const REL_TPOFF: u32 = R_RISCV_TLS_TPREL64;
 
 #[cfg(feature = "lazy")]
 core::arch::global_asm!(
