@@ -328,3 +328,6 @@ impl<'lib, T> Symbol<'lib, T> {
         self.ptr
     }
 }
+
+unsafe impl<T: Send> Send for Symbol<'_, T> {}
+unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
