@@ -9,7 +9,7 @@ cfg_if::cfg_if! {
         pub(crate) mod unix;
         pub use unix::*;
     }else {
-        pub(crate) mod bare;
-        pub use bare::*;
+        pub(crate) mod baremetal;
+        pub use baremetal::*;
     }
 }

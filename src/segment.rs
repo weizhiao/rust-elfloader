@@ -37,7 +37,7 @@ struct FileMapInfo {
 }
 
 struct MmapParam {
-    addr: Option<usize>,
+    addr: usize,
     len: usize,
     prot: ProtFlags,
     flags: MapFlags,
@@ -59,7 +59,6 @@ fn rounddown(x: usize) -> usize {
     x & MASK
 }
 
-#[cfg(not(target_os = "windows"))]
 fn mmap_segment<M: Mmap>(
     param: &MmapParam,
     object: &mut impl ElfObject,
@@ -67,7 +66,7 @@ fn mmap_segment<M: Mmap>(
     let mut need_copy = false;
     let ptr = unsafe {
         M::mmap(
-            param.addr,
+            Some(param.addr),
             param.len,
             param.prot,
             param.flags,
@@ -87,35 +86,6 @@ fn mmap_segment<M: Mmap>(
     Ok(ptr)
 }
 
-#[cfg(target_os = "windows")]
-fn mmap_segment<M: Mmap>(
-    param: &MmapParam,
-    object: &mut impl ElfObject,
-) -> Result<NonNull<c_void>> {
-    let mut need_copy = false;
-    let ptr = unsafe {
-        M::mmap(
-            param.addr,
-            param.len,
-            param.prot,
-            param.flags,
-            param.file.offset,
-            object.as_mapping_handle(),
-            &mut need_copy,
-        )
-    }?;
-    if need_copy {
-        unsafe {
-            let dest =
-                core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
-            object.read(dest, param.file.offset)?;
-            M::mprotect(ptr, param.len, param.prot)?;
-        }
-    }
-    Ok(ptr)
-}
-
-#[cfg(not(target_os = "windows"))]
 async fn mmap_segment_async<M: Mmap>(
     param: &MmapParam,
     object: &mut impl ElfObjectAsync,
@@ -123,40 +93,12 @@ async fn mmap_segment_async<M: Mmap>(
     let mut need_copy = false;
     let ptr = unsafe {
         M::mmap(
-            param.addr,
+            Some(param.addr),
             param.len,
             param.prot,
             param.flags,
             param.file.offset,
             object.as_fd(),
-            &mut need_copy,
-        )
-    }?;
-    if need_copy {
-        unsafe {
-            let dest =
-                core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
-            object.read_async(dest, param.file.offset).await?;
-            M::mprotect(ptr, param.len, param.prot)?;
-        }
-    }
-    Ok(ptr)
-}
-
-#[cfg(target_os = "windows")]
-async fn mmap_segment_async<M: Mmap>(
-    param: &MmapParam,
-    object: &mut impl ElfObjectAsync,
-) -> Result<NonNull<c_void>> {
-    let mut need_copy = false;
-    let ptr = unsafe {
-        M::mmap(
-            param.addr,
-            param.len,
-            param.prot,
-            param.flags,
-            param.file.offset,
-            object.as_mapping_handle(),
             &mut need_copy,
         )
     }?;
@@ -172,15 +114,9 @@ async fn mmap_segment_async<M: Mmap>(
 }
 
 #[inline]
-fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize, usize) {
+fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (Option<usize>, usize, usize) {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
-    // 最小偏移地址对应内容在文件中的偏移
-    let mut min_off = 0;
-    let mut min_filesz = 0;
-    let mut min_prot = 0;
-    let mut min_memsz = 0;
-
     //找到最小的偏移地址和最大的偏移地址
     for phdr in phdrs {
         if phdr.p_type == PT_LOAD {
@@ -188,44 +124,26 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (MmapParam, usize, usize
             let vaddr_end = (phdr.p_vaddr + phdr.p_memsz) as usize;
             if vaddr_start < min_vaddr {
                 min_vaddr = vaddr_start;
-                min_off = phdr.p_offset as usize;
-                min_prot = phdr.p_flags;
-                min_filesz = phdr.p_filesz as usize;
-                min_memsz = phdr.p_memsz as usize;
             }
             if vaddr_end > max_vaddr {
                 max_vaddr = vaddr_end;
             }
         }
     }
-
     // 按页对齐
     max_vaddr = roundup(max_vaddr);
     min_vaddr = rounddown(min_vaddr);
     let total_size = max_vaddr - min_vaddr;
-    let prot = map_prot(min_prot);
     (
-        MmapParam {
-            addr: if is_dylib { None } else { Some(min_vaddr) },
-            len: total_size,
-            prot,
-            flags: mmap::MapFlags::MAP_PRIVATE,
-            file: FileMapInfo {
-                filesz: min_filesz,
-                offset: min_off,
-            },
-        },
+        if is_dylib { None } else { Some(min_vaddr) },
+        total_size,
         min_vaddr,
-        roundup(min_vaddr + min_memsz),
     )
 }
 
 #[inline]
-#[cfg(not(windows))]
-fn parse_segment(segments: &ElfSegments, phdr: &Phdr) -> Option<MmapParam> {
-    let addr_min = segments.offset();
+fn parse_segment(segments: &ElfSegments, phdr: &Phdr) -> MmapParam {
     let base = segments.base();
-
     // 映射的起始地址与结束地址都是页对齐的
     let min_vaddr = rounddown(phdr.p_vaddr as usize);
     let max_vaddr = roundup((phdr.p_vaddr + phdr.p_memsz) as usize);
@@ -238,64 +156,21 @@ fn parse_segment(segments: &ElfSegments, phdr: &Phdr) -> Option<MmapParam> {
     let align_len = phdr.p_offset as usize - offset;
     let filesz = phdr.p_filesz as usize + align_len;
 
-    // 这是一个优化，可以减少一次mmap调用。
-    // 映射create_segments产生的参数时会将处于最低地址处的segment也映射进去，所以这里不需要在映射它
-    if addr_min != min_vaddr {
-        Some(MmapParam {
-            addr: Some(real_addr),
-            len: memsz,
-            prot,
-            flags: mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
-            file: FileMapInfo { filesz, offset },
-        })
-    } else {
-        None
-    }
-}
+    #[cfg(feature = "log")]
+    log::trace!(
+        "[Mapping] address: 0x{:x}, length: {}, file offset: {} flags: {:?}",
+        real_addr,
+        memsz,
+        offset,
+        prot
+    );
 
-#[cfg(windows)]
-fn parse_segment(
-    segments: &ElfSegments,
-    phdr: &Phdr,
-    mapping_from_file: bool,
-) -> Option<MmapParam> {
-    let addr_min = segments.offset();
-    let base = segments.base();
-
-    // 映射的起始地址与结束地址都是页对齐的
-    let min_vaddr = rounddown(phdr.p_vaddr as usize);
-    let max_vaddr = roundup((phdr.p_vaddr + phdr.p_memsz) as usize);
-    let memsz = max_vaddr - min_vaddr;
-    let prot = map_prot(phdr.p_flags);
-
-    let real_addr = min_vaddr + base;
-    let offset = rounddown(phdr.p_offset as usize);
-    // 因为读取是从offset处开始的，所以为了不少从文件中读数据，这里需要加上因为对齐产生的偏差
-    let align_len = phdr.p_offset as usize - offset;
-    let filesz = phdr.p_filesz as usize + align_len;
-
-    // 这是一个优化，当不是从文件读取elf文档时可以减少一次mmap调用。
-    // 映射create_segments产生的参数时会将处于最低地址处的segment也映射进去，所以这里不需要在映射它
-    if mapping_from_file {
-        Some(MmapParam {
-            addr: Some(real_addr),
-            len: memsz,
-            prot,
-            flags: mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
-            file: FileMapInfo { filesz, offset },
-        })
-    } else {
-        if addr_min != min_vaddr {
-            Some(MmapParam {
-                addr: Some(real_addr),
-                len: memsz,
-                prot,
-                flags: mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
-                file: FileMapInfo { filesz, offset },
-            })
-        } else {
-            None
-        }
+    MmapParam {
+        addr: real_addr,
+        len: memsz,
+        prot,
+        flags: mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
+        file: FileMapInfo { filesz, offset },
     }
 }
 
@@ -334,13 +209,6 @@ impl ELFRelro {
 impl Drop for ElfSegments {
     fn drop(&mut self) {
         unsafe {
-            #[cfg(windows)]
-            windows_sys::Win32::System::Memory::UnmapViewOfFile(
-                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                    Value: self.memory.as_ptr(),
-                },
-            );
-            #[cfg(not(windows))]
             (self.munmap)(self.memory, self.len).unwrap();
         }
     }
@@ -360,298 +228,56 @@ impl ElfSegments {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn create_segments<M: Mmap>(
-        object: &mut impl ElfObject,
         phdrs: &[ElfPhdr],
         is_dylib: bool,
+        use_file: bool,
     ) -> Result<Self> {
-        let (param, min_vaddr, min_memsz) = parse_segments(phdrs, is_dylib);
-        let mut need_copy = false;
-        let ptr = unsafe {
-            M::mmap(
-                param.addr,
-                param.len,
-                param.prot,
-                param.flags,
-                param.file.offset,
-                object.as_fd(),
-                &mut need_copy,
-            )
-        }?;
-        if need_copy {
-            unsafe {
-                let dest =
-                    core::slice::from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), param.file.filesz);
-                object.read(dest, param.file.offset)?;
-                M::mprotect(ptr, min_memsz, param.prot)?;
-            }
-        }
+        let (addr, len, min_vaddr) = parse_segments(phdrs, is_dylib);
+        let ptr = unsafe { M::mmap_reserve(addr, len, use_file) }?;
         Ok(ElfSegments {
             memory: ptr,
             offset: min_vaddr,
-            len: param.len,
+            len,
             munmap: M::munmap,
         })
     }
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn create_segments<M: Mmap>(
-        object: &mut impl ElfObject,
-        phdrs: &[ElfPhdr],
-        is_dylib: bool,
-    ) -> Result<Self> {
-        if object.as_mapping_handle().is_some() {
-            let (param, min_vaddr, _min_memsz) = parse_segments(phdrs, is_dylib);
-            let ptr = unsafe { M::mmap_reserve(param.addr, param.len) }?;
-
-            // On windows, we don't mmap the whole file at first.
-            Ok(ElfSegments {
-                memory: ptr,
-                offset: min_vaddr,
-                len: param.len,
-                munmap: M::munmap,
-            })
-        } else {
-            let (param, min_vaddr, min_memsz) = parse_segments(phdrs, is_dylib);
-            let mut need_copy = false;
-            let ptr = unsafe {
-                M::mmap(
-                    param.addr,
-                    param.len,
-                    param.prot,
-                    param.flags,
-                    param.file.offset,
-                    object.as_fd(),
-                    &mut need_copy,
-                )
-            }?;
-            if need_copy {
-                unsafe {
-                    let dest = core::slice::from_raw_parts_mut(
-                        ptr.as_ptr().cast::<u8>(),
-                        param.file.filesz,
-                    );
-                    object.read(dest, param.file.offset)?;
-                    M::mprotect(ptr, min_memsz, param.prot)?;
-                }
-            }
-            Ok(ElfSegments {
-                memory: ptr,
-                offset: min_vaddr,
-                len: param.len,
-                munmap: M::munmap,
-            })
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) async fn create_segments_async<M: Mmap>(
-        object: &mut impl ElfObjectAsync,
-        phdrs: &[ElfPhdr],
-        is_dylib: bool,
-    ) -> Result<Self> {
-        if object.as_mapping_handle().is_some() {
-            let (param, min_vaddr, _min_memsz) = parse_segments(phdrs, is_dylib);
-            let ptr = unsafe { M::mmap_reserve(param.addr, param.len) }?;
-
-            // On windows, we don't mmap the whole file at first.
-            Ok(ElfSegments {
-                memory: ptr,
-                offset: min_vaddr,
-                len: param.len,
-                munmap: M::munmap,
-            })
-        } else {
-            let (param, min_vaddr, min_memsz) = parse_segments(phdrs, is_dylib);
-            let mut need_copy = false;
-            let ptr = unsafe {
-                M::mmap(
-                    param.addr,
-                    param.len,
-                    param.prot,
-                    param.flags,
-                    param.file.offset,
-                    object.as_fd(),
-                    &mut need_copy,
-                )
-            }?;
-            if need_copy {
-                unsafe {
-                    let dest = core::slice::from_raw_parts_mut(
-                        ptr.as_ptr().cast::<u8>(),
-                        param.file.filesz,
-                    );
-                    object.read_async(dest, param.file.offset).await?;
-                    M::mprotect(ptr, min_memsz, param.prot)?;
-                }
-            }
-            Ok(ElfSegments {
-                memory: ptr,
-                offset: min_vaddr,
-                len: param.len,
-                munmap: M::munmap,
-            })
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    pub(crate) async fn create_segments_async<M: Mmap>(
-        _object: &mut impl ElfObjectAsync,
-        phdrs: &[ElfPhdr],
-        is_dylib: bool,
-    ) -> Result<Self> {
-        let (param, min_vaddr, _min_memsz) = parse_segments(phdrs, is_dylib);
-        let ptr = unsafe { M::mmap_reserve(param.addr, param.len) }?;
-
-        // On windows, we don't mmap the whole file at first.
-        Ok(ElfSegments {
-            memory: ptr,
-            offset: min_vaddr,
-            len: param.len,
-            munmap: M::munmap,
-        })
-    }
-
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn load_segment<M: Mmap>(
         &mut self,
         object: &mut impl ElfObject,
         phdr: &Phdr,
+        #[allow(unused)] last_address: &mut usize,
     ) -> Result<()> {
-        if let Some(param) = parse_segment(self, phdr) {
-            mmap_segment::<M>(&param, object)?;
-            self.fill_bss::<M>(phdr)?;
+        let param = parse_segment(self, phdr);
+        #[cfg(target_os = "windows")]
+        if object.as_fd().is_some() {
+            if self.memory.as_ptr() as usize + self.len != param.addr + param.len {
+                let len = param.addr + param.len - *last_address;
+                crate::os::virtual_free(*last_address, len)?;
+                *last_address = param.addr + param.len;
+            }
         }
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) fn load_segment<M: Mmap>(
-        &mut self,
-        object: &mut impl ElfObject,
-        phdr: &Phdr,
-        last_address: &mut NonNull<c_void>,
-    ) -> Result<()> {
-        use windows_sys::Win32::System::Memory::{
-            MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE, VirtualFree,
-        };
-
-        if object.as_mapping_handle().is_none() {
-            if let Some(param) = parse_segment(self, phdr, false) {
-                mmap_segment::<M>(&param, object)?;
-                self.fill_bss::<M>(phdr)?;
-            }
-            return Ok(());
-        }
-
-        let param = parse_segment(self, phdr, true).unwrap();
-        unsafe {
-            // Split placeholder into three parts:
-            // 1. The part before the segment, 2. the segment itself, 3. the part after the segment.
-            let blank_size = param.addr.unwrap() - last_address.as_ptr() as usize;
-            if blank_size > 0 {
-                if VirtualFree(
-                    last_address.as_ptr(),
-                    blank_size,
-                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
-                ) == 0
-                {
-                    let err_code = windows_sys::Win32::Foundation::GetLastError();
-                    return Err(crate::Error::MmapError {
-                        msg: alloc::format!("VirtualFree failed with error: {}", err_code),
-                    });
-                }
-            }
-            let current_segment_end_addr = param.addr.unwrap() + param.len;
-            let total_reservation_end_addr = (self.memory.as_ptr() as usize) + self.len;
-            if current_segment_end_addr != total_reservation_end_addr {
-                if VirtualFree(
-                    param.addr.unwrap() as *mut c_void,
-                    param.len as usize,
-                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
-                ) == 0
-                {
-                    let err_code = windows_sys::Win32::Foundation::GetLastError();
-                    return Err(crate::Error::MmapError {
-                        msg: alloc::format!("VirtualFree failed with error: {}", err_code),
-                    });
-                }
-            }
-            *last_address = NonNull::new((param.addr.unwrap() + param.len) as *mut c_void).unwrap();
-        };
         mmap_segment::<M>(&param, object)?;
         self.fill_bss::<M>(phdr)?;
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub(crate) async fn load_segment_async<M: Mmap>(
         &mut self,
         object: &mut impl ElfObjectAsync,
         phdr: &Phdr,
+        #[allow(unused)] last_address: &mut usize,
     ) -> Result<()> {
-        if let Some(param) = parse_segment(self, phdr) {
-            mmap_segment_async::<M>(&param, object).await?;
-            self.fill_bss::<M>(phdr)?;
+        let param = parse_segment(self, phdr);
+        #[cfg(target_os = "windows")]
+        if object.as_fd().is_some() {
+            if self.memory.as_ptr() as usize + self.len != param.addr + param.len {
+                let len = param.addr + param.len - *last_address;
+                crate::os::virtual_free(*last_address, len)?;
+                *last_address = param.addr + param.len;
+            }
         }
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) async fn load_segment_async<M: Mmap>(
-        &mut self,
-        object: &mut impl ElfObjectAsync,
-        phdr: &Phdr,
-        last_address: &mut NonNull<c_void>,
-    ) -> Result<()> {
-        use windows_sys::Win32::System::Memory::{
-            MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE, VirtualFree,
-        };
-
-        if object.as_mapping_handle().is_none() {
-            if let Some(param) = parse_segment(self, phdr, false) {
-                mmap_segment::<M>(&param, object)?;
-                self.fill_bss::<M>(phdr)?;
-            }
-            return Ok(());
-        }
-
-        let param = parse_segment(self, phdr, true).unwrap();
-        unsafe {
-            // Split placeholder into three parts:
-            // 1. The part before the segment, 2. the segment itself, 3. the part after the segment.
-            let blank_size = param.addr.unwrap() - last_address.as_ptr() as usize;
-            if blank_size > 0 {
-                if VirtualFree(
-                    last_address.as_ptr(),
-                    blank_size,
-                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
-                ) == 0
-                {
-                    let err_code = windows_sys::Win32::Foundation::GetLastError();
-                    return Err(crate::Error::MmapError {
-                        msg: alloc::format!("VirtualFree failed with error: {}", err_code),
-                    });
-                }
-            }
-            let current_segment_end_addr = param.addr.unwrap() + param.len;
-            let total_reservation_end_addr = (self.memory.as_ptr() as usize) + self.len;
-            if current_segment_end_addr != total_reservation_end_addr {
-                if VirtualFree(
-                    param.addr.unwrap() as *mut c_void,
-                    param.len as usize,
-                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
-                ) == 0
-                {
-                    let err_code = windows_sys::Win32::Foundation::GetLastError();
-                    return Err(crate::Error::MmapError {
-                        msg: alloc::format!("VirtualFree failed with error: {}", err_code),
-                    });
-                }
-            }
-            *last_address = NonNull::new((param.addr.unwrap() + param.len) as *mut c_void).unwrap();
-        };
         mmap_segment_async::<M>(&param, object).await?;
         self.fill_bss::<M>(phdr)?;
         Ok(())
@@ -685,11 +311,6 @@ impl ElfSegments {
             }
         }
         Ok(())
-    }
-
-    #[inline]
-    pub(crate) fn offset(&self) -> usize {
-        self.offset
     }
 
     #[inline]

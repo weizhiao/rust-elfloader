@@ -63,10 +63,10 @@ impl ElfHashTable for ElfGnuHash {
         }
         if nsym > 0 {
             unsafe {
-                let mut hashval = self.chains.add(nsym - self.header.symbias as usize);
-                while hashval.read() & 1 == 0 {
+                let mut val = self.chains.add(nsym - self.header.symbias as usize);
+                while val.read() & 1 == 0 {
                     nsym += 1;
-                    hashval = hashval.add(1);
+                    val = val.add(1);
                 }
             }
         }
@@ -213,10 +213,7 @@ pub struct PreCompute {
 
 impl<'symtab> SymbolInfo<'symtab> {
     #[allow(unused_variables)]
-    pub(crate) fn from_str(
-        name: &'symtab str,
-        version: Option<&'symtab str>,
-    ) -> Self {
+    pub(crate) fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
         SymbolInfo {
             name,
             cname: None,

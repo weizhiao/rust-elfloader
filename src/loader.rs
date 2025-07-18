@@ -7,7 +7,13 @@ use crate::{
     segment::{ELFRelro, ElfSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, sync::Arc, vec::Vec};
-use core::{any::Any, ffi::CStr, marker::PhantomData, ops::Deref, ptr::NonNull};
+use core::{
+    any::Any,
+    ffi::{CStr, c_char},
+    marker::PhantomData,
+    ops::Deref,
+    ptr::NonNull,
+};
 use elf::abi::{
     EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP,
     PT_LOAD, PT_PHDR,
@@ -113,7 +119,7 @@ pub(crate) struct Builder {
     pub(crate) segments: ElfSegments,
     pub(crate) init_fn: FnHandler,
     pub(crate) fini_fn: FnHandler,
-    pub(crate) interp: Option<&'static str>,
+    pub(crate) interp: Option<NonNull<c_char>>,
 }
 
 impl Builder {
@@ -168,11 +174,8 @@ impl Builder {
                 );
             }
             PT_INTERP => {
-                self.interp = Some(unsafe {
-                    CStr::from_ptr(self.segments.get_ptr(phdr.p_vaddr as usize))
-                        .to_str()
-                        .unwrap()
-                });
+                self.interp =
+                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
             }
             _ => {}
         };
@@ -302,7 +305,8 @@ impl<M: Mmap> Loader<M> {
         let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-        let segments = ElfSegments::create_segments::<M>(&mut object, phdrs, ehdr.is_dylib())?;
+        let segments =
+            ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
         let mut builder = Builder::new(
             segments,
             object.file_name().to_owned(),
@@ -312,39 +316,20 @@ impl<M: Mmap> Loader<M> {
             fini_fn,
         );
         // 根据Phdr的类型进行不同操作
-        #[cfg(target_os = "windows")]
-        {
-            let mut last_addr = builder.segments.memory;
-            for phdr in phdrs {
-                if let Some(hook) = &self.hook {
-                    builder.exec_hook(hook, phdr)?;
-                }
-                match phdr.p_type {
-                    // 将segment加载到内存中
-                    PT_LOAD => {
-                        builder
-                            .segments
-                            .load_segment::<M>(&mut object, phdr, &mut last_addr)?
-                    }
-                    _ => builder.parse_other_phdr::<M>(phdr),
-                }
+        let mut last_addr = builder.segments.memory.as_ptr() as usize;
+        for phdr in phdrs {
+            if let Some(hook) = &self.hook {
+                builder.exec_hook(hook, phdr)?;
             }
-            Ok((builder, phdrs))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            for phdr in phdrs {
-                if let Some(hook) = &self.hook {
-                    builder.exec_hook(hook, phdr)?;
-                }
-                match phdr.p_type {
-                    // 将segment加载到内存中
-                    PT_LOAD => builder.segments.load_segment::<M>(&mut object, phdr)?,
-                    _ => builder.parse_other_phdr::<M>(phdr),
-                }
+            match phdr.p_type {
+                // 将segment加载到内存中
+                PT_LOAD => builder
+                    .segments
+                    .load_segment::<M>(&mut object, phdr, &mut last_addr)?,
+                _ => builder.parse_other_phdr::<M>(phdr),
             }
-            Ok((builder, phdrs))
         }
+        Ok((builder, phdrs))
     }
 
     pub(crate) async fn load_async_impl(
@@ -358,7 +343,7 @@ impl<M: Mmap> Loader<M> {
         let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
         // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
         let segments =
-            ElfSegments::create_segments_async::<M>(&mut object, phdrs, ehdr.is_dylib()).await?;
+            ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
         let mut builder = Builder::new(
             segments,
             object.file_name().to_owned(),
@@ -368,44 +353,22 @@ impl<M: Mmap> Loader<M> {
             fini_fn,
         );
         // 根据Phdr的类型进行不同操作
-        #[cfg(target_os = "windows")]
-        {
-            let mut last_addr = builder.segments.memory;
-            for phdr in phdrs {
-                if let Some(hook) = &self.hook {
-                    builder.exec_hook(hook, phdr)?;
-                }
-                match phdr.p_type {
-                    // 将segment加载到内存中
-                    PT_LOAD => {
-                        builder
-                            .segments
-                            .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
-                            .await?
-                    }
-                    _ => builder.parse_other_phdr::<M>(phdr),
-                }
+        let mut last_addr = builder.segments.memory.as_ptr() as usize;
+        for phdr in phdrs {
+            if let Some(hook) = &self.hook {
+                builder.exec_hook(hook, phdr)?;
             }
-            Ok((builder, phdrs))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            for phdr in phdrs {
-                if let Some(hook) = self.hook.as_ref() {
-                    builder.exec_hook(hook, phdr)?;
+            match phdr.p_type {
+                // 将segment加载到内存中
+                PT_LOAD => {
+                    builder
+                        .segments
+                        .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
+                        .await?
                 }
-                match phdr.p_type {
-                    // 将segment加载到内存中
-                    PT_LOAD => {
-                        builder
-                            .segments
-                            .load_segment_async::<M>(&mut object, phdr)
-                            .await?;
-                    }
-                    _ => builder.parse_other_phdr::<M>(phdr),
-                }
+                _ => builder.parse_other_phdr::<M>(phdr),
             }
-            Ok((builder, phdrs))
         }
+        Ok((builder, phdrs))
     }
 }

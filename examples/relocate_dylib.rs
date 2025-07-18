@@ -2,6 +2,9 @@ use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    env_logger::init();
+
     fn print(s: &str) {
         println!("{}", s);
     }

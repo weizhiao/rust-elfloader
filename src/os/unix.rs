@@ -1,14 +1,23 @@
 use crate::{
     Error, Result, io_error,
     mmap::{MapFlags, Mmap, ProtFlags},
-    object::{ElfFile, ElfObject},
+    object::ElfObject,
 };
 use alloc::{ffi::CString, string::ToString};
-use core::{ffi::CStr, ptr::NonNull, str::FromStr};
+use core::{
+    ffi::{CStr, c_void},
+    ptr::NonNull,
+    str::FromStr,
+};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
 pub struct MmapImpl;
+
+pub(crate) struct RawFile {
+    name: CString,
+    fd: isize,
+}
 
 impl Mmap for MmapImpl {
     unsafe fn mmap(
@@ -19,7 +28,7 @@ impl Mmap for MmapImpl {
         offset: usize,
         fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<core::ptr::NonNull<c_void>> {
         let ptr = if let Some(fd) = fd {
             unsafe {
                 mmap(
@@ -33,20 +42,7 @@ impl Mmap for MmapImpl {
             }
         } else {
             *need_copy = true;
-            if let Some(addr) = addr {
-                addr as _
-            } else {
-                unsafe {
-                    mmap(
-                        addr.unwrap_or(0) as _,
-                        len,
-                        ProtFlags::PROT_WRITE.bits(),
-                        (flags | MapFlags::MAP_ANONYMOUS).bits(),
-                        -1,
-                        0,
-                    )
-                }
-            }
+            addr.unwrap() as _
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
             return Err(map_error("mmap failed"));
@@ -59,7 +55,7 @@ impl Mmap for MmapImpl {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<core::ptr::NonNull<c_void>> {
         let ptr = unsafe {
             mmap(
                 addr as _,
@@ -95,21 +91,57 @@ impl Mmap for MmapImpl {
         }
         Ok(())
     }
+
+    unsafe fn mmap_reserve(
+        addr: Option<usize>,
+        len: usize,
+        use_file: bool,
+    ) -> Result<NonNull<c_void>> {
+        let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
+        let prot = if use_file {
+            ProtFlags::PROT_NONE
+        } else {
+            ProtFlags::PROT_WRITE
+        };
+        let ptr = unsafe {
+            mmap(
+                addr.unwrap_or(0) as _,
+                len,
+                prot.bits(),
+                flags.bits(),
+                -1,
+                0,
+            )
+        };
+        Ok(unsafe { NonNull::new_unchecked(ptr) })
+    }
 }
 
-impl Drop for ElfFile {
+impl Drop for RawFile {
     fn drop(&mut self) {
         unsafe { libc::close(self.fd as i32) };
     }
 }
 
-pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
-    let name = CString::from_str(path).unwrap();
-    let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
-    if fd == -1 {
-        return Err(io_error("open failed"));
+impl RawFile {
+    pub(crate) fn from_path(path: &str) -> Result<Self> {
+        let name = CString::from_str(path).unwrap();
+        let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
+        if fd == -1 {
+            return Err(io_error("open failed"));
+        }
+        Ok(Self {
+            name,
+            fd: fd as isize,
+        })
     }
-    Ok(ElfFile { name, fd: fd as isize })
+
+    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+        Self {
+            name: CString::new(path).unwrap(),
+            fd: raw_fd as isize,
+        }
+    }
 }
 
 fn lseek(fd: i32, offset: usize) -> Result<()> {
@@ -144,7 +176,7 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
     }
 }
 
-impl ElfObject for ElfFile {
+impl ElfObject for RawFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         lseek(self.fd as i32, offset)?;
         read_exact(self.fd as i32, buf)?;

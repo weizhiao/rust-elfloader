@@ -160,20 +160,11 @@ impl ElfDynamic {
         let fini_array_fn = fini_array_off.map(|fini_array_off| {
             segments.get_slice(fini_array_off.get(), fini_array_size.unwrap().get())
         });
-        let verneed = verneed_off.map(|verneed_off| unsafe {
-            (
-                verneed_off.checked_add(base).unwrap_unchecked(),
-                verneed_num.unwrap_unchecked(),
-            )
-        });
-        let verdef = verdef_off.map(|verdef_off| unsafe {
-            (
-                verdef_off.checked_add(base).unwrap_unchecked(),
-                verdef_num.unwrap_unchecked(),
-            )
-        });
-        let version_idx =
-            version_ids_off.map(|off| unsafe { off.checked_add(base).unwrap_unchecked() });
+        let verneed = verneed_off
+            .map(|verneed_off| (verneed_off.checked_add(base).unwrap(), verneed_num.unwrap()));
+        let verdef = verdef_off
+            .map(|verdef_off| (verdef_off.checked_add(base).unwrap(), verdef_num.unwrap()));
+        let version_idx = version_ids_off.map(|off| off.checked_add(base).unwrap());
         Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
             hashtab: hash_off + base,

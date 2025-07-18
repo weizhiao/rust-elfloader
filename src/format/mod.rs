@@ -786,7 +786,9 @@ impl Builder {
             .unwrap_or_else(|| ElfPhdrs::Vec(Vec::from(phdrs)));
         ElfCommonPart {
             entry: self.ehdr.e_entry as usize + if is_dylib { self.segments.base() } else { 0 },
-            interp: self.interp,
+            interp: self
+                .interp
+                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
             name: unsafe { core::mem::transmute::<&CStr, &CStr>(self.name.as_c_str()) },
             phdrs: phdrs.clone(),
             data: LazyParse {

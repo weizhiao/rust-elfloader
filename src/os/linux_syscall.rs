@@ -1,4 +1,4 @@
-use crate::object::{ElfFile, ElfObject};
+use crate::object::ElfObject;
 use crate::{Error, io_error};
 use crate::{
     Result,
@@ -16,6 +16,11 @@ use core::{
 use syscalls::Sysno;
 /// An implementation of Mmap trait
 pub struct MmapImpl;
+
+pub(crate) struct RawFile {
+    name: CString,
+    fd: isize,
+}
 
 #[inline]
 fn mmap(
@@ -100,14 +105,17 @@ impl Mmap for MmapImpl {
         need_copy: &mut bool,
     ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
         let ptr = if let Some(fd) = fd {
-            mmap(addr.unwrap_or(0) as _, len, prot, flags, fd as i32, offset as _)?
+            mmap(
+                addr.unwrap_or(0) as _,
+                len,
+                prot,
+                flags,
+                fd as i32,
+                offset as _,
+            )?
         } else {
             *need_copy = true;
-            if let Some(addr) = addr {
-                addr as _
-            } else {
-                mmap_anonymous(0 as _, len, ProtFlags::PROT_WRITE, flags)?
-            }
+            addr.unwrap() as _
         };
         Ok(unsafe { NonNull::new_unchecked(ptr) })
     }
@@ -135,6 +143,21 @@ impl Mmap for MmapImpl {
         mprotect(addr.as_ptr(), len, prot)?;
         Ok(())
     }
+
+    unsafe fn mmap_reserve(
+        addr: Option<usize>,
+        len: usize,
+        use_file: bool,
+    ) -> Result<NonNull<c_void>> {
+        let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
+        let prot = if use_file {
+            ProtFlags::PROT_NONE
+        } else {
+            ProtFlags::PROT_WRITE
+        };
+        let ptr = mmap_anonymous(addr.unwrap_or(0) as _, len, prot, flags)?;
+        Ok(unsafe { NonNull::new_unchecked(ptr) })
+    }
 }
 
 /// Converts a raw syscall return value to a result.
@@ -157,28 +180,37 @@ fn map_error(msg: &str) -> Error {
     }
 }
 
-pub(crate) fn from_path(path: &str) -> Result<ElfFile> {
-    const RDONLY: u32 = 0;
-    let name = CString::from_str(path).unwrap().to_owned();
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
-    let fd = unsafe {
-        from_io_ret(
-            syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0),
-            "open failed",
-        )?
-    };
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-    let fd = unsafe {
-        const AT_FDCWD: core::ffi::c_int = -100;
-        from_io_ret(
-            syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0),
-            "openat failed",
-        )?
-    };
-    Ok(ElfFile { fd: fd as _, name })
+impl RawFile {
+    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+        Self {
+            name: CString::new(path).unwrap(),
+            fd: raw_fd as isize,
+        }
+    }
+
+    pub(crate) fn from_path(path: &str) -> Result<Self> {
+        const RDONLY: u32 = 0;
+        let name = CString::from_str(path).unwrap().to_owned();
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
+        let fd = unsafe {
+            from_io_ret(
+                syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0),
+                "open failed",
+            )?
+        };
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        let fd = unsafe {
+            const AT_FDCWD: core::ffi::c_int = -100;
+            from_io_ret(
+                syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0),
+                "openat failed",
+            )?
+        };
+        Ok(RawFile { fd: fd as _, name })
+    }
 }
 
-impl Drop for ElfFile {
+impl Drop for RawFile {
     fn drop(&mut self) {
         unsafe {
             from_io_ret(
@@ -190,7 +222,7 @@ impl Drop for ElfFile {
     }
 }
 
-impl ElfObject for ElfFile {
+impl ElfObject for RawFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         const SEEK_START: u32 = 0;
         unsafe {

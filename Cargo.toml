@@ -27,13 +27,13 @@ syscalls = { version = "0.6.18", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
-    'Win32_Foundation',
-    'Win32_System_Memory',
-    'Win32_System_SystemInformation',
-    "Win32_Security",
-    "Win32_System_IO",
-    "Win32_Storage",
-    "Win32_Storage_FileSystem"
+	'Win32_Foundation',
+	'Win32_System_Memory',
+	'Win32_System_SystemInformation',
+	"Win32_Security",
+	"Win32_System_IO",
+	"Win32_Storage",
+	"Win32_Storage_FileSystem",
 ] }
 
 [target.'cfg(unix)'.dependencies]
@@ -72,6 +72,7 @@ delegate = "0.13.3"
 [dev-dependencies]
 criterion = "0.5.1"
 libloading = "0.8.5"
+env_logger = "0.11.6"
 
 [[bench]]
 name = "benchmark"
