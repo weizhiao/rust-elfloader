@@ -26,7 +26,7 @@ jobs:
     strategy:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
-        channel: [ 1.85.0, stable ]
+        channel: [ 1.88.0, stable ]
         features: [ "use-syscall", "version", "log" ]
 
   test-rela:
@@ -45,8 +45,8 @@ jobs:
     strategy:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
-        channel: [ 1.85.0, stable ]
-        features: [ "use-syscall,lazy", "lazy" ]
+        channel: [ 1.88.0, stable ]
+        features: [ "use-syscall" ]
 
   test-rel:
     runs-on: ubuntu-latest
@@ -64,8 +64,8 @@ jobs:
     strategy:
       matrix:
          target: [ i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
-         channel: [ 1.85.0, stable ]
-         features: [ "use-syscall,rel,lazy", "rel,lazy" ]
+         channel: [ 1.88.0, stable ]
+         features: [ "use-syscall,rel", "rel" ]
 
   bench:
     runs-on: ubuntu-latest
@@ -84,4 +84,4 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu ]
         channel: [ stable ]
-        features: [ "use-syscall,lazy", "lazy" ]
+        features: [ "use-syscall" ]

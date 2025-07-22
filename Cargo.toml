@@ -17,7 +17,7 @@ authors = ["wzhao <1207410841@qq.com>"]
 edition = "2024"
 repository = "https://github.com/weizhiao/elf_loader"
 license = "MIT/Apache-2.0"
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 
 [workspace]
 members = ["crates/windows-elf-loader", "crates/mini-loader"]
@@ -79,7 +79,7 @@ name = "benchmark"
 harness = false
 
 [features]
-default = ["lazy"]
+default = []
 
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
@@ -89,8 +89,6 @@ version = []
 log = ["dep:log"]
 # Use rel as the relocation type
 rel = []
-# Enable lazy binding
-lazy = []
 # support target without native pointer size atomic operation
 portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
 

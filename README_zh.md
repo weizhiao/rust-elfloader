@@ -107,7 +107,6 @@ Found 11 outliers among 100 measurements (11.00%)
 | log             | 启用日志                             |
 | rel             | 将rel作为重定位条目的格式            |
 | portable-atomic | 支持没有native指针大小原子操作的目标 |
-| lazy            | 启用延迟绑定                         |
 
 在没有操作系统的情况下请关闭`use-syscall`这个feature。
 
@@ -151,7 +150,7 @@ fn main() {
 ```
 
 # 最低编译器版本支持
-Rust 1.85.0及以上
+Rust 1.88.0及以上
 
 # 补充
 如果你在使用时遇到任何问题，都可以在github上提出issue，此外十分欢迎任何对elf加载器感兴趣的朋友贡献代码（改进elf_loader本身，增加样例，修改文档中存在的问题都可以）。如果觉得elf_loader对你有帮助的话不妨点个star吧。😊

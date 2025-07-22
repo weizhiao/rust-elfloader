@@ -89,7 +89,6 @@ fn write_val(base: usize, offset: usize, val: usize) {
     };
 }
 
-#[cfg(feature = "lazy")]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_idx: usize) -> usize {
     let rela = unsafe { &*dylib.pltrel.unwrap().add(rela_idx).as_ptr() };
@@ -246,10 +245,7 @@ impl ElfCommonPart {
         let base = core.base();
         let reloc = self.relocation();
         let symbol = self.symtab().unwrap();
-		#[cfg(feature = "lazy")]
-		let is_lazy = self.is_lazy();
-		# [cfg(not(feature = "lazy"))]
-		let is_lazy = false;
+        let is_lazy = self.is_lazy();
         if is_lazy {
             // 开启lazy bind后会跳过plt相关的重定位
             for rel in reloc.pltrel {

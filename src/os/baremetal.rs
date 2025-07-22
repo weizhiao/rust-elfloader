@@ -1,5 +1,8 @@
 use crate::{
-    mmap::{MapFlags, Mmap, ProtFlags}, object::ElfObject, segment::PAGE_SIZE, Result
+    Result,
+    mmap::{MapFlags, Mmap, ProtFlags},
+    object::ElfObject,
+    segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ptr::NonNull, slice::from_raw_parts_mut};
@@ -79,15 +82,15 @@ impl RawFile {
 }
 
 impl ElfObject for RawFile {
-	fn file_name(&self) -> &core::ffi::CStr {
-		todo!()
-	}
+    fn file_name(&self) -> &core::ffi::CStr {
+        todo!()
+    }
 
-	fn read(&mut self, _buf: &mut [u8], _offset: usize) -> Result<()> {
-		todo!()
-	}
+    fn read(&mut self, _buf: &mut [u8], _offset: usize) -> Result<()> {
+        todo!()
+    }
 
-	fn as_fd(&self) -> Option<isize> {
-		todo!()
-	}
+    fn as_fd(&self) -> Option<isize> {
+        todo!()
+    }
 }

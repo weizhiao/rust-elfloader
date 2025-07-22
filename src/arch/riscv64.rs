@@ -16,14 +16,13 @@ pub const REL_IRELATIVE: u32 = R_RISCV_IRELATIVE;
 pub const REL_COPY: u32 = R_RISCV_COPY;
 pub const REL_TPOFF: u32 = R_RISCV_TLS_TPREL64;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, @function
-	.align 16
-dl_runtime_resolve:
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
+
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
 // 保存参数寄存器,因为dl_fixup不会使用浮点参数寄存器,因此不需要保存
     addi sp,sp,-9*8
     sd ra,8*0(sp)
@@ -55,17 +54,6 @@ dl_runtime_resolve:
     addi sp,sp,8*9
 // 执行真正的函数
     jr t1
-"
-);
-
-#[cfg(feature = "lazy")]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.write(dl_runtime_resolve as usize);
-        got.add(1).write(dylib);
-    }
+	"
+    )
 }

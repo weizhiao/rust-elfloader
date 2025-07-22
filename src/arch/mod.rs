@@ -31,9 +31,6 @@ cfg_if::cfg_if! {
     }
 }
 
-#[cfg(not(feature = "lazy"))]
-pub(crate) fn prepare_lazy_bind(_got: *mut usize, _dylib: usize) {}
-
 pub const REL_NONE: u32 = 0;
 const OK_BINDS: usize = 1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE;
 const OK_TYPES: usize = 1 << STT_NOTYPE
@@ -257,6 +254,19 @@ impl Clone for ElfPhdr {
             },
         }
     }
+}
+
+#[inline]
+pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
+    // 这是安全的，延迟绑定时库是存在的
+    unsafe {
+        got.add(DYLIB_OFFSET).write(dylib);
+        got.add(RESOLVE_FUNCTION_OFFSET)
+            .write(dl_runtime_resolve as usize);
+    }
+
+    #[cfg(target_arch = "loongarch64")]
+    unimplemented!()
 }
 
 #[cfg(not(feature = "rel"))]

@@ -13,14 +13,13 @@ pub const REL_IRELATIVE: u32 = R_X86_64_IRELATIVE;
 pub const REL_COPY: u32 = R_X86_64_COPY;
 pub const REL_TPOFF: u32 = R_X86_64_TPOFF32;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, @function
-	.align 16
-dl_runtime_resolve:
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
 // 计算偏移
 	mov ecx, [esp + 4]
 	shr ecx, 3
@@ -31,18 +30,6 @@ dl_runtime_resolve:
 	mov [esp], eax
 // 清除plt代码压入栈中的东西,当执行完这条指令后栈顶保存的是plt代码对应的返回地址
 	ret 4
-"
-);
-
-#[cfg(feature = "lazy")]
-#[inline]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.add(1).write(dylib);
-        got.add(2).write(dl_runtime_resolve as usize);
-    }
+	"
+    )
 }

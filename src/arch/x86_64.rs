@@ -13,14 +13,13 @@ pub const REL_IRELATIVE: u32 = R_X86_64_IRELATIVE;
 pub const REL_COPY: u32 = R_X86_64_COPY;
 pub const REL_TPOFF: u32 = R_X86_64_TPOFF64;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, @function
-	.align 16
-dl_runtime_resolve:
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
 // 保存参数寄存器,这里多使用了8字节栈是为了栈的16字节对齐
     sub rsp,8*7
     mov [rsp+8*0],rdi
@@ -45,18 +44,6 @@ dl_runtime_resolve:
     add rsp,7*8+2*8
 // 执行真正的函数
     jmp rax
-"
-);
-
-#[cfg(feature = "lazy")]
-#[inline]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.add(1).write(dylib);
-        got.add(2).write(dl_runtime_resolve as usize);
-    }
+	"
+    )
 }

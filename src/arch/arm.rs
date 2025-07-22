@@ -13,14 +13,13 @@ pub const REL_IRELATIVE: u32 = R_ARM_IRELATIVE;
 pub const REL_COPY: u32 = R_ARM_COPY;
 pub const REL_TPOFF: u32 = R_ARM_TLS_TPOFF32;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, %function
-	.align 16
-dl_runtime_resolve:
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
     push {{r0, r1, r2, r3, r4}}
     ldr r0, [lr, #-4]
     add r1, lr, #4 
@@ -30,17 +29,6 @@ dl_runtime_resolve:
     mov	ip, r0
     pop	{{r0, r1, r2, r3, r4, lr}}
     bx ip
-"
-);
-
-#[cfg(feature = "lazy")]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.add(1).write(dylib);
-        got.add(2).write(dl_runtime_resolve as usize);
-    }
+	"
+    )
 }

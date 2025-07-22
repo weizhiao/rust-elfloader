@@ -24,27 +24,13 @@ pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
 
 pub const REL_GOT: u32 = u32::MAX;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, @function
-	.align 16
-dl_runtime_resolve:
-"
-);
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 
-#[cfg(feature = "lazy")]
-#[inline]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.add(1).write(dylib);
-        got.add(2).write(dl_runtime_resolve as usize);
-    }
-    unimplemented!()
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
+	"
+    )
 }

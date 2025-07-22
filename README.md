@@ -111,7 +111,6 @@ The `elf_loader` supports the RELR relative relocation format. For detailed info
 | log             | Enable logging                                                                     |
 | rel             | Use rel as the relocation type                                                     |
 | portable-atomic | support target without native pointer size atomic operation                        |
-| lazy            | Enable lazy binding                                                                |
 
 Disable the `use-syscall` feature if you don't have an operating system.
 
@@ -154,7 +153,7 @@ fn main() {
 ```
 
 # Minimum Supported Rust Version
-Rust 1.85 or higher.
+Rust 1.88 or higher.
 
 # Supplement
 If you encounter any issues while using it, you can raise an issue on GitHub. Additionally, we warmly welcome any friends interested in the `elf_loader` to contribute code (improving `elf_loader` itself, adding examples, and fixing issues in the documentation are all welcome). If you find `elf_loader` helpful, feel free to give it a star.

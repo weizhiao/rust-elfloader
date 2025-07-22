@@ -13,14 +13,13 @@ pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 pub const REL_COPY: u32 = R_AARCH64_COPY;
 pub const REL_TPOFF: u32 = R_AARCH64_TLS_TPREL;
 
-#[cfg(feature = "lazy")]
-core::arch::global_asm!(
-    "
-    .text
-    .globl dl_runtime_resolve
-	.type dl_runtime_resolve, @function
-	.align 16
-dl_runtime_resolve:
+pub(crate) const DYLIB_OFFSET: usize = 1;
+pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
 // 保存参数寄存器
     sub sp,sp,8*8
     stp x0,x1,[sp,16*0]
@@ -44,17 +43,6 @@ dl_runtime_resolve:
 // 这里要将plt代码压入栈中的东西也弹出去
     add sp,sp,8*10
     br x16
-"
-);
-
-#[cfg(feature = "lazy")]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
-    unsafe extern "C" {
-        fn dl_runtime_resolve();
-    }
-    // 这是安全的，延迟绑定时库是存在的
-    unsafe {
-        got.add(1).write(dylib);
-        got.add(2).write(dl_runtime_resolve as usize);
-    }
+	"
+    )
 }

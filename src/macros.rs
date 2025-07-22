@@ -1,4 +1,3 @@
-
 /// Load a dynamic library into memory
 /// # Example
 /// ```no_run
