@@ -2,7 +2,7 @@
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
-[![Rust](https://img.shields.io/badge/rust-1.85.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
+[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
 [![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
 
 # elf_loader
@@ -27,7 +27,7 @@ English | [中文](README_zh.md)
 `elf_loader` can load ELF dynamic libraries on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader).
 
 ### ✨ Compact Size ✨
-The `elf_loader` is extremely small in size. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/mini-loader) implemented based on `elf_loader` compiles to a binary file of only **26KB**. Below are the results from analyzing the binary using the `bloat` tool:
+The `elf_loader` is extremely small in size. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) implemented based on `elf_loader` compiles to a binary file of only **26KB**. Below are the results from analyzing the binary using the `bloat` tool:
 ```shell
 cargo bloat --crates --release --target=x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
     Finished `release` profile [optimized] target(s) in 0.28s
@@ -86,7 +86,7 @@ Found 11 outliers among 100 measurements (11.00%)
 It's important to note that `elf_loader` is not a dynamic linker and cannot automatically resolve dynamic library dependencies. However, it can serve as the underlying layer for implementing a dynamic linker.
 
 ### ✨ Very easy to port and has good extensibility ✨
-If you want to port `elf_loader`, you only need to implement the `Mmap` and `ElfObject` traits for your platform. When implementing the `Mmap` trait, you can refer to the default implementation provided by `elf_loader`: [mmap](https://github.com/weizhiao/elf_loader/tree/main/src/mmap). In addition, you can use the `hook` functions provided by this library to extend the functionality of `elf_loader` to implement any other features you want. When using the `hook` functions, you can refer to: [hook](https://github.com/weizhiao/dlopen-rs/blob/main/src/loader/mod.rs) in `dlopen-rs`.
+If you want to port `elf_loader`, you only need to implement the `Mmap` and `ElfObject` traits for your platform. When implementing the `Mmap` trait, you can refer to the default implementation provided by `elf_loader`: [os](https://github.com/weizhiao/rust-elfloader/tree/main/src/os). In addition, you can use the `hook` functions provided by this library to extend the functionality of `elf_loader` to implement any other features you want. When using the `hook` functions, you can refer to: [hook](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs) in `dlopen-rs`.
 
 ### ✨ Provides asynchronous interfaces ✨
 `elf_loader` provides asynchronous interfaces for loading ELF files, which can achieve higher performance in scenarios where ELF files are loaded concurrently.   
@@ -94,7 +94,7 @@ However, you need to implement the `Mmap` and `ElfObjectAsync` traits according 
 
 ### ✨ Compile-time checking ✨
 Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely.   
-For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/elf_loader/blob/main/examples/relocate.rs).)
+For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/rust-elfloader/blob/main/examples/relocate_dylib.rs).)
 
 ### ✨ Supports Lazy Binding ✨
 The `elf_loader` supports lazy binding, which means that when a symbol is resolved, it is not resolved immediately, but is instead resolved when it is first called.
