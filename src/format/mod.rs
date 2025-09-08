@@ -136,7 +136,7 @@ impl Deref for Elf {
 }
 
 // 使用CoreComponentRef是防止出现循环引用
-pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &F) -> LazyScope
+pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &'_ F) -> LazyScope<'_>
 where
     F: Fn(&str) -> Option<*const ()>,
 {

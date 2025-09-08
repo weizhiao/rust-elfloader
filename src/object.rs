@@ -68,9 +68,9 @@ impl ElfFile {
         }
     }
 
-    pub fn from_path(path: &str) -> Result<Self> {
+    pub fn from_path(path: impl AsRef<str>) -> Result<Self> {
         Ok(ElfFile {
-            inner: RawFile::from_path(path)?,
+            inner: RawFile::from_path(path.as_ref())?,
         })
     }
 }

@@ -6,7 +6,7 @@ use crate::{
     parse_ehdr_error, parse_phdr_error,
     segment::{ELFRelro, ElfSegments},
 };
-use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, vec::Vec};
 use core::{
     any::Any,
     ffi::{CStr, c_char},
@@ -18,6 +18,11 @@ use elf::abi::{
     EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP,
     PT_LOAD, PT_PHDR,
 };
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
 
 #[repr(transparent)]
 pub struct ElfHeader {
