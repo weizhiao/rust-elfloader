@@ -131,7 +131,7 @@ impl ElfExec {
 
 impl Builder {
     pub(crate) fn create_exec(self, _phdrs: &[ElfPhdr]) -> ElfExec {
-        let inner = self.create_inner(&[], false);
+        let inner = self.create_inner(_phdrs, false);
         ElfExec { inner }
     }
 }

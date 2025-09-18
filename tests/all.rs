@@ -135,3 +135,28 @@ fn test_id_struct() {
         );
     }
 }
+
+#[test]
+fn test_mini_loader() {
+    use std::path::Path;
+    use std::process::Command;
+
+    let path = "target/mini-loader";
+    if !Path::new(path).exists() {
+        panic!("mini-loader binary not found at {}", path);
+    }
+
+    let exec_path = "target/exec_a";
+    if !Path::new(exec_path).exists() {
+        panic!("Test executable not found at {}", exec_path);
+    }
+
+    let mut cmd = Command::new(path);
+    cmd.arg(exec_path);
+
+    assert!(
+        cmd.status()
+            .expect("mini-loader could't load exec files!")
+            .success()
+    );
+}
