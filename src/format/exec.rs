@@ -130,8 +130,8 @@ impl ElfExec {
 }
 
 impl Builder {
-    pub(crate) fn create_exec(self, _phdrs: &[ElfPhdr]) -> ElfExec {
-        let inner = self.create_inner(_phdrs, false);
+    pub(crate) fn create_exec(self, phdrs: &[ElfPhdr]) -> ElfExec {
+        let inner = self.create_inner(phdrs, false);
         ElfExec { inner }
     }
 }

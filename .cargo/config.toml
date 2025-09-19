@@ -1,0 +1,5 @@
+[target.riscv64gc-unknown-none-elf]
+rustflags = ["-C", "relocation-model=pic", "-C", "link-arg=-pie"]
+
+[target.aarch64-unknown-none]
+rustflags = ["-C", "relocation-model=pic", "-C", "link-arg=-pie"]
