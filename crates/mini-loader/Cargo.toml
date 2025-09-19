@@ -11,15 +11,21 @@ version = "1.2.0"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os"]
 
+[dependencies.cfg-if]
+workspace = true
+
+[dependencies.syscalls]
+workspace = true
+
+[dependencies.elf]
+workspace = true
+
 [dependencies]
-cfg-if = '1.0'
 itoa = "1.0.15"
-syscalls = { version = "0.6.18", default-features = false }
-elf_loader = { path= "../../", default-features = false, features = [
+elf_loader = { path = "../../", default-features = false, features = [
 	"use-syscall",
 ] }
 linked_list_allocator = { version = "0.10.5" }
-elf = { version = "0.7.4", default-features = false }
 
 [[bin]]
 name = "mini-loader"

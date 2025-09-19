@@ -67,6 +67,31 @@ jobs:
          channel: [ 1.88.0, stable ]
          features: [ "use-syscall,rel", "rel" ]
 
+  test-mini-loader:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ matrix.channel }}
+    - name: Set up QEMU and binfmt_misc
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: all
+    - env:
+        TARGET: ${{ matrix.target }}
+        CHANNEL: ${{ matrix.channel }}
+        ARGS: "target/exec_a"
+        OP: run -r -p mini-loader -Zbuild-std=core,alloc,panic_abort
+        MINI_LOADER: 1
+      run: |
+        rustup component add rust-src
+        sh ci/run.sh
+    strategy:
+      matrix:
+        target: [ x86_64-unknown-none, aarch64-unknown-none, riscv64gc-unknown-none-elf]
+        channel: [ nightly ]
+
   bench:
     runs-on: ubuntu-latest
     steps:

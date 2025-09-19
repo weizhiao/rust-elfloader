@@ -24,6 +24,8 @@ members = ["crates/windows-elf-loader", "crates/mini-loader"]
 
 [workspace.dependencies]
 syscalls = { version = "0.6.18", default-features = false }
+elf = { version = "0.8", default-features = false }
+cfg-if = '1.0'
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -45,8 +47,10 @@ workspace = true
 optional = true
 
 [dependencies.elf]
-version = "0.7.4"
-default-features = false
+workspace = true
+
+[dependencies.cfg-if]
+workspace = true
 
 [dependencies.log]
 version = "0.4.27"
@@ -67,7 +71,6 @@ features = ["alloc"]
 
 [dependencies]
 bitflags = "2.9.0"
-cfg-if = '1.0'
 delegate = "0.13.3"
 
 [dev-dependencies]
