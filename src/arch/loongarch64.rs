@@ -31,6 +31,36 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 pub extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
+        addi.d  $sp, $sp, -9*8
+        st.d    $ra, $sp, 0
+        st.d    $a0, $sp, 8
+        st.d    $a1, $sp, 16
+        st.d    $a2, $sp, 24
+        st.d    $a3, $sp, 32
+        st.d    $a4, $sp, 40
+        st.d    $a5, $sp, 48
+        st.d    $a6, $sp, 56
+        st.d    $a7, $sp, 64
+
+        move    $a0, $t0
+        srli.d  $a1, $t1, 3
+        bl    dl_fixup
+
+        move    $t0, $a0
+
+        ld.d    $ra, $sp, 0
+        ld.d    $a0, $sp, 8
+        ld.d    $a1, $sp, 16
+        ld.d    $a2, $sp, 24
+        ld.d    $a3, $sp, 32
+        ld.d    $a4, $sp, 40
+        ld.d    $a5, $sp, 48
+        ld.d    $a6, $sp, 56
+        ld.d    $a7, $sp, 64
+
+        addi.d  $sp, $sp, 9*8
+
+        jr      $t0
 	"
     )
 }

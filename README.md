@@ -122,7 +122,7 @@ Disable the `use-syscall` feature if you don't have an operating system.
 | aarch64     | ✅       | ✅            | ✅(CI)     |
 | riscv64     | ✅       | ✅            | ✅(CI)     |
 | riscv32     | ✅       | ✅            | ✅(Manual) |
-| loongarch64 | ✅       | ❌            | ✅(Manual) |
+| loongarch64 | ✅       | ✅            | ✅(CI) |
 | x86         | ✅       | ✅            | ✅(CI)     |
 | arm         | ✅       | ✅            | ✅(CI)     |
 
