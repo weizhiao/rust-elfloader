@@ -264,9 +264,6 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
         got.add(RESOLVE_FUNCTION_OFFSET)
             .write(dl_runtime_resolve as usize);
     }
-
-    #[cfg(target_arch = "loongarch64")]
-    unimplemented!()
 }
 
 #[cfg(not(feature = "rel"))]

@@ -14,7 +14,7 @@ fn compile_dylib(target: &String) {
             .arg("-C")
             .arg("panic=abort")
             .arg("-C")
-            .arg("linker=lld")
+            .arg("linker=rust-lld")
             .arg(format!("{}/{}", DYLIB_DIR_PATH, name))
             .arg("--out-dir")
             .arg("target");

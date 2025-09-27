@@ -25,7 +25,7 @@ jobs:
       run: sh ci/run.sh
     strategy:
       matrix:
-        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
+        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
         channel: [ 1.88.0, stable ]
         features: [ "use-syscall", "version", "log" ]
 
@@ -44,7 +44,7 @@ jobs:
       run: sh ci/run.sh
     strategy:
       matrix:
-        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
+        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
         channel: [ 1.88.0, stable ]
         features: [ "use-syscall" ]
 

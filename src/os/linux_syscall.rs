@@ -191,14 +191,14 @@ impl RawFile {
     pub(crate) fn from_path(path: &str) -> Result<Self> {
         const RDONLY: u32 = 0;
         let name = CString::from_str(path).unwrap().to_owned();
-        #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64")))]
         let fd = unsafe {
             from_io_ret(
                 syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0),
                 "open failed",
             )?
         };
-        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+        #[cfg(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64"))]
         let fd = unsafe {
             const AT_FDCWD: core::ffi::c_int = -100;
             from_io_ret(
