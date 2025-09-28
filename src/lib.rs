@@ -63,7 +63,9 @@ compile_error!("unsupport arch");
 
 pub mod arch;
 pub mod dynamic;
+mod ehdr;
 mod format;
+mod hash;
 mod loader;
 mod macros;
 pub mod mmap;
@@ -84,7 +86,7 @@ use core::{
     fmt::{Debug, Display},
 };
 use object::*;
-use relocation::{ElfRelocation, GLOBAL_SCOPE};
+use relocation::dynamic_link::{DynamicRelocation, GLOBAL_SCOPE};
 use segment::ELFRelro;
 
 pub use elf::abi;
@@ -92,7 +94,7 @@ pub use format::dylib::{ElfDylib, RelocatedDylib, Symbol};
 pub use format::exec::{ElfExec, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, UserData};
 pub use loader::Loader;
-pub use relocation::find_symdef;
+pub use relocation::dynamic_link::find_symdef;
 
 /// elf_loader error types
 #[derive(Debug)]

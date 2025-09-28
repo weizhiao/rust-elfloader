@@ -3,13 +3,13 @@ use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::ElfPhdr,
     dynamic::ElfDynamic,
-    loader::Builder,
+    loader::RelocatedBuilder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{LazyScope, SymDef, UnknownHandler, relocate_impl},
+    relocation::dynamic_link::{LazyScope, SymDef, UnknownHandler, relocate_impl},
     segment::ElfSegments,
-    symbol::{SymbolInfo, SymbolTable},
+    symbol::SymbolInfo,
 };
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
@@ -46,18 +46,19 @@ impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
         self,
-        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl IntoIterator<Item = &'iter T>,
         pre_find: &'find F,
     ) -> Result<RelocatedDylib<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
+        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
     {
-        let iter = scope.into_iter();
+        let iter = scope.into_iter().map(|raw| raw.as_ref());
         let mut helper = Vec::new();
         let local_lazy_scope = if self.is_lazy() {
             let mut libs = Vec::new();
@@ -89,7 +90,7 @@ impl ElfDylib {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
+        scope: impl AsRef<[&'iter Relocated<'scope>]>,
         pre_find: &'find F,
         deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
@@ -112,7 +113,7 @@ impl ElfDylib {
     }
 }
 
-impl Builder {
+impl RelocatedBuilder {
     pub(crate) fn create_dylib(self, phdrs: &[ElfPhdr]) -> ElfDylib {
         let inner = self.create_inner(phdrs, true);
         ElfDylib { inner }
@@ -137,25 +138,25 @@ impl<M: Mmap> Loader<M> {
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
+        let (builder, phdrs) = self.load_relocated(ehdr, object, lazy_bind)?;
         Ok(builder.create_dylib(phdrs))
     }
 
-    /// Load a dynamic library into memory
-    /// # Note
-    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub async fn load_dylib_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfDylib> {
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        if !ehdr.is_dylib() {
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        Ok(builder.create_dylib(phdrs))
-    }
+    // /// Load a dynamic library into memory
+    // /// # Note
+    // /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    // pub async fn load_dylib_async(
+    //     &mut self,
+    //     mut object: impl ElfObjectAsync,
+    //     lazy_bind: Option<bool>,
+    // ) -> Result<ElfDylib> {
+    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
+    //     if !ehdr.is_dylib() {
+    //         return Err(parse_ehdr_error("file type mismatch"));
+    //     }
+    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
+    //     Ok(builder.create_dylib(phdrs))
+    // }
 }
 
 /// A dynamic library that has been relocated
@@ -164,14 +165,20 @@ pub struct RelocatedDylib<'scope> {
     inner: Relocated<'scope>,
 }
 
+impl<'scope> AsRef<Relocated<'scope>> for RelocatedDylib<'scope> {
+    fn as_ref(&self) -> &Relocated<'scope> {
+        &self
+    }
+}
+
 impl Debug for RelocatedDylib<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl Deref for RelocatedDylib<'_> {
-    type Target = CoreComponent;
+impl<'scope> Deref for RelocatedDylib<'scope> {
+    type Target = Relocated<'scope>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -218,12 +225,6 @@ impl RelocatedDylib<'_> {
                 _marker: PhantomData,
             },
         }
-    }
-
-    /// Gets the symbol table.
-    #[inline]
-    pub fn symtab(&self) -> &SymbolTable {
-        unsafe { self.inner.symtab().unwrap_unchecked() }
     }
 
     /// Gets a pointer to a function or static variable by symbol name.

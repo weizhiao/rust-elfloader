@@ -1,4 +1,4 @@
-use elf_loader::load_dylib;
+use elf_loader::{RelocatedDylib, load_dylib};
 use std::collections::HashMap;
 
 fn main() {
@@ -15,7 +15,8 @@ fn main() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.easy_relocate([], &pre_find).unwrap();
+    let empty: [RelocatedDylib; 0] = [];
+    let a = liba.easy_relocate(&empty, &pre_find).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let b = libb.easy_relocate([&a], &pre_find).unwrap();

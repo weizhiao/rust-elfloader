@@ -1,119 +1,28 @@
 use crate::{
     ElfObject, Result, UserData,
-    arch::{Dyn, E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr, ElfPhdr, Phdr},
+    arch::{Dyn, EHDR_SIZE, ElfPhdr, ElfShdr, Phdr},
+    ehdr::ElfHeader,
     mmap::Mmap,
     object::ElfObjectAsync,
-    parse_ehdr_error, parse_phdr_error,
-    segment::{ELFRelro, ElfSegments},
+    parse_phdr_error,
+    segment::{ELFRelro, ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
+    symbol::SymbolTable,
 };
 use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, vec::Vec};
 use core::{
     any::Any,
     ffi::{CStr, c_char},
     marker::PhantomData,
-    ops::Deref,
     ptr::NonNull,
 };
-use elf::abi::{
-    EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT, PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP,
-    PT_LOAD, PT_PHDR,
-};
+use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_PHDR, SHT_REL, SHT_SYMTAB};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-#[repr(transparent)]
-pub struct ElfHeader {
-    ehdr: Ehdr,
-}
-
-impl Clone for ElfHeader {
-    fn clone(&self) -> Self {
-        Self {
-            ehdr: Ehdr {
-                e_ident: self.e_ident,
-                e_type: self.e_type,
-                e_machine: self.e_machine,
-                e_version: self.e_version,
-                e_entry: self.e_entry,
-                e_phoff: self.e_phoff,
-                e_shoff: self.e_shoff,
-                e_flags: self.e_flags,
-                e_ehsize: self.e_ehsize,
-                e_phentsize: self.e_phentsize,
-                e_phnum: self.e_phnum,
-                e_shentsize: self.e_shentsize,
-                e_shnum: self.e_shnum,
-                e_shstrndx: self.e_shstrndx,
-            },
-        }
-    }
-}
-
-impl Deref for ElfHeader {
-    type Target = Ehdr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ehdr
-    }
-}
-
-impl ElfHeader {
-    pub(crate) fn new(data: &[u8]) -> Result<&Self> {
-        debug_assert!(data.len() >= EHDR_SIZE);
-        let ehdr: &ElfHeader = unsafe { &*(data.as_ptr().cast()) };
-        ehdr.vaildate()?;
-        Ok(ehdr)
-    }
-
-    #[inline]
-    pub fn is_dylib(&self) -> bool {
-        self.ehdr.e_type == ET_DYN
-    }
-
-    pub(crate) fn vaildate(&self) -> Result<()> {
-        if self.e_ident[0..4] != ELFMAGIC {
-            return Err(parse_ehdr_error("invalid ELF magic"));
-        }
-        if self.e_ident[EI_CLASS] != E_CLASS {
-            return Err(parse_ehdr_error("file class mismatch"));
-        }
-        if self.e_ident[EI_VERSION] != EV_CURRENT {
-            return Err(parse_ehdr_error("invalid ELF version"));
-        }
-        if self.e_machine != EM_ARCH {
-            return Err(parse_ehdr_error("file arch mismatch"));
-        }
-        Ok(())
-    }
-
-    #[inline]
-    pub(crate) fn e_phnum(&self) -> usize {
-        self.ehdr.e_phnum as usize
-    }
-
-    #[inline]
-    pub(crate) fn e_phentsize(&self) -> usize {
-        self.ehdr.e_phentsize as usize
-    }
-
-    #[inline]
-    pub(crate) fn e_phoff(&self) -> usize {
-        self.ehdr.e_phoff as usize
-    }
-
-    #[inline]
-    pub(crate) fn phdr_range(&self) -> (usize, usize) {
-        let phdrs_size = self.e_phentsize() * self.e_phnum();
-        let phdr_start = self.e_phoff();
-        let phdr_end = phdr_start + phdrs_size;
-        (phdr_start, phdr_end)
-    }
-}
-
-pub(crate) struct Builder {
+pub(crate) struct RelocatedBuilder {
     pub(crate) phdr_mmap: Option<&'static [ElfPhdr]>,
     pub(crate) name: CString,
     pub(crate) lazy_bind: Option<bool>,
@@ -127,7 +36,7 @@ pub(crate) struct Builder {
     pub(crate) interp: Option<NonNull<c_char>>,
 }
 
-impl Builder {
+impl RelocatedBuilder {
     const fn new(
         segments: ElfSegments,
         name: CString,
@@ -203,7 +112,7 @@ impl ElfBuf {
         ElfHeader::new(&self.buf).cloned()
     }
 
-    pub(crate) fn prepare_phdr(
+    pub(crate) fn prepare_phdrs(
         &mut self,
         ehdr: &ElfHeader,
         object: &mut impl ElfObject,
@@ -218,6 +127,25 @@ impl ElfBuf {
             Ok(core::slice::from_raw_parts(
                 self.buf.as_ptr().cast::<ElfPhdr>(),
                 self.buf.len() / size_of::<ElfPhdr>(),
+            ))
+        }
+    }
+
+    pub(crate) fn prepare_shdrs_mut(
+        &mut self,
+        ehdr: &ElfHeader,
+        object: &mut impl ElfObject,
+    ) -> Result<&mut [ElfShdr]> {
+        let (shdr_start, shdr_end) = ehdr.shdr_range();
+        let size = shdr_end - shdr_start;
+        if size > self.buf.len() {
+            self.buf.resize(size, 0);
+        }
+        object.read(&mut self.buf[..size], shdr_start)?;
+        unsafe {
+            Ok(core::slice::from_raw_parts_mut(
+                self.buf.as_mut_ptr().cast::<ElfShdr>(),
+                self.buf.len() / size_of::<ElfShdr>(),
             ))
         }
     }
@@ -297,22 +225,22 @@ impl<M: Mmap> Loader<M> {
         object: &mut impl ElfObject,
         ehdr: &ElfHeader,
     ) -> Result<&[ElfPhdr]> {
-        self.buf.prepare_phdr(ehdr, object)
+        self.buf.prepare_phdrs(ehdr, object)
     }
 
-    pub(crate) fn load_impl(
+    pub(crate) fn load_relocated(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-    ) -> Result<(Builder, &[ElfPhdr])> {
+    ) -> Result<(RelocatedBuilder, &[ElfPhdr])> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
-        let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
-        // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-        let segments =
-            ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
-        let mut builder = Builder::new(
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+        let segments = phdr_segments.load_segments::<M>(&mut object)?;
+        phdr_segments.mprotect::<M>()?;
+        let mut builder = RelocatedBuilder::new(
             segments,
             object.file_name().to_owned(),
             lazy_bind,
@@ -320,60 +248,76 @@ impl<M: Mmap> Loader<M> {
             init_fn,
             fini_fn,
         );
-        // 根据Phdr的类型进行不同操作
-        let mut last_addr = builder.segments.memory.as_ptr() as usize;
         for phdr in phdrs {
             if let Some(hook) = &self.hook {
                 builder.exec_hook(hook, phdr)?;
             }
             match phdr.p_type {
-                // 将segment加载到内存中
-                PT_LOAD => builder
-                    .segments
-                    .load_segment::<M>(&mut object, phdr, &mut last_addr)?,
                 _ => builder.parse_other_phdr::<M>(phdr),
             }
         }
         Ok((builder, phdrs))
     }
 
-    pub(crate) async fn load_async_impl(
-        &mut self,
-        ehdr: ElfHeader,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<(Builder, &[ElfPhdr])> {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let phdrs = self.buf.prepare_phdr(&ehdr, &mut object)?;
-        // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-        let segments =
-            ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
-        let mut builder = Builder::new(
-            segments,
-            object.file_name().to_owned(),
-            lazy_bind,
-            ehdr,
-            init_fn,
-            fini_fn,
-        );
-        // 根据Phdr的类型进行不同操作
-        let mut last_addr = builder.segments.memory.as_ptr() as usize;
-        for phdr in phdrs {
-            if let Some(hook) = &self.hook {
-                builder.exec_hook(hook, phdr)?;
-            }
-            match phdr.p_type {
-                // 将segment加载到内存中
-                PT_LOAD => {
-                    builder
-                        .segments
-                        .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
-                        .await?
+    // pub(crate) async fn load_async_impl(
+    //     &mut self,
+    //     ehdr: ElfHeader,
+    //     mut object: impl ElfObjectAsync,
+    //     lazy_bind: Option<bool>,
+    // ) -> Result<(Builder, &[ElfPhdr])> {
+    //     let init_fn = self.init_fn.clone();
+    //     let fini_fn = self.fini_fn.clone();
+    //     let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+    //     // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
+    //     let segments =
+    //         ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
+    //     let mut builder = Builder::new(
+    //         segments,
+    //         object.file_name().to_owned(),
+    //         lazy_bind,
+    //         ehdr,
+    //         init_fn,
+    //         fini_fn,
+    //     );
+    //     // 根据Phdr的类型进行不同操作
+    //     let mut last_addr = builder.segments.memory.as_ptr() as usize;
+    //     for phdr in phdrs {
+    //         if let Some(hook) = &self.hook {
+    //             builder.exec_hook(hook, phdr)?;
+    //         }
+    //         match phdr.p_type {
+    //             // 将segment加载到内存中
+    //             PT_LOAD => {
+    //                 builder
+    //                     .segments
+    //                     .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
+    //                     .await?
+    //             }
+    //             _ => builder.parse_other_phdr::<M>(phdr),
+    //         }
+    //     }
+    //     Ok((builder, phdrs))
+    // }
+
+    pub(crate) fn load_rel(&mut self, ehdr: ElfHeader, mut object: impl ElfObject) -> Result<()> {
+        let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
+        let mut shdr_segments = ShdrSegments::new(shdrs);
+        let segments = shdr_segments.load_segments::<M>(&mut object)?;
+        let base = segments.base();
+        shdrs
+            .iter_mut()
+            .for_each(|shdr| shdr.sh_addr = (shdr.sh_addr as usize + base) as _);
+        let mut relocations = Vec::new();
+        let mut symtab = None;
+        for shdr in shdrs.iter() {
+            match shdr.sh_type {
+                SHT_REL => relocations.push(shdr),
+                SHT_SYMTAB => {
+                    symtab = Some(SymbolTable::from_shdrs(&shdr, shdrs));
                 }
-                _ => builder.parse_other_phdr::<M>(phdr),
+                _ => {}
             }
         }
-        Ok((builder, phdrs))
+        Ok(())
     }
 }

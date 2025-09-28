@@ -2,11 +2,11 @@ use super::{ElfCommonPart, Relocated, create_lazy_scope};
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
     arch::ElfPhdr,
-    loader::Builder,
+    loader::RelocatedBuilder,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{LazyScope, UnknownHandler, relocate_impl},
+    relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
@@ -37,13 +37,14 @@ impl ElfExec {
     /// Relocate the executable file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
         self,
-        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl IntoIterator<Item = &'iter T>,
         pre_find: &'find F,
     ) -> Result<RelocatedExec<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
+        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -57,12 +58,12 @@ impl ElfExec {
                 },
             });
         }
-        let mut helper = Vec::new();
+        let mut helper: Vec<&Relocated<'_>> = Vec::new();
         let temp = unsafe { &RelocatedDylib::from_core_component(self.core_component()) };
         if self.inner.symtab().is_some() {
             helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
         }
-        let iter = scope.into_iter();
+        let iter = scope.into_iter().map(|raw| raw.as_ref());
         let local_lazy_scope = if self.is_lazy() {
             let mut libs = Vec::new();
             iter.for_each(|lib| {
@@ -96,7 +97,7 @@ impl ElfExec {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
+        scope: impl AsRef<[&'iter Relocated<'scope>]>,
         pre_find: &'find F,
         deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
@@ -129,7 +130,7 @@ impl ElfExec {
     }
 }
 
-impl Builder {
+impl RelocatedBuilder {
     pub(crate) fn create_exec(self, phdrs: &[ElfPhdr]) -> ElfExec {
         let inner = self.create_inner(phdrs, false);
         ElfExec { inner }
@@ -154,25 +155,25 @@ impl<M: Mmap> Loader<M> {
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
+        let (builder, phdrs) = self.load_relocated(ehdr, object, lazy_bind)?;
         Ok(builder.create_exec(phdrs))
     }
 
-    /// Load a executable file into memory
-    /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub async fn load_exec_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfExec> {
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        if ehdr.is_dylib() {
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        Ok(builder.create_exec(phdrs))
-    }
+    // /// Load a executable file into memory
+    // /// # Note
+    // /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    // pub async fn load_exec_async(
+    //     &mut self,
+    //     mut object: impl ElfObjectAsync,
+    //     lazy_bind: Option<bool>,
+    // ) -> Result<ElfExec> {
+    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
+    //     if ehdr.is_dylib() {
+    //         return Err(parse_ehdr_error("file type mismatch"));
+    //     }
+    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
+    //     Ok(builder.create_exec(phdrs))
+    // }
 }
 
 /// A executable file that has been relocated

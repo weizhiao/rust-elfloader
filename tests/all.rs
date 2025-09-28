@@ -1,5 +1,7 @@
-use elf_loader::{Elf, load, load_dylib, load_exec};
+use elf_loader::{Elf, RelocatedDylib, load, load_dylib, load_exec};
 use std::{collections::HashMap, fs::File, io::Read};
+
+const EMPTY: &[RelocatedDylib; 0] = &[];
 
 #[test]
 fn relocate_dylib() {
@@ -13,7 +15,7 @@ fn relocate_dylib() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+    let a = liba.easy_relocate(EMPTY, &pre_find).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let b = libb.easy_relocate([&a].into_iter(), &pre_find).unwrap();
@@ -36,10 +38,10 @@ fn lazy_binding() {
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so", lazy : true).unwrap();
-    let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+    let a = liba.easy_relocate(EMPTY, &pre_find).unwrap();
     let b = libb
         .relocate(
-            [&a],
+            [&*a],
             &pre_find,
             &mut |_, _, _| Err(Box::new(())),
             Some(Arc::new(|name| unsafe {
@@ -59,7 +61,7 @@ fn load_from_memory() {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     let liba = load_dylib!("target/liba.so", &bytes).unwrap();
-    let a = liba.easy_relocate([].iter(), &|_| None).unwrap();
+    let a = liba.easy_relocate(EMPTY, &|_| None).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
 }
@@ -81,7 +83,7 @@ fn load_elf() {
     let liba = load!("target/liba.so").unwrap();
     assert!(matches!(liba, Elf::Dylib(_)));
     let a = liba
-        .easy_relocate([].into_iter(), &|_| None)
+        .easy_relocate(EMPTY, &|_| None)
         .unwrap()
         .into_dylib()
         .unwrap();
@@ -93,7 +95,7 @@ fn load_elf() {
 fn missing_symbol_fails() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
-        .easy_relocate([].into_iter(), &|_| None)
+        .easy_relocate(EMPTY, &|_| None)
         .unwrap();
     unsafe {
         assert!(lib.get::<*mut ()>("test_does_not_exist").is_none());
@@ -113,7 +115,7 @@ struct S {
 fn test_id_struct() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
-        .easy_relocate([].into_iter(), &|_| None)
+        .easy_relocate(EMPTY, &|_| None)
         .unwrap();
     unsafe {
         let f = lib

@@ -1,132 +1,11 @@
 use crate::{
-    arch::ElfSymbol,
-    dynamic::{ElfDynamic, ElfDynamicHashTab},
+    arch::{ElfShdr, ElfSymbol},
+    dynamic::ElfDynamic,
+    hash::HashTable,
 };
 use core::ffi::CStr;
 
-#[repr(C)]
-struct ElfGnuHeader {
-    nbucket: u32,
-    symbias: u32,
-    nbloom: u32,
-    nshift: u32,
-}
-
-pub(crate) struct ElfGnuHash {
-    header: ElfGnuHeader,
-    blooms: *const usize,
-    buckets: *const u32,
-    chains: *const u32,
-}
-
-trait ElfHashTable {
-    fn hash(name: &[u8]) -> u32;
-    fn count_syms(&self) -> usize;
-}
-
-impl ElfGnuHash {
-    #[inline]
-    pub(crate) fn parse(ptr: *const u8) -> ElfGnuHash {
-        const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
-        let mut bytes = [0u8; HEADER_SIZE];
-        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
-        let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
-        let bloom_size = header.nbloom as usize * size_of::<usize>();
-        let bucket_size = header.nbucket as usize * size_of::<u32>();
-
-        let blooms = unsafe { ptr.add(HEADER_SIZE) };
-        let buckets = unsafe { blooms.add(bloom_size) };
-        let chains = unsafe { buckets.add(bucket_size) };
-        ElfGnuHash {
-            header,
-            blooms: blooms.cast(),
-            buckets: buckets.cast(),
-            chains: chains.cast(),
-        }
-    }
-}
-
-impl ElfHashTable for ElfGnuHash {
-    #[inline]
-    fn hash(name: &[u8]) -> u32 {
-        let mut hash = 5381u32;
-        for byte in name {
-            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
-        }
-        hash
-    }
-
-    fn count_syms(&self) -> usize {
-        let mut nsym = 0;
-        for i in 0..self.header.nbucket as usize {
-            nsym = nsym.max(unsafe { self.buckets.add(i).read() as usize });
-        }
-        if nsym > 0 {
-            unsafe {
-                let mut val = self.chains.add(nsym - self.header.symbias as usize);
-                while val.read() & 1 == 0 {
-                    nsym += 1;
-                    val = val.add(1);
-                }
-            }
-        }
-        nsym + 1
-    }
-}
-
-#[repr(C)]
-struct ElfHashHeader {
-    nbucket: u32,
-    nchain: u32,
-}
-
-pub(crate) struct ElfHash {
-    header: ElfHashHeader,
-    buckets: *const u32,
-    chains: *const u32,
-}
-
-impl ElfHash {
-    #[inline]
-    pub(crate) fn parse(ptr: *const u8) -> ElfHash {
-        const HEADER_SIZE: usize = size_of::<ElfHashHeader>();
-        let mut bytes = [0u8; HEADER_SIZE];
-        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
-        let header: ElfHashHeader = unsafe { core::mem::transmute(bytes) };
-        let bucket_size = header.nbucket as usize * size_of::<u32>();
-
-        let buckets = unsafe { ptr.add(HEADER_SIZE) };
-        let chains = unsafe { buckets.add(bucket_size) };
-        ElfHash {
-            header,
-            buckets: buckets.cast(),
-            chains: chains.cast(),
-        }
-    }
-}
-
-impl ElfHashTable for ElfHash {
-    #[inline]
-    fn hash(name: &[u8]) -> u32 {
-        let mut hash = 0u32;
-        #[allow(unused_assignments)]
-        let mut g = 0u32;
-        for byte in name {
-            hash = (hash << 4) + u32::from(*byte);
-            g = hash & 0xf0000000;
-            if g != 0 {
-                hash ^= g >> 24;
-            }
-            hash &= !g;
-        }
-        hash
-    }
-
-    #[inline]
-    fn count_syms(&self) -> usize {
-        self.header.nchain as usize
-    }
-}
+pub use crate::hash::PreCompute;
 
 pub(crate) struct ElfStringTable {
     data: *const u8,
@@ -156,41 +35,14 @@ impl ElfStringTable {
     }
 }
 
-pub(crate) enum SymbolTableHashTable {
-    /// .gnu.hash
-    Gnu(ElfGnuHash),
-    /// .hash
-    Elf(ElfHash),
-}
-
-impl SymbolTableHashTable {
-    #[inline]
-    #[allow(dead_code)]
-    fn hash(&self, name: &[u8]) -> u32 {
-        match &self {
-            SymbolTableHashTable::Gnu(_) => ElfGnuHash::hash(name),
-            SymbolTableHashTable::Elf(_) => ElfHash::hash(name),
-        }
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    fn count_syms(&self) -> usize {
-        match &self {
-            SymbolTableHashTable::Gnu(hashtab) => hashtab.count_syms(),
-            SymbolTableHashTable::Elf(hashtab) => hashtab.count_syms(),
-        }
-    }
-}
-
 /// Symbol table of elf file.
 pub struct SymbolTable {
     /// .gnu.hash / .hash
-    pub(crate) hashtab: SymbolTableHashTable,
+    pub(crate) hashtab: HashTable,
     /// .dynsym
-    symtab: *const ElfSymbol,
+    pub(crate) symtab: *const ElfSymbol,
     /// .dynstr
-    strtab: ElfStringTable,
+    pub(crate) strtab: ElfStringTable,
     #[cfg(feature = "version")]
     /// .gnu.version
     pub(crate) version: Option<super::version::ELFVersion>,
@@ -202,13 +54,6 @@ pub struct SymbolInfo<'symtab> {
     cname: Option<&'symtab CStr>,
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'symtab>>,
-}
-
-pub struct PreCompute {
-    gnuhash: u32,
-    fofs: usize,
-    fmask: usize,
-    hash: Option<u32>,
 }
 
 impl<'symtab> SymbolInfo<'symtab> {
@@ -233,29 +78,11 @@ impl<'symtab> SymbolInfo<'symtab> {
     pub fn cname(&self) -> Option<&CStr> {
         self.cname
     }
-
-    #[inline]
-    pub fn precompute(&self) -> PreCompute {
-        let gnuhash = ElfGnuHash::hash(self.name.as_bytes());
-        PreCompute {
-            gnuhash,
-            fofs: gnuhash as usize / usize::BITS as usize,
-            fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
-            hash: None,
-        }
-    }
 }
 
 impl SymbolTable {
-    pub(crate) fn new(dynamic: &ElfDynamic) -> Self {
-        let hashtab = match dynamic.hashtab {
-            ElfDynamicHashTab::Gnu(off) => {
-                SymbolTableHashTable::Gnu(ElfGnuHash::parse(off as *const u8))
-            }
-            ElfDynamicHashTab::Elf(off) => {
-                SymbolTableHashTable::Elf(ElfHash::parse(off as *const u8))
-            }
-        };
+    pub(crate) fn from_dynamic(dynamic: &ElfDynamic) -> Self {
+        let hashtab = HashTable::from_dynamic(dynamic);
         let symtab = dynamic.symtab as *const ElfSymbol;
         let strtab = ElfStringTable::new(dynamic.strtab as *const u8);
         #[cfg(feature = "version")]
@@ -274,94 +101,26 @@ impl SymbolTable {
         }
     }
 
+    pub(crate) fn from_shdrs(symtab: &ElfShdr, shdrs: &[ElfShdr]) -> Self {
+        let strtab_shdr = &shdrs[symtab.sh_link as usize];
+        let strtab = ElfStringTable::new(strtab_shdr.sh_addr as *const u8);
+        let hashtab = HashTable::from_shdr(symtab, &strtab);
+        Self {
+            hashtab,
+            symtab: symtab.sh_addr as *const ElfSymbol,
+            strtab,
+            #[cfg(feature = "version")]
+            None,
+        }
+    }
+
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
     }
 
     /// Use the symbol specific information to get the symbol in the symbol table
     pub fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
-        match &self.hashtab {
-            SymbolTableHashTable::Gnu(hashtab) => {
-                let hash = precompute.gnuhash;
-                let fofs = precompute.fofs;
-                let fmask = precompute.fmask;
-                let bloom_idx = fofs & (hashtab.header.nbloom - 1) as usize;
-                let filter = unsafe { hashtab.blooms.add(bloom_idx).read() };
-                if filter & fmask == 0 {
-                    return None;
-                }
-                let filter2 =
-                    filter >> ((hash >> hashtab.header.nshift) as usize % usize::BITS as usize);
-                if filter2 & 1 == 0 {
-                    return None;
-                }
-                let table_start_idx = hashtab.header.symbias as usize;
-                let chain_start_idx = unsafe {
-                    hashtab
-                        .buckets
-                        .add((hash as usize) % hashtab.header.nbucket as usize)
-                        .read()
-                } as usize;
-                if chain_start_idx == 0 {
-                    return None;
-                }
-                let mut dynsym_idx = chain_start_idx;
-                let mut cur_chain = unsafe { hashtab.chains.add(dynsym_idx - table_start_idx) };
-                let mut cur_symbol_ptr = unsafe { self.symtab.add(dynsym_idx) };
-                loop {
-                    let chain_hash = unsafe { cur_chain.read() };
-                    if hash | 1 == chain_hash | 1 {
-                        let cur_symbol = unsafe { &*cur_symbol_ptr };
-                        let sym_name = self.strtab.get_str(cur_symbol.st_name());
-                        #[cfg(feature = "version")]
-                        if sym_name == symbol.name && self.check_match(dynsym_idx, &symbol.version)
-                        {
-                            return Some(cur_symbol);
-                        }
-                        #[cfg(not(feature = "version"))]
-                        if sym_name == symbol.name {
-                            return Some(cur_symbol);
-                        }
-                    }
-                    if chain_hash & 1 != 0 {
-                        break;
-                    }
-                    cur_chain = unsafe { cur_chain.add(1) };
-                    cur_symbol_ptr = unsafe { cur_symbol_ptr.add(1) };
-                    dynsym_idx += 1;
-                }
-            }
-            SymbolTableHashTable::Elf(hashtab) => {
-                let hash = if let Some(hash) = precompute.hash {
-                    hash
-                } else {
-                    let hash = ElfHash::hash(symbol.name.as_bytes());
-                    precompute.hash = Some(hash);
-                    hash
-                };
-                let bucket_idx = (hash as usize) % hashtab.header.nbucket as usize;
-                let bucket_ptr = unsafe { hashtab.buckets.add(bucket_idx) };
-                let mut chain_idx = unsafe { bucket_ptr.read() as usize };
-                loop {
-                    if chain_idx == 0 {
-                        return None;
-                    }
-                    let chain_ptr = unsafe { hashtab.chains.add(chain_idx) };
-                    let cur_symbol = unsafe { &*self.symtab.add(chain_idx) };
-                    let sym_name = self.strtab.get_str(cur_symbol.st_name());
-                    #[cfg(feature = "version")]
-                    if sym_name == symbol.name && self.check_match(chain_idx, &symbol.version) {
-                        return Some(cur_symbol);
-                    }
-                    #[cfg(not(feature = "version"))]
-                    if sym_name == symbol.name {
-                        return Some(cur_symbol);
-                    }
-                    chain_idx = unsafe { chain_ptr.read() as usize };
-                }
-            }
-        }
-        None
+        self.hashtab.lookup(self, symbol, precompute)
     }
 
     /// Use the symbol specific information to get the symbol which can be used for relocation in the symbol table
@@ -400,9 +159,6 @@ impl SymbolTable {
 
     #[inline]
     pub fn count_syms(&self) -> usize {
-        match &self.hashtab {
-            SymbolTableHashTable::Gnu(hashtab) => hashtab.count_syms(),
-            SymbolTableHashTable::Elf(hashtab) => hashtab.count_syms(),
-        }
+        self.hashtab.count_syms()
     }
 }

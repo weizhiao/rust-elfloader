@@ -1,12 +1,12 @@
 //! Relocation of elf objects
 use crate::{
-    CoreComponent, Error, RelocatedDylib, Result,
+    CoreComponent, RelocatedDylib, Result,
     arch::*,
     format::{ElfCommonPart, Relocated},
-    relocate_error,
+    relocation::reloc_error,
     symbol::SymbolInfo,
 };
-use alloc::{boxed::Box, format};
+use alloc::boxed::Box;
 use core::{
     any::Any,
     marker::PhantomData,
@@ -55,13 +55,13 @@ pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const (
 pub(crate) type UnknownHandler = dyn FnMut(
     &ElfRelType,
     &CoreComponent,
-    &[&RelocatedDylib],
+    &[&Relocated],
 ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>;
 
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
     elf: ElfCommonPart,
-    scope: &[&'iter RelocatedDylib],
+    scope: &[&'iter Relocated],
     pre_find: &'find F,
     deal_unknown: &mut UnknownHandler,
     local_lazy_scope: Option<LazyScope<'lib>>,
@@ -126,7 +126,7 @@ impl RelativeRel {
     }
 }
 
-pub(crate) struct ElfRelocation {
+pub(crate) struct DynamicRelocation {
     // REL_RELATIVE
     relative: RelativeRel,
     // plt
@@ -152,7 +152,7 @@ fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<
 
 pub fn find_symdef<'iter, 'lib>(
     core: &'lib CoreComponent,
-    libs: &[&'iter RelocatedDylib],
+    libs: &[&'iter Relocated],
     r_sym: usize,
 ) -> Option<SymDef<'lib>>
 where
@@ -165,7 +165,7 @@ where
 
 fn find_symdef_impl<'iter, 'lib>(
     core: &'lib CoreComponent,
-    libs: &[&'iter RelocatedDylib],
+    libs: &[&'iter Relocated],
     dynsym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
 ) -> Option<SymDef<'lib>>
@@ -201,40 +201,11 @@ where
     }
 }
 
-#[cold]
-fn reloc_error(
-    r_type: usize,
-    r_sym: usize,
-    custom_err: Box<dyn Any + Send + Sync>,
-    lib: &CoreComponent,
-) -> Error {
-    if r_sym == 0 {
-        relocate_error(
-            format!(
-                "file: {}, relocation type: {}, no symbol",
-                lib.shortname(),
-                r_type,
-            ),
-            custom_err,
-        )
-    } else {
-        relocate_error(
-            format!(
-                "file: {}, relocation type: {}, symbol name: {}",
-                lib.shortname(),
-                r_type,
-                lib.symtab().unwrap().symbol_idx(r_sym).1.name(),
-            ),
-            custom_err,
-        )
-    }
-}
-
 impl ElfCommonPart {
     fn relocate_pltrel<F>(
         &self,
         local_lazy_scope: Option<LazyScope<'_>>,
-        scope: &[&RelocatedDylib],
+        scope: &[&Relocated],
         pre_find: &F,
         deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
@@ -358,7 +329,7 @@ impl ElfCommonPart {
 
     fn relocate_dynrel<F>(
         &self,
-        scope: &[&RelocatedDylib],
+        scope: &[&Relocated],
         pre_find: &F,
         deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
@@ -421,7 +392,7 @@ impl ElfCommonPart {
     }
 }
 
-impl ElfRelocation {
+impl DynamicRelocation {
     #[inline]
     pub(crate) fn new(
         pltrel: Option<&'static [ElfRelType]>,

@@ -1,5 +1,5 @@
 //! Contains content related to the CPU instruction set
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 
 use elf::abi::{
     SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
@@ -44,6 +44,7 @@ cfg_if::cfg_if! {
     if #[cfg(target_pointer_width = "64")]{
         pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS64;
         pub(crate) type Phdr = elf::segment::Elf64_Phdr;
+        pub(crate) type Shdr = elf::section::Elf64_Shdr;
         pub type Dyn = elf::dynamic::Elf64_Dyn;
         pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
@@ -56,6 +57,7 @@ cfg_if::cfg_if! {
     }else{
         pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS32;
         pub(crate) type Phdr = elf::segment::Elf32_Phdr;
+        pub(crate) type Shdr = elf::section::Elf32_Shdr;
         pub type Dyn = elf::dynamic::Elf32_Dyn;
         pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
@@ -229,6 +231,26 @@ impl ElfSymbol {
 #[repr(transparent)]
 pub struct ElfPhdr {
     phdr: Phdr,
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct ElfShdr {
+    shdr: Shdr,
+}
+
+impl Deref for ElfShdr {
+    type Target = Shdr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shdr
+    }
+}
+
+impl DerefMut for ElfShdr {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.shdr
+    }
 }
 
 impl Deref for ElfPhdr {

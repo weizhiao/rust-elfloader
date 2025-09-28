@@ -1,14 +1,15 @@
 pub(crate) mod dylib;
 pub(crate) mod exec;
+mod rel;
 
 use crate::{
-    ELFRelro, ElfRelocation, Loader, Result,
+    DynamicRelocation, ELFRelro, Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
-    loader::{Builder, FnHandler},
+    loader::{FnHandler, RelocatedBuilder},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
-    relocation::{LazyScope, UnknownHandler},
+    relocation::dynamic_link::{LazyScope, UnknownHandler},
     segment::ElfSegments,
     symbol::SymbolTable,
 };
@@ -162,13 +163,14 @@ impl Elf {
     /// Relocate the elf file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
         self,
-        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl IntoIterator<Item = &'iter T>,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
+        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -189,7 +191,7 @@ impl Elf {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
+        scope: impl AsRef<[&'iter Relocated<'scope>]>,
         pre_find: &'find F,
         deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
@@ -219,9 +221,16 @@ impl Elf {
 }
 
 #[derive(Clone)]
-pub(crate) struct Relocated<'scope> {
+pub struct Relocated<'scope> {
     pub(crate) core: CoreComponent,
     pub(crate) _marker: PhantomData<&'scope ()>,
+}
+
+impl Relocated<'_> {
+    /// Gets the symbol table.
+    pub fn symtab(&self) -> &SymbolTable {
+        unsafe { self.core.symtab().unwrap_unchecked() }
+    }
 }
 
 pub(crate) struct CoreComponentInner {
@@ -402,7 +411,7 @@ impl CoreComponent {
             inner: Arc::new(CoreComponentInner {
                 name,
                 is_init: AtomicBool::new(true),
-                symbols: Some(SymbolTable::new(&dynamic)),
+                symbols: Some(SymbolTable::from_dynamic(&dynamic)),
                 pltrel: None,
                 dynamic: NonNull::new(dynamic.dyn_ptr as _),
                 phdrs: ElfPhdrs::Mmap(phdrs),
@@ -432,7 +441,7 @@ struct ElfExtraData {
     /// .got.plt
     got: Option<NonNull<usize>>,
     /// rela.dyn and rela.plt
-    relocation: ElfRelocation,
+    relocation: DynamicRelocation,
     /// GNU_RELRO segment
     relro: Option<ELFRelro>,
     /// init
@@ -484,13 +493,13 @@ impl State {
             } => {
                 if let Some(dynamic_ptr) = dynamic_ptr {
                     let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments).unwrap();
-                    let relocation = ElfRelocation::new(
+                    let relocation = DynamicRelocation::new(
                         dynamic.pltrel,
                         dynamic.dynrel,
                         dynamic.relr,
                         dynamic.rel_count,
                     );
-                    let symbols = SymbolTable::new(&dynamic);
+                    let symbols = SymbolTable::from_dynamic(&dynamic);
                     let needed_libs: Vec<&'static str> = dynamic
                         .needed_libs
                         .iter()
@@ -534,7 +543,7 @@ impl State {
                     }
                 } else {
                     assert!(!is_dylib, "dylib does not have dynamic");
-                    let relocation = ElfRelocation::new(None, None, None, None);
+                    let relocation = DynamicRelocation::new(None, None, None, None);
                     LazyData {
                         core: CoreComponent {
                             inner: Arc::new(CoreComponentInner {
@@ -721,7 +730,7 @@ impl ElfCommonPart {
     }
 
     #[inline]
-    pub(crate) fn relocation(&self) -> &ElfRelocation {
+    pub(crate) fn relocation(&self) -> &DynamicRelocation {
         &self.data.extra.relocation
     }
 
@@ -738,8 +747,6 @@ impl ElfCommonPart {
 
     #[inline]
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut UserData> {
-        // 因为从LazyCell中获取可变引用是unstable feature，所以这里使用unsafe方法
-        // 获取可变引用，然后通过forget释放掉Arc，避免Arc的计数器减1，导致Arc被释放。
         Arc::get_mut(&mut self.data.core.inner).map(|inner| &mut inner.user_data)
     }
 
@@ -760,7 +767,7 @@ impl ElfCommonPart {
     }
 }
 
-impl Builder {
+impl RelocatedBuilder {
     pub(crate) fn create_inner(self, phdrs: &[ElfPhdr], is_dylib: bool) -> ElfCommonPart {
         let (phdr_start, phdr_end) = self.ehdr.phdr_range();
         // 获取映射到内存中的Phdr
@@ -829,21 +836,21 @@ impl<M: Mmap> Loader<M> {
     pub fn load(&mut self, mut object: impl ElfObject, lazy_bind: Option<bool>) -> Result<Elf> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
-        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
+        let (builder, phdrs) = self.load_relocated(ehdr, object, lazy_bind)?;
         Ok(builder.create_elf(phdrs, is_dylib))
     }
 
-    /// Load a elf file into memory
-    /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    pub async fn load_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<Elf> {
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        let is_dylib = ehdr.is_dylib();
-        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        Ok(builder.create_elf(phdrs, is_dylib))
-    }
+    // /// Load a elf file into memory
+    // /// # Note
+    // /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    // pub async fn load_async(
+    //     &mut self,
+    //     mut object: impl ElfObjectAsync,
+    //     lazy_bind: Option<bool>,
+    // ) -> Result<Elf> {
+    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
+    //     let is_dylib = ehdr.is_dylib();
+    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
+    //     Ok(builder.create_elf(phdrs, is_dylib))
+    // }
 }
