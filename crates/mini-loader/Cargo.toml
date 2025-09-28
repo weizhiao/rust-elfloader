@@ -1,13 +1,13 @@
 [package]
 name = "mini-loader"
-authors = ["wzhao <1207410841@qq.com>"]
-edition = "2024"
-repository = "https://github.com/weizhiao/elf_loader"
-license = "MIT/Apache-2.0"
-rust-version = "1.85.0"
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 description = "The mini-loader is capable of loading and executing ELF files, including Executable file and Position-Independent Executable file"
-version = "1.2.0"
+version = "1.2.1"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os"]
 
@@ -20,11 +20,13 @@ workspace = true
 [dependencies.elf]
 workspace = true
 
+[dependencies.elf_loader]
+version = "=0.13.0"
+default-features = false
+features = ["use-syscall"]
+
 [dependencies]
 itoa = "1.0.15"
-elf_loader = { path = "../../", default-features = false, features = [
-	"use-syscall",
-] }
 linked_list_allocator = { version = "0.10.5" }
 
 [[bin]]

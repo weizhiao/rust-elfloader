@@ -1,6 +1,6 @@
 [package]
 name = "windows-elf-loader"
-version = "0.1.0"
+version = "0.1.1"
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -11,6 +11,6 @@ keywords = ["elf", "windows", "loader"]
 categories = ["os", "embedded"]
 
 [dependencies.elf_loader]
-path = "../../"
+version = "=0.13.0"
 default-features = false
 features = ["log"]
