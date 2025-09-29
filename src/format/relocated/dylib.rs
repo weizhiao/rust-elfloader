@@ -1,9 +1,9 @@
-use super::{ElfCommonPart, Relocated, create_lazy_scope};
+use super::RelocatedCommonPart;
 use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::ElfPhdr,
     dynamic::ElfDynamic,
-    loader::RelocatedBuilder,
+    format::{Relocated, create_lazy_scope},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
@@ -16,11 +16,11 @@ use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
-    inner: ElfCommonPart,
+    inner: RelocatedCommonPart,
 }
 
 impl Deref for ElfDylib {
-    type Target = ElfCommonPart;
+    type Target = RelocatedCommonPart;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -113,13 +113,6 @@ impl ElfDylib {
     }
 }
 
-impl RelocatedBuilder {
-    pub(crate) fn create_dylib(self, phdrs: &[ElfPhdr]) -> ElfDylib {
-        let inner = self.create_inner(phdrs, true);
-        ElfDylib { inner }
-    }
-}
-
 impl<M: Mmap> Loader<M> {
     /// Load a dynamic library into memory
     pub fn easy_load_dylib(&mut self, object: impl ElfObject) -> Result<ElfDylib> {
@@ -138,8 +131,8 @@ impl<M: Mmap> Loader<M> {
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_relocated(ehdr, object, lazy_bind)?;
-        Ok(builder.create_dylib(phdrs))
+        let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+        Ok(ElfDylib { inner })
     }
 
     // /// Load a dynamic library into memory

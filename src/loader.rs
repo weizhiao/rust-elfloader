@@ -1,100 +1,21 @@
 use crate::{
     ElfObject, Result, UserData,
-    arch::{Dyn, EHDR_SIZE, ElfPhdr, ElfShdr, Phdr},
+    arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
     ehdr::ElfHeader,
+    format::{
+        relocatable::{ElfRelocatable, RelocatableBuilder},
+        relocated::{RelocatedBuilder, RelocatedCommonPart},
+    },
     mmap::Mmap,
-    object::ElfObjectAsync,
-    parse_phdr_error,
-    segment::{ELFRelro, ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
-    symbol::SymbolTable,
+    segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
 };
-use alloc::{borrow::ToOwned, boxed::Box, ffi::CString, format, vec::Vec};
-use core::{
-    any::Any,
-    ffi::{CStr, c_char},
-    marker::PhantomData,
-    ptr::NonNull,
-};
-use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_PHDR, SHT_REL, SHT_SYMTAB};
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
+use core::{any::Any, ffi::CStr, marker::PhantomData};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
-
-pub(crate) struct RelocatedBuilder {
-    pub(crate) phdr_mmap: Option<&'static [ElfPhdr]>,
-    pub(crate) name: CString,
-    pub(crate) lazy_bind: Option<bool>,
-    pub(crate) ehdr: ElfHeader,
-    pub(crate) relro: Option<ELFRelro>,
-    pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
-    pub(crate) user_data: UserData,
-    pub(crate) segments: ElfSegments,
-    pub(crate) init_fn: FnHandler,
-    pub(crate) fini_fn: FnHandler,
-    pub(crate) interp: Option<NonNull<c_char>>,
-}
-
-impl RelocatedBuilder {
-    const fn new(
-        segments: ElfSegments,
-        name: CString,
-        lazy_bind: Option<bool>,
-        ehdr: ElfHeader,
-        init_fn: FnHandler,
-        fini_fn: FnHandler,
-    ) -> Self {
-        Self {
-            phdr_mmap: None,
-            name,
-            lazy_bind,
-            ehdr,
-            relro: None,
-            dynamic_ptr: None,
-            segments,
-            user_data: UserData::empty(),
-            init_fn,
-            fini_fn,
-            interp: None,
-        }
-    }
-
-    fn exec_hook(&mut self, hook: &Hook, phdr: &ElfPhdr) -> Result<()> {
-        hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
-            parse_phdr_error(
-                format!(
-                    "failed to execute the hook function on dylib: {}",
-                    self.name.to_str().unwrap()
-                ),
-                err,
-            )
-        })?;
-        Ok(())
-    }
-
-    fn parse_other_phdr<M: Mmap>(&mut self, phdr: &Phdr) {
-        match phdr.p_type {
-            // 解析.dynamic section
-            PT_DYNAMIC => {
-                self.dynamic_ptr =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_paddr as usize)).unwrap())
-            }
-            PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
-            PT_PHDR => {
-                self.phdr_mmap = Some(
-                    self.segments
-                        .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
-                );
-            }
-            PT_INTERP => {
-                self.interp =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
-            }
-            _ => {}
-        };
-    }
-}
 
 pub(crate) struct ElfBuf {
     buf: Vec<u8>,
@@ -228,19 +149,20 @@ impl<M: Mmap> Loader<M> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
-    pub(crate) fn load_relocated(
-        &mut self,
+    pub(crate) fn load_relocated<'loader>(
+        &'loader mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
-    ) -> Result<(RelocatedBuilder, &[ElfPhdr])> {
+    ) -> Result<RelocatedCommonPart> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let mut builder = RelocatedBuilder::new(
+        let builder: RelocatedBuilder<'_, M> = RelocatedBuilder::new(
+            self.hook.as_ref(),
             segments,
             object.file_name().to_owned(),
             lazy_bind,
@@ -248,15 +170,7 @@ impl<M: Mmap> Loader<M> {
             init_fn,
             fini_fn,
         );
-        for phdr in phdrs {
-            if let Some(hook) = &self.hook {
-                builder.exec_hook(hook, phdr)?;
-            }
-            match phdr.p_type {
-                _ => builder.parse_other_phdr::<M>(phdr),
-            }
-        }
-        Ok((builder, phdrs))
+        Ok(builder.build(phdrs)?)
     }
 
     // pub(crate) async fn load_async_impl(
@@ -299,25 +213,23 @@ impl<M: Mmap> Loader<M> {
     //     Ok((builder, phdrs))
     // }
 
-    pub(crate) fn load_rel(&mut self, ehdr: ElfHeader, mut object: impl ElfObject) -> Result<()> {
+    pub(crate) fn load_rel(
+        &mut self,
+        ehdr: ElfHeader,
+        mut object: impl ElfObject,
+    ) -> Result<ElfRelocatable> {
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
         let mut shdr_segments = ShdrSegments::new(shdrs);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
-        let base = segments.base();
-        shdrs
-            .iter_mut()
-            .for_each(|shdr| shdr.sh_addr = (shdr.sh_addr as usize + base) as _);
-        let mut relocations = Vec::new();
-        let mut symtab = None;
-        for shdr in shdrs.iter() {
-            match shdr.sh_type {
-                SHT_REL => relocations.push(shdr),
-                SHT_SYMTAB => {
-                    symtab = Some(SymbolTable::from_shdrs(&shdr, shdrs));
-                }
-                _ => {}
-            }
-        }
-        Ok(())
+        let builder = RelocatableBuilder::new(
+            object.file_name().to_owned(),
+            shdrs,
+            init_fn,
+            fini_fn,
+            segments,
+        );
+        Ok(builder.build())
     }
 }

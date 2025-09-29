@@ -16,10 +16,9 @@ pub(crate) struct CustomHash {
 
 impl CustomHash {
     pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
-        let size = (symtab.sh_size / symtab.sh_entsize) as usize;
-        let symbols =
-            unsafe { core::slice::from_raw_parts(symtab.sh_addr as *const ElfSymbol, size) };
-        let mut map = HashMap::with_capacity_and_hasher(size, DefaultHashBuilder::default());
+        let symbols: &[ElfSymbol] = symtab.content();
+        let mut map =
+            HashMap::with_capacity_and_hasher(symbols.len(), DefaultHashBuilder::default());
         for (idx, symbol) in symbols.iter().enumerate() {
             if symbol.st_type() == STT_FILE {
                 continue;

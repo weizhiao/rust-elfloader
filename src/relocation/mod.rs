@@ -1,14 +1,9 @@
-use crate::{CoreComponent, Error, relocate_error, relocation::dynamic_link::DynamicRelocation};
+use crate::{CoreComponent, Error, relocate_error};
 use alloc::{boxed::Box, format};
 use core::any::Any;
 
 pub(crate) mod dynamic_link;
 pub(crate) mod static_link;
-
-enum ElfRelocation {
-    Dynamic(DynamicRelocation),
-    Static,
-}
 
 #[cold]
 fn reloc_error(

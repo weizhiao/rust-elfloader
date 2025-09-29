@@ -1,8 +1,8 @@
 //! Relocation of elf objects
 use crate::{
-    CoreComponent, RelocatedDylib, Result,
+    CoreComponent, Result,
     arch::*,
-    format::{ElfCommonPart, Relocated},
+    format::{Relocated, relocated::RelocatedCommonPart},
     relocation::reloc_error,
     symbol::SymbolInfo,
 };
@@ -60,7 +60,7 @@ pub(crate) type UnknownHandler = dyn FnMut(
 
 /// 在此之前检查是否需要relocate
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
-    elf: ElfCommonPart,
+    elf: RelocatedCommonPart,
     scope: &[&'iter Relocated],
     pre_find: &'find F,
     deal_unknown: &mut UnknownHandler,
@@ -201,7 +201,7 @@ where
     }
 }
 
-impl ElfCommonPart {
+impl RelocatedCommonPart {
     fn relocate_pltrel<F>(
         &self,
         local_lazy_scope: Option<LazyScope<'_>>,

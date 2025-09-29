@@ -1,8 +1,7 @@
-use super::{ElfCommonPart, Relocated, create_lazy_scope};
+use super::RelocatedCommonPart;
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
-    arch::ElfPhdr,
-    loader::RelocatedBuilder,
+    format::{Relocated, create_lazy_scope},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
@@ -12,7 +11,7 @@ use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 impl Deref for ElfExec {
-    type Target = ElfCommonPart;
+    type Target = RelocatedCommonPart;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -21,7 +20,7 @@ impl Deref for ElfExec {
 
 /// An unrelocated executable file
 pub struct ElfExec {
-    inner: ElfCommonPart,
+    inner: RelocatedCommonPart,
 }
 
 impl Debug for ElfExec {
@@ -130,13 +129,6 @@ impl ElfExec {
     }
 }
 
-impl RelocatedBuilder {
-    pub(crate) fn create_exec(self, phdrs: &[ElfPhdr]) -> ElfExec {
-        let inner = self.create_inner(phdrs, false);
-        ElfExec { inner }
-    }
-}
-
 impl<M: Mmap> Loader<M> {
     /// Load a executable file into memory
     pub fn easy_load_exec(&mut self, object: impl ElfObject) -> Result<ElfExec> {
@@ -155,8 +147,8 @@ impl<M: Mmap> Loader<M> {
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_relocated(ehdr, object, lazy_bind)?;
-        Ok(builder.create_exec(phdrs))
+        let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+        Ok(ElfExec { inner })
     }
 
     // /// Load a executable file into memory

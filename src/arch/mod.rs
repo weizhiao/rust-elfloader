@@ -253,6 +253,16 @@ impl DerefMut for ElfShdr {
     }
 }
 
+impl ElfShdr {
+    pub(crate) fn content<T>(&self) -> &'static [T] {
+        let start = self.sh_addr as usize;
+        let len = (self.sh_size / self.sh_entsize) as usize;
+        debug_assert!(core::mem::size_of::<T>() == self.sh_entsize as usize);
+        debug_assert!(self.sh_size % self.sh_entsize == 0);
+        unsafe { core::slice::from_raw_parts(start as *const T, len) }
+    }
+}
+
 impl Deref for ElfPhdr {
     type Target = Phdr;
 
