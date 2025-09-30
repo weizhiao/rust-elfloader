@@ -1,3 +1,7 @@
+use crate::{
+    arch::ElfRelType,
+    relocation::{find_symbol_addr, static_link::StaticReloc, write_val},
+};
 use elf::abi::*;
 
 pub const EM_ARCH: u16 = EM_X86_64;
@@ -46,4 +50,42 @@ pub extern "C" fn dl_runtime_resolve() {
     jmp rax
 	"
     )
+}
+
+pub(crate) struct X86_64Relocator;
+
+impl StaticReloc for X86_64Relocator {
+    fn relocate<F>(
+        core: &crate::CoreComponent,
+        rel_type: &ElfRelType,
+        l: usize,
+        target_base: usize,
+        scope: &[&crate::format::Relocated],
+        pre_find: &F,
+    ) -> crate::Result<()>
+    where
+        F: Fn(&str) -> Option<*const ()>,
+    {
+        let symtab = core.symtab().unwrap();
+        let r_sym = rel_type.r_symbol();
+        let base = core.base();
+        let append = rel_type.r_addend(base);
+        let offset = target_base - base + rel_type.r_offset();
+        let p = target_base + rel_type.r_offset();
+        match rel_type.r_type() as _ {
+            R_X86_64_PC32 | R_X86_64_PLT32 => {
+                if let Some(sym) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
+                    write_val(
+                        base,
+                        offset,
+                        (sym.wrapping_add_signed(append).wrapping_sub(p)) as u32,
+                    );
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        panic!();
+        Ok(())
+    }
 }

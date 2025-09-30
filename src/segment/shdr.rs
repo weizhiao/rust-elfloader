@@ -21,9 +21,8 @@ pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
     prot
 }
 
-pub(crate) struct ShdrSegments<'shdr> {
+pub(crate) struct ShdrSegments {
     segments: Vec<ElfSegment>,
-    shdrs: &'shdr [ElfShdr],
     total_size: usize,
 }
 
@@ -38,7 +37,7 @@ fn prot_to_idx(prot: ProtFlags) -> usize {
     idx
 }
 
-impl SegmentBuilder for ShdrSegments<'_> {
+impl SegmentBuilder for ShdrSegments {
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let len = self.total_size;
         let memory = unsafe { M::mmap_reserve(None, len, false) }?;
@@ -63,8 +62,8 @@ impl SegmentBuilder for ShdrSegments<'_> {
     }
 }
 
-impl<'shdr> ShdrSegments<'shdr> {
-    pub(crate) fn new(shdrs: &'shdr mut [ElfShdr]) -> Self {
+impl ShdrSegments {
+    pub(crate) fn new(shdrs: &mut [ElfShdr]) -> Self {
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
         for shdr in shdrs.iter_mut() {
             let prot = section_prot(shdr.sh_flags as u64);
@@ -80,7 +79,6 @@ impl<'shdr> ShdrSegments<'shdr> {
         }
         Self {
             segments,
-            shdrs,
             total_size: offset,
         }
     }
@@ -125,32 +123,61 @@ impl<'shdr> SectionUnit<'shdr> {
         let align = self.align();
         let prot = section_prot(sh_flags);
         let addr = Address::Relative(*offset);
-        let mut content_size = 0;
+
+        struct Cursor {
+            start: usize,
+            cur: usize,
+        }
+
+        impl Cursor {
+            fn new(start: usize) -> Self {
+                Self { start, cur: start }
+            }
+
+            fn roundup(&mut self, align: usize) {
+                self.cur = roundup(self.cur, align);
+            }
+
+            fn add(&mut self, size: usize) {
+                self.cur += size;
+            }
+
+            fn cur(&self) -> usize {
+                self.cur
+            }
+
+            fn cur_offset(&self) -> usize {
+                self.cur - self.start
+            }
+        }
+
+        let mut cursor = Cursor::new(*offset);
         let mut map_info = Vec::new();
         for shdr in &mut self.content_sections {
-            *offset = roundup(*offset, shdr.sh_addralign as usize);
-            shdr.sh_addr = *offset as _;
+            if shdr.sh_size == 0 {
+                continue;
+            }
+            cursor.roundup(shdr.sh_addralign as usize);
+            shdr.sh_addr = cursor.cur() as _;
             map_info.push(FileMapInfo {
                 filesz: shdr.sh_size as usize,
                 offset: shdr.sh_offset as usize,
-                start: content_size,
+                start: cursor.cur_offset(),
             });
-            let size = shdr.sh_size as usize;
-            content_size += size;
-            *offset += size;
+            cursor.add(shdr.sh_size as usize);
         }
-        let mut zero_size = 0;
+        let content_size = cursor.cur_offset();
         for shdr in &mut self.zero_sectons {
-            *offset = roundup(*offset, shdr.sh_addralign as usize);
-            shdr.sh_addr = *offset as _;
-            let size = shdr.sh_size as usize;
-            zero_size += size;
-            *offset += size;
+            cursor.roundup(shdr.sh_addralign as usize);
+            shdr.sh_addr = cursor.cur() as _;
+            cursor.add(shdr.sh_size as usize);
         }
-        let len = roundup(zero_size + content_size, PAGE_SIZE);
+        let zero_size = cursor.cur_offset() - content_size;
+        let len = roundup(content_size + zero_size, PAGE_SIZE);
         if len == 0 {
             return None;
         }
+        *offset += len;
         if map_info.len() == 1 {
             let file_offset = rounddown(map_info[0].offset, PAGE_SIZE);
             let align_len = map_info[0].offset - file_offset;
@@ -165,8 +192,9 @@ impl<'shdr> SectionUnit<'shdr> {
             content_size,
             zero_size,
             need_copy: false,
-            flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
+            flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             map_info,
+            from_relocatable: true,
         };
         Some(segment)
     }

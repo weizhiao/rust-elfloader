@@ -3,18 +3,16 @@ use crate::{
     CoreComponent, Result,
     arch::*,
     format::{Relocated, relocated::RelocatedCommonPart},
-    relocation::reloc_error,
-    symbol::SymbolInfo,
+    relocation::{find_symbol_addr, find_symdef, likely, reloc_error, unlikely, write_val},
 };
 use alloc::boxed::Box;
 use core::{
     any::Any,
     marker::PhantomData,
     num::NonZeroUsize,
-    ptr::{null, null_mut},
+    ptr::null_mut,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use elf::abi::*;
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
@@ -23,32 +21,6 @@ use portable_atomic_util::Arc;
 
 // lazy binding 时会先从这里寻找符号
 pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
-
-pub struct SymDef<'lib> {
-    pub sym: Option<&'lib ElfSymbol>,
-    pub lib: &'lib CoreComponent,
-}
-
-impl<'temp> SymDef<'temp> {
-    // 获取符号的真实地址(base + st_value)
-    #[inline(always)]
-    pub fn convert(self) -> *const () {
-        if likely(self.sym.is_some()) {
-            let base = self.lib.base();
-            let sym = unsafe { self.sym.unwrap_unchecked() };
-            if likely(sym.st_type() != STT_GNU_IFUNC) {
-                (base + sym.st_value()) as _
-            } else {
-                // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + sym.st_value()) };
-                ifunc() as _
-            }
-        } else {
-            // 未定义的弱符号返回null
-            null()
-        }
-    }
-}
 
 pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
 
@@ -79,14 +51,6 @@ where
         core: elf.into_core_component(),
         _marker: PhantomData,
     })
-}
-
-#[inline(always)]
-fn write_val(base: usize, offset: usize, val: usize) {
-    unsafe {
-        let rel_addr = (base + offset) as *mut usize;
-        rel_addr.write(val)
-    };
 }
 
 #[unsafe(no_mangle)]
@@ -135,72 +99,6 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<SymDef<'lib>> {
-    // 弱符号 + WEAK 用 0 填充rela offset
-    if dynsym.is_weak() && dynsym.is_undef() {
-        assert!(dynsym.st_value() == 0);
-        Some(SymDef { sym: None, lib })
-    } else if dynsym.st_value() != 0 {
-        Some(SymDef {
-            sym: Some(dynsym),
-            lib,
-        })
-    } else {
-        None
-    }
-}
-
-pub fn find_symdef<'iter, 'lib>(
-    core: &'lib CoreComponent,
-    libs: &[&'iter Relocated],
-    r_sym: usize,
-) -> Option<SymDef<'lib>>
-where
-    'iter: 'lib,
-{
-    let symbol = core.symtab().unwrap();
-    let (dynsym, syminfo) = symbol.symbol_idx(r_sym);
-    find_symdef_impl(core, libs, dynsym, &syminfo)
-}
-
-fn find_symdef_impl<'iter, 'lib>(
-    core: &'lib CoreComponent,
-    libs: &[&'iter Relocated],
-    dynsym: &'lib ElfSymbol,
-    syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib>>
-where
-    'iter: 'lib,
-{
-    if unlikely(dynsym.is_local()) {
-        Some(SymDef {
-            sym: Some(dynsym),
-            lib: core,
-        })
-    } else {
-        let mut precompute = syminfo.precompute();
-        libs.iter()
-            .find_map(|lib| {
-                lib.symtab()
-                    .lookup_filter(syminfo, &mut precompute)
-                    .map(|sym| {
-                        #[cfg(feature = "log")]
-                        log::trace!(
-                            "binding file [{}] to [{}]: symbol [{}]",
-                            core.name(),
-                            lib.name(),
-                            syminfo.name()
-                        );
-                        SymDef {
-                            sym: Some(sym),
-                            lib: &lib,
-                        }
-                    })
-            })
-            .or_else(|| find_weak(core, dynsym))
-    }
-}
-
 impl RelocatedCommonPart {
     fn relocate_pltrel<F>(
         &self,
@@ -215,7 +113,7 @@ impl RelocatedCommonPart {
         let core = self.core_component_ref();
         let base = core.base();
         let reloc = self.relocation();
-        let symbol = self.symtab().unwrap();
+        let symtab = self.symtab().unwrap();
         let is_lazy = self.is_lazy();
         if is_lazy {
             // 开启lazy bind后会跳过plt相关的重定位
@@ -232,7 +130,8 @@ impl RelocatedCommonPart {
                         ptr.write(new_val);
                     }
                 } else if unlikely(r_type == REL_IRELATIVE) {
-                    let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + r_addend) };
+                    let ifunc: fn() -> usize =
+                        unsafe { core::mem::transmute(base.wrapping_add_signed(r_addend)) };
                     write_val(base, rel.r_offset(), ifunc());
                 } else {
                     unreachable!()
@@ -261,16 +160,13 @@ impl RelocatedCommonPart {
                 // S
                 // 对于.rela.plt来说通常只有这两种重定位类型
                 if likely(r_type == REL_JUMP_SLOT) {
-                    let (dynsym, syminfo) = symbol.symbol_idx(r_sym);
-                    if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                        find_symdef_impl(core, scope, dynsym, &syminfo)
-                            .map(|symdef| symdef.convert())
-                    }) {
-                        write_val(base, rel.r_offset(), symbol as usize);
+                    if let Some(symbol) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
+                        write_val(base, rel.r_offset(), symbol);
                         continue;
                     }
                 } else if unlikely(r_type == REL_IRELATIVE) {
-                    let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + r_addend) };
+                    let ifunc: fn() -> usize =
+                        unsafe { core::mem::transmute(base.wrapping_add_signed(r_addend)) };
                     write_val(base, rel.r_offset(), ifunc());
                     continue;
                 }
@@ -295,7 +191,7 @@ impl RelocatedCommonPart {
                     // B + A
                     debug_assert!(rel.r_type() == REL_RELATIVE as usize);
                     let r_addend = rel.r_addend(base);
-                    write_val(base, rel.r_offset(), base + r_addend);
+                    write_val(base, rel.r_offset(), base.wrapping_add_signed(r_addend));
                 })
             }
             RelativeRel::Relr(relr) => {
@@ -353,20 +249,17 @@ impl RelocatedCommonPart {
             match r_type {
                 // REL_GOT: S  REL_SYMBOLIC: S + A
                 REL_GOT | REL_SYMBOLIC => {
-                    let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-                    if let Some(symbol) = pre_find(syminfo.name()).or_else(|| {
-                        find_symdef_impl(core, scope, dynsym, &syminfo)
-                            .map(|symdef| symdef.convert())
-                    }) {
-                        write_val(base, rel.r_offset(), symbol as usize);
+                    if let Some(symbol) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
+                        write_val(base, rel.r_offset(), symbol);
                         continue;
                     }
                 }
                 REL_DTPOFF => {
                     if let Some(symdef) = find_symdef(core, scope, r_sym) {
                         // offset in tls
-                        let tls_val = (symdef.sym.unwrap().st_value() + r_addend)
-                            .wrapping_sub(TLS_DTV_OFFSET);
+                        let tls_val =
+                            (symdef.sym.unwrap().st_value().wrapping_add_signed(r_addend))
+                                .wrapping_sub(TLS_DTV_OFFSET);
                         write_val(base, rel.r_offset(), tls_val);
                         continue;
                     }
@@ -435,24 +328,4 @@ impl DynamicRelocation {
     pub(crate) fn is_empty(&self) -> bool {
         self.relative.is_empty() && self.dynrel.is_empty() && self.pltrel.is_empty()
     }
-}
-
-#[inline]
-#[cold]
-fn cold() {}
-
-#[inline]
-fn likely(b: bool) -> bool {
-    if !b {
-        cold()
-    }
-    b
-}
-
-#[inline]
-fn unlikely(b: bool) -> bool {
-    if b {
-        cold()
-    }
-    b
 }

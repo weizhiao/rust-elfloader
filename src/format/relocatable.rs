@@ -13,17 +13,16 @@ use crate::{
 };
 
 #[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use elf::abi::{SHT_REL, SHT_SYMTAB};
+use elf::abi::{SHT_REL, SHT_RELA, SHT_SYMTAB};
 #[cfg(feature = "portable-atomic")]
-use portable_atomic_util::{Arc, Weak};
+use portable_atomic_util::Arc;
 
 impl<M: Mmap> Loader<M> {
-    pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<()> {
+    pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
-        self.load_rel(ehdr, object)?;
-        Ok(())
+        self.load_rel(ehdr, object)
     }
 }
 
@@ -34,6 +33,7 @@ pub(crate) struct RelocatableBuilder {
     fini_fn: FnHandler,
     segments: ElfSegments,
     relocation: StaticRelocation,
+    mprotect: Box<dyn Fn() -> Result<()>>,
 }
 
 impl RelocatableBuilder {
@@ -43,18 +43,17 @@ impl RelocatableBuilder {
         init_fn: FnHandler,
         fini_fn: FnHandler,
         segments: ElfSegments,
+        mprotect: Box<dyn Fn() -> Result<()>>,
     ) -> Self {
         let base = segments.base();
         shdrs
             .iter_mut()
             .for_each(|shdr| shdr.sh_addr = (shdr.sh_addr as usize + base) as _);
-        let mut relocations = Vec::new();
         let mut symtab = None;
         for shdr in shdrs.iter() {
             match shdr.sh_type {
-                SHT_REL => relocations.push(shdr),
                 SHT_SYMTAB => {
-                    symtab = Some(SymbolTable::from_shdrs(&shdr, shdrs));
+                    symtab = Some(SymbolTable::from_shdrs(base, &shdr, shdrs));
                 }
                 _ => {}
             }
@@ -65,7 +64,8 @@ impl RelocatableBuilder {
             init_fn,
             fini_fn,
             segments,
-            relocation: StaticRelocation::new(&relocations),
+            mprotect,
+            relocation: StaticRelocation::new(shdrs),
         }
     }
 
@@ -90,37 +90,30 @@ impl RelocatableBuilder {
                 inner: Arc::new(inner),
             },
             relocation: self.relocation,
+            mprotect: self.mprotect,
         }
     }
 }
 
 pub struct ElfRelocatable {
-    core: CoreComponent,
+    pub(crate) core: CoreComponent,
     pub(crate) relocation: StaticRelocation,
+    pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 }
 
 impl ElfRelocatable {
-    // pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
-    //     self,
-    //     scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
-    //     pre_find: &'find F,
-    //     deal_unknown: &mut UnknownHandler,
-    //     local_lazy_scope: Option<LazyScope<'lib>>,
-    // ) -> Result<RelocatedDylib<'lib>>
-    // where
-    //     F: Fn(&str) -> Option<*const ()>,
-    //     'scope: 'iter,
-    //     'iter: 'lib,
-    //     'find: 'lib,
-    // {
-    //     Ok(RelocatedDylib {
-    //         inner: relocate_impl(
-    //             self.inner,
-    //             scope.as_ref(),
-    //             pre_find,
-    //             deal_unknown,
-    //             local_lazy_scope,
-    //         )?,
-    //     })
-    // }
+    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
+        self,
+        scope: impl AsRef<[&'iter Relocated<'scope>]>,
+        pre_find: &'find F,
+    ) -> Result<Relocated<'lib>>
+    where
+        F: Fn(&str) -> Option<*const ()>,
+        'scope: 'iter,
+        'iter: 'lib,
+        'find: 'lib,
+    {
+        let object = self.relocate_impl(scope.as_ref(), pre_find)?;
+        Ok(object)
+    }
 }

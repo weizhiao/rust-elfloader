@@ -119,6 +119,7 @@ impl ElfPhdr {
                 offset,
             }],
             need_copy: false,
+            from_relocatable: false,
         }
     }
 }

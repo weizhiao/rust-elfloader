@@ -5,13 +5,16 @@ use crate::{
     Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
-    format::relocated::{RelocatedCommonPart, ElfDylib, ElfExec, RelocatedDylib, RelocatedExec},
+    format::relocated::{ElfDylib, ElfExec, RelocatedCommonPart, RelocatedDylib, RelocatedExec},
     loader::FnHandler,
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
-    relocation::dynamic_link::{LazyScope, UnknownHandler},
+    relocation::{
+        SymDef,
+        dynamic_link::{LazyScope, UnknownHandler},
+    },
     segment::ElfSegments,
-    symbol::SymbolTable,
+    symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
@@ -215,6 +218,29 @@ impl Elf {
     }
 }
 
+/// A symbol from elf object
+#[derive(Debug, Clone)]
+pub struct Symbol<'lib, T: 'lib> {
+    pub(crate) ptr: *mut (),
+    pd: PhantomData<&'lib T>,
+}
+
+impl<'lib, T> Deref for Symbol<'lib, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*(&self.ptr as *const *mut _ as *const T) }
+    }
+}
+
+impl<'lib, T> Symbol<'lib, T> {
+    pub fn into_raw(self) -> *const () {
+        self.ptr
+    }
+}
+
+unsafe impl<T: Send> Send for Symbol<'_, T> {}
+unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
+
 #[derive(Clone)]
 pub struct Relocated<'scope> {
     pub(crate) core: CoreComponent,
@@ -225,6 +251,88 @@ impl Relocated<'_> {
     /// Gets the symbol table.
     pub fn symtab(&self) -> &SymbolTable {
         unsafe { self.core.symtab().unwrap_unchecked() }
+    }
+
+    /// Gets a pointer to a function or static variable by symbol name.
+    ///
+    /// The symbol is interpreted as-is; no mangling is done. This means that symbols like `x::y` are
+    /// most likely invalid.
+    ///
+    /// # Safety
+    /// Users of this API must specify the correct type of the function or variable loaded.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
+    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # let lib = loader
+    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
+    /// unsafe {
+    ///     let awesome_function: Symbol<unsafe extern fn(f64) -> f64> =
+    ///         lib.get("awesome_function").unwrap();
+    ///     awesome_function(0.42);
+    /// }
+    /// ```
+    /// A static variable may also be loaded and inspected:
+    /// ```no_run
+    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
+    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # let lib = loader
+    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
+    /// unsafe {
+    ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
+    ///     **awesome_variable = 42.0;
+    /// };
+    /// ```
+    #[inline]
+    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, None);
+        let mut precompute = syminfo.precompute();
+        self.symtab()
+            .lookup_filter(&syminfo, &mut precompute)
+            .map(|sym| Symbol {
+                ptr: SymDef {
+                    sym: Some(sym),
+                    lib: self,
+                }
+                .convert() as _,
+                pd: PhantomData,
+            })
+    }
+
+    /// Load a versioned symbol from the elf object.
+    /// # Safety
+    /// Users of this API must specify the correct type of the function or variable loaded.
+    /// # Examples
+    /// ```no_run
+    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
+    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # let lib = loader
+    /// #     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
+    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
+    /// ```
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn get_version<'lib, T>(
+        &'lib self,
+        name: &str,
+        version: &str,
+    ) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, Some(version));
+        let mut precompute = syminfo.precompute();
+        self.symtab()
+            .lookup_filter(&syminfo, &mut precompute)
+            .map(|sym| Symbol {
+                ptr: SymDef {
+                    sym: Some(sym),
+                    lib: self,
+                }
+                .convert() as _,
+                pd: PhantomData,
+            })
     }
 }
 

@@ -10,6 +10,7 @@ cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
         mod x86_64;
         pub use x86_64::*;
+        pub(crate) type  StaticRelocator=X86_64Relocator;
     }else if #[cfg(target_arch = "riscv64")]{
         mod riscv64;
         pub use riscv64::*;
@@ -125,8 +126,8 @@ impl ElfRela {
 
     /// base is not used during execution. The base parameter is added only for the sake of interface consistency
     #[inline]
-    pub fn r_addend(&self, _base: usize) -> usize {
-        self.rela.r_addend as usize
+    pub fn r_addend(&self, _base: usize) -> isize {
+        self.rela.r_addend as isize
     }
 }
 
@@ -225,6 +226,11 @@ impl ElfSymbol {
     pub fn is_weak(&self) -> bool {
         self.st_bind() == STB_WEAK
     }
+
+    #[inline]
+    pub(crate) fn set_value(&mut self, value: usize) {
+        self.sym.st_value = value as _;
+    }
 }
 
 #[derive(Debug)]
@@ -255,11 +261,15 @@ impl DerefMut for ElfShdr {
 
 impl ElfShdr {
     pub(crate) fn content<T>(&self) -> &'static [T] {
+        self.content_mut()
+    }
+
+    pub(crate) fn content_mut<T>(&self) -> &'static mut [T] {
         let start = self.sh_addr as usize;
         let len = (self.sh_size / self.sh_entsize) as usize;
         debug_assert!(core::mem::size_of::<T>() == self.sh_entsize as usize);
         debug_assert!(self.sh_size % self.sh_entsize == 0);
-        unsafe { core::slice::from_raw_parts(start as *const T, len) }
+        unsafe { core::slice::from_raw_parts_mut(start as *mut T, len) }
     }
 }
 

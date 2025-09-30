@@ -3,11 +3,14 @@ use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::ElfPhdr,
     dynamic::ElfDynamic,
-    format::{Relocated, create_lazy_scope},
+    format::{Relocated, Symbol, create_lazy_scope},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::dynamic_link::{LazyScope, SymDef, UnknownHandler, relocate_impl},
+    relocation::{
+        SymDef,
+        dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
+    },
     segment::ElfSegments,
     symbol::SymbolInfo,
 };
@@ -302,26 +305,3 @@ impl RelocatedDylib<'_> {
             })
     }
 }
-
-/// A symbol from elf object
-#[derive(Debug, Clone)]
-pub struct Symbol<'lib, T: 'lib> {
-    ptr: *mut (),
-    pd: PhantomData<&'lib T>,
-}
-
-impl<'lib, T> Deref for Symbol<'lib, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        unsafe { &*(&self.ptr as *const *mut _ as *const T) }
-    }
-}
-
-impl<'lib, T> Symbol<'lib, T> {
-    pub fn into_raw(self) -> *const () {
-        self.ptr
-    }
-}
-
-unsafe impl<T: Send> Send for Symbol<'_, T> {}
-unsafe impl<T: Sync> Sync for Symbol<'_, T> {}

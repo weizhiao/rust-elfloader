@@ -223,12 +223,17 @@ impl<M: Mmap> Loader<M> {
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
         let mut shdr_segments = ShdrSegments::new(shdrs);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
+        let mprotect = Box::new(move || {
+            shdr_segments.mprotect::<M>()?;
+            Ok(())
+        });
         let builder = RelocatableBuilder::new(
             object.file_name().to_owned(),
             shdrs,
             init_fn,
             fini_fn,
             segments,
+            mprotect,
         );
         Ok(builder.build())
     }

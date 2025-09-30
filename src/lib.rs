@@ -90,10 +90,11 @@ use relocation::dynamic_link::{DynamicRelocation, GLOBAL_SCOPE};
 use segment::ELFRelro;
 
 pub use elf::abi;
+pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, UserData};
 pub use loader::Loader;
-pub use relocation::dynamic_link::find_symdef;
+pub use relocation::find_symdef;
 
 /// elf_loader error types
 #[derive(Debug)]

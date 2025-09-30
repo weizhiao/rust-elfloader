@@ -48,6 +48,7 @@ pub(crate) struct ElfSegment {
     content_size: usize,
     map_info: Vec<FileMapInfo>,
     need_copy: bool,
+    from_relocatable: bool,
 }
 
 impl ElfSegment {
@@ -59,7 +60,11 @@ impl ElfSegment {
         let mut need_copy = false;
         let len = self.len;
         let addr = self.addr.absolute_addr();
-        let prot = self.prot;
+        let prot = if self.from_relocatable {
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
+        } else {
+            self.prot
+        };
         debug_assert!(len % PAGE_SIZE == 0);
         debug_assert!(self.map_info.len() > 0);
         if self.map_info.len() == 1 {
@@ -80,7 +85,7 @@ impl ElfSegment {
         };
         #[cfg(feature = "log")]
         log::trace!(
-            "[Mapping] address: 0x{:x}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
+            "[Mmap] address: 0x{:x}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
             addr,
             len,
             prot,
@@ -108,13 +113,15 @@ impl ElfSegment {
         if self.need_copy {
             let len = self.len;
             debug_assert!(len % PAGE_SIZE == 0);
-            unsafe {
-                M::mprotect(
-                    NonNull::new(self.addr.absolute_addr() as _).unwrap(),
-                    len,
-                    self.prot,
-                )
-            }?;
+            let addr = self.addr.absolute_addr();
+            unsafe { M::mprotect(NonNull::new(addr as _).unwrap(), len, self.prot) }?;
+            #[cfg(feature = "log")]
+            log::trace!(
+                "[Mprotect] address: 0x{:x}, length: {}, prot: {:?}",
+                addr,
+                len,
+                self.prot,
+            );
         }
         Ok(())
     }

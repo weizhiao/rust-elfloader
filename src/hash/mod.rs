@@ -70,8 +70,13 @@ impl HashTable {
         }
     }
 
-    pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
-        HashTable::Custom(CustomHash::from_shdr(symtab, strtab))
+    pub(crate) fn from_shdr(
+        base: usize,
+        symtab: &ElfShdr,
+        strtab: &ElfStringTable,
+        shdrs: &[ElfShdr],
+    ) -> Self {
+        HashTable::Custom(CustomHash::from_shdr(base, symtab, strtab, shdrs))
     }
 
     pub(crate) fn from_dynamic(dynamic: &ElfDynamic) -> Self {
