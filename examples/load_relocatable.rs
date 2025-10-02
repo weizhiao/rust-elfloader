@@ -17,7 +17,7 @@ fn main() {
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("a.o").unwrap();
-    let a = loader.load_relocatable(object).unwrap();
+    let a = loader.load_relocatable(object, None).unwrap();
     let a = a.relocate(&[], &pre_find).unwrap();
     let f = unsafe { a.get::<extern "C" fn()>("print_a").unwrap() };
     f();

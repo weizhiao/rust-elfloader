@@ -217,12 +217,15 @@ impl<M: Mmap> Loader<M> {
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
+        lazy_bind: Option<bool>,
     ) -> Result<ElfRelocatable> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
+        let lazy_bind = lazy_bind.unwrap_or(false);
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
-        let mut shdr_segments = ShdrSegments::new(shdrs);
+        let mut shdr_segments = ShdrSegments::new(shdrs, lazy_bind);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
+        let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {
             shdr_segments.mprotect::<M>()?;
             Ok(())
@@ -234,6 +237,8 @@ impl<M: Mmap> Loader<M> {
             fini_fn,
             segments,
             mprotect,
+            pltgot,
+            lazy_bind,
         );
         Ok(builder.build())
     }

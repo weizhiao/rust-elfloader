@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    arch::ElfShdr,
+    arch::{ElfShdr, LAZY_PLT_HEADER_SIZE, PLT_ENTRY_SIZE, PLT_HEADER_SIZE, Shdr},
     mmap::{MapFlags, Mmap, ProtFlags},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
@@ -8,7 +8,8 @@ use crate::{
     },
 };
 use alloc::vec::Vec;
-use elf::abi::{SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS};
+use elf::abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_REL, SHT_RELA};
+use hashbrown::{HashMap, hash_map::Entry};
 
 pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
     let mut prot = ProtFlags::PROT_READ;
@@ -24,6 +25,7 @@ pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
 pub(crate) struct ShdrSegments {
     segments: Vec<ElfSegment>,
     total_size: usize,
+    pltgot: Option<PltGotSection>,
 }
 
 fn prot_to_idx(prot: ProtFlags) -> usize {
@@ -35,6 +37,10 @@ fn prot_to_idx(prot: ProtFlags) -> usize {
         idx |= 0b10;
     }
     idx
+}
+
+fn flags_to_idx(flags: u64) -> usize {
+    prot_to_idx(section_prot(flags))
 }
 
 impl SegmentBuilder for ShdrSegments {
@@ -63,12 +69,16 @@ impl SegmentBuilder for ShdrSegments {
 }
 
 impl ShdrSegments {
-    pub(crate) fn new(shdrs: &mut [ElfShdr]) -> Self {
+    pub(crate) fn new(shdrs: &mut [ElfShdr], lazy_bind: bool) -> Self {
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
+        let mut got_shdr = PltGotSection::create_got_shdr(shdrs);
+        let (mut pltgot_shdr, mut plt_shdr) = PltGotSection::create_plt_shdr(shdrs, lazy_bind);
         for shdr in shdrs.iter_mut() {
-            let prot = section_prot(shdr.sh_flags as u64);
-            units[prot_to_idx(prot)].add_section(shdr);
+            units[flags_to_idx(shdr.sh_flags)].add_section(shdr);
         }
+        units[flags_to_idx(got_shdr.sh_flags)].add_section(&mut got_shdr);
+        units[flags_to_idx(plt_shdr.sh_flags)].add_section(&mut plt_shdr);
+        units[flags_to_idx(pltgot_shdr.sh_flags)].add_section(&mut pltgot_shdr);
         let mut segments = Vec::new();
         let mut offset = 0;
         for unit in units.iter_mut() {
@@ -80,6 +90,193 @@ impl ShdrSegments {
         Self {
             segments,
             total_size: offset,
+            pltgot: Some(PltGotSection::new(
+                &got_shdr,
+                &plt_shdr,
+                &pltgot_shdr,
+                lazy_bind,
+            )),
+        }
+    }
+
+    pub(crate) fn take_pltgot(&mut self) -> PltGotSection {
+        self.pltgot.take().unwrap()
+    }
+}
+
+pub(crate) struct PltGotSection {
+    got_base: usize,
+    plt_base: usize,
+    pltgot_base: usize,
+    cur_got_idx: usize,
+    cur_plt_idx: usize,
+    got_map: HashMap<usize, usize>,
+    plt_map: HashMap<usize, usize>,
+    got_size: usize,
+    plt_size: usize,
+    pltgot_size: usize,
+    plt_header_size: usize,
+    plt_entry_size: usize,
+}
+
+pub(crate) enum GotEntry<'got> {
+    Occupied(usize),
+    Vacant(&'got mut usize),
+}
+
+pub(crate) enum PltEntry<'plt> {
+    Occupied(usize),
+    Vacant {
+        plt: &'plt mut [u8],
+        pltgot: &'plt mut usize,
+    },
+}
+
+impl PltGotSection {
+    fn create_got_shdr(shdrs: &[ElfShdr]) -> ElfShdr {
+        let mut elem_cnt = 0;
+        for shdr in shdrs.iter() {
+            if shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA {
+                elem_cnt += (shdr.sh_size / shdr.sh_entsize) as usize;
+            }
+        }
+        ElfShdr::new(
+            0,
+            SHT_NOBITS,
+            (SHF_ALLOC | SHF_WRITE) as _,
+            0,
+            0,
+            elem_cnt * size_of::<usize>(),
+            0,
+            0,
+            16,
+            size_of::<usize>(),
+        )
+    }
+
+    fn create_plt_shdr(shdrs: &[ElfShdr], lazy: bool) -> (ElfShdr, ElfShdr) {
+        let mut elem_cnt = 0;
+        for shdr in shdrs.iter() {
+            if shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA {
+                elem_cnt += (shdr.sh_size / shdr.sh_entsize) as usize;
+            }
+        }
+        let header_size = if lazy {
+            LAZY_PLT_HEADER_SIZE
+        } else {
+            PLT_HEADER_SIZE
+        };
+        (
+            ElfShdr::new(
+                0,
+                SHT_NOBITS,
+                (SHF_ALLOC | SHF_WRITE) as _,
+                0,
+                0,
+                elem_cnt * size_of::<usize>(),
+                0,
+                0,
+                size_of::<usize>(),
+                size_of::<usize>(),
+            ),
+            ElfShdr::new(
+                0,
+                SHT_NOBITS,
+                (SHF_ALLOC | SHF_EXECINSTR) as _,
+                0,
+                0,
+                elem_cnt * PLT_ENTRY_SIZE + header_size,
+                0,
+                0,
+                size_of::<usize>(),
+                PLT_ENTRY_SIZE,
+            ),
+        )
+    }
+
+    fn new(got: &Shdr, plt: &Shdr, pltgot: &Shdr, lazy: bool) -> Self {
+        Self {
+            cur_got_idx: 0,
+            cur_plt_idx: 0,
+            got_map: HashMap::new(),
+            plt_map: HashMap::new(),
+            got_base: got.sh_addr as usize,
+            plt_base: plt.sh_addr as usize + LAZY_PLT_HEADER_SIZE,
+            pltgot_base: pltgot.sh_addr as usize,
+            got_size: got.sh_size as usize,
+            plt_size: plt.sh_size as usize,
+            pltgot_size: pltgot.sh_size as usize,
+            plt_entry_size: plt.sh_entsize as usize,
+            plt_header_size: if lazy {
+                LAZY_PLT_HEADER_SIZE
+            } else {
+                PLT_HEADER_SIZE
+            },
+        }
+    }
+
+    pub(crate) fn rebase(&mut self, base: usize) {
+        self.got_base = self.got_base + base;
+        self.plt_base = self.plt_base + base;
+        self.pltgot_base = self.pltgot_base + base;
+    }
+
+    pub(crate) fn got_base(&self) -> usize {
+        self.got_base
+    }
+
+    pub(crate) fn plt_base(&self) -> usize {
+        self.plt_base
+    }
+
+    pub(crate) fn pltgot_base(&self) -> usize {
+        self.pltgot_base
+    }
+
+    pub(crate) fn get_plt_header(&mut self) -> &mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                (self.plt_base - self.plt_header_size) as *mut u8,
+                self.plt_header_size,
+            )
+        }
+    }
+
+    pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {
+        let base = self.got_base;
+        let ent_size = size_of::<usize>();
+        match self.got_map.entry(r_sym) {
+            Entry::Occupied(mut entry) => GotEntry::Occupied(*entry.get_mut() * ent_size + base),
+            Entry::Vacant(entry) => {
+                let idx = *entry.insert(self.cur_got_idx);
+                self.cur_got_idx += 1;
+                GotEntry::Vacant(unsafe { &mut *((idx * ent_size + base) as *mut usize) })
+            }
+        }
+    }
+
+    pub(crate) fn add_plt_entry(&mut self, r_sym: usize) -> PltEntry<'_> {
+        let plt_base = self.plt_base;
+        let pltgot_base = self.pltgot_base;
+        let plt_ent_size = self.plt_entry_size;
+        let got_ent_size = size_of::<usize>();
+        match self.plt_map.entry(r_sym) {
+            Entry::Occupied(mut entry) => {
+                PltEntry::Occupied(*entry.get_mut() * plt_ent_size + plt_base)
+            }
+            Entry::Vacant(entry) => {
+                let idx = *entry.insert(self.cur_plt_idx);
+                self.cur_plt_idx += 1;
+                PltEntry::Vacant {
+                    plt: unsafe {
+                        core::slice::from_raw_parts_mut(
+                            (idx * plt_ent_size + plt_base) as *mut u8,
+                            plt_ent_size,
+                        )
+                    },
+                    pltgot: unsafe { &mut *((idx * got_ent_size + pltgot_base) as *mut usize) },
+                }
+            }
         }
     }
 }
@@ -166,6 +363,16 @@ impl<'shdr> SectionUnit<'shdr> {
             });
             cursor.add(shdr.sh_size as usize);
         }
+        // If there is only one content section, we need to align it to page size.
+        if map_info.len() == 1 {
+            let shdr = &mut self.content_sections[0];
+            let file_offset = rounddown(map_info[0].offset, PAGE_SIZE);
+            let align_len = map_info[0].offset - file_offset;
+            shdr.sh_addr = shdr.sh_addr.wrapping_add(align_len as _);
+            map_info[0].filesz += align_len;
+            map_info[0].offset = file_offset;
+            cursor.add(align_len);
+        }
         let content_size = cursor.cur_offset();
         for shdr in &mut self.zero_sectons {
             cursor.roundup(shdr.sh_addralign as usize);
@@ -178,12 +385,6 @@ impl<'shdr> SectionUnit<'shdr> {
             return None;
         }
         *offset += len;
-        if map_info.len() == 1 {
-            let file_offset = rounddown(map_info[0].offset, PAGE_SIZE);
-            let align_len = map_info[0].offset - file_offset;
-            map_info[0].filesz += align_len;
-            map_info[0].offset = file_offset;
-        }
         let segment = ElfSegment {
             addr,
             align,

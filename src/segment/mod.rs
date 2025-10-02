@@ -66,7 +66,6 @@ impl ElfSegment {
             self.prot
         };
         debug_assert!(len % PAGE_SIZE == 0);
-        debug_assert!(self.map_info.len() > 0);
         if self.map_info.len() == 1 {
             debug_assert!(self.map_info[0].offset % PAGE_SIZE == 0);
             unsafe {
@@ -110,7 +109,7 @@ impl ElfSegment {
     }
 
     fn mprotect<M: Mmap>(&self) -> Result<()> {
-        if self.need_copy {
+        if self.need_copy || self.from_relocatable {
             let len = self.len;
             debug_assert!(len % PAGE_SIZE == 0);
             let addr = self.addr.absolute_addr();

@@ -2,27 +2,31 @@ use core::sync::atomic::AtomicBool;
 
 use crate::{
     CoreComponent, Loader, Result, UserData,
-    arch::ElfShdr,
+    arch::{ElfRelType, ElfShdr, ElfSymbol},
     format::{CoreComponentInner, ElfPhdrs, Relocated},
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
     relocation::static_link::StaticRelocation,
-    segment::ElfSegments,
+    segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use elf::abi::{SHT_REL, SHT_RELA, SHT_SYMTAB};
+use elf::abi::{SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
 impl<M: Mmap> Loader<M> {
-    pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
+    pub fn load_relocatable(
+        &mut self,
+        mut object: impl ElfObject,
+        lazy_bind: Option<bool>,
+    ) -> Result<ElfRelocatable> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
-        self.load_rel(ehdr, object)
+        self.load_rel(ehdr, object, lazy_bind)
     }
 }
 
@@ -34,6 +38,8 @@ pub(crate) struct RelocatableBuilder {
     segments: ElfSegments,
     relocation: StaticRelocation,
     mprotect: Box<dyn Fn() -> Result<()>>,
+    pltgot: PltGotSection,
+    lazy_bind: bool,
 }
 
 impl RelocatableBuilder {
@@ -44,16 +50,37 @@ impl RelocatableBuilder {
         fini_fn: FnHandler,
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
+        mut pltgot: PltGotSection,
+        lazy_bind: bool,
     ) -> Self {
         let base = segments.base();
         shdrs
             .iter_mut()
             .for_each(|shdr| shdr.sh_addr = (shdr.sh_addr as usize + base) as _);
+        pltgot.rebase(base);
+        pltgot.init_pltgot();
         let mut symtab = None;
+        let mut relocation = Vec::with_capacity(shdrs.len());
         for shdr in shdrs.iter() {
             match shdr.sh_type {
                 SHT_SYMTAB => {
-                    symtab = Some(SymbolTable::from_shdrs(base, &shdr, shdrs));
+                    let symbols: &mut [ElfSymbol] = shdr.content_mut();
+                    for symbol in symbols.iter_mut() {
+                        if symbol.st_type() == STT_FILE {
+                            continue;
+                        }
+                        let section_base = shdrs[symbol.st_shndx()].sh_addr as usize - base;
+                        symbol.set_value(section_base + symbol.st_value());
+                    }
+                    symtab = Some(SymbolTable::from_shdrs(&shdr, shdrs));
+                }
+                SHT_RELA | SHT_REL => {
+                    let rels: &mut [ElfRelType] = shdr.content_mut();
+                    let section_base = shdrs[shdr.sh_info as usize].sh_addr as usize;
+                    for rel in rels.iter_mut() {
+                        rel.set_offset(section_base + rel.r_offset() - base);
+                    }
+                    relocation.push((shdr.content(), section_base));
                 }
                 _ => {}
             }
@@ -65,7 +92,9 @@ impl RelocatableBuilder {
             fini_fn,
             segments,
             mprotect,
-            relocation: StaticRelocation::new(shdrs),
+            relocation: StaticRelocation::new(relocation),
+            pltgot,
+            lazy_bind,
         }
     }
 
@@ -89,8 +118,10 @@ impl RelocatableBuilder {
             core: CoreComponent {
                 inner: Arc::new(inner),
             },
+            pltgot: self.pltgot,
             relocation: self.relocation,
             mprotect: self.mprotect,
+            lazy_bind: self.lazy_bind,
         }
     }
 }
@@ -98,7 +129,9 @@ impl RelocatableBuilder {
 pub struct ElfRelocatable {
     pub(crate) core: CoreComponent,
     pub(crate) relocation: StaticRelocation,
+    pub(crate) pltgot: PltGotSection,
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
+    pub(crate) lazy_bind: bool,
 }
 
 impl ElfRelocatable {

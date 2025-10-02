@@ -129,6 +129,11 @@ impl ElfRela {
     pub fn r_addend(&self, _base: usize) -> isize {
         self.rela.r_addend as isize
     }
+
+    #[inline]
+    pub(crate) fn set_offset(&mut self, offset: usize) {
+        self.rela.r_offset = offset as _;
+    }
 }
 
 #[repr(transparent)]
@@ -243,6 +248,36 @@ pub struct ElfPhdr {
 #[repr(transparent)]
 pub struct ElfShdr {
     shdr: Shdr,
+}
+
+impl ElfShdr {
+    pub(crate) fn new(
+        sh_name: u32,
+        sh_type: u32,
+        sh_flags: usize,
+        sh_addr: usize,
+        sh_offset: usize,
+        sh_size: usize,
+        sh_link: u32,
+        sh_info: u32,
+        sh_addralign: usize,
+        sh_entsize: usize,
+    ) -> Self {
+        Self {
+            shdr: Shdr {
+                sh_name,
+                sh_type,
+                sh_flags: sh_flags as _,
+                sh_addr: sh_addr as _,
+                sh_offset: sh_offset as _,
+                sh_size: sh_size as _,
+                sh_link,
+                sh_info,
+                sh_addralign: sh_addralign as _,
+                sh_entsize: sh_entsize as _,
+            },
+        }
+    }
 }
 
 impl Deref for ElfShdr {

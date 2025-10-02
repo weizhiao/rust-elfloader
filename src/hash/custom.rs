@@ -15,12 +15,7 @@ pub(crate) struct CustomHash {
 }
 
 impl CustomHash {
-    pub(crate) fn from_shdr(
-        base: usize,
-        symtab: &ElfShdr,
-        strtab: &ElfStringTable,
-        shdrs: &[ElfShdr],
-    ) -> Self {
+    pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
         let symbols: &mut [ElfSymbol] = symtab.content_mut();
         let mut map =
             HashMap::with_capacity_and_hasher(symbols.len(), DefaultHashBuilder::default());
@@ -28,8 +23,6 @@ impl CustomHash {
             if symbol.st_type() == STT_FILE {
                 continue;
             }
-            let section_base = shdrs[symbol.st_shndx()].sh_addr as usize - base;
-            symbol.set_value(section_base + symbol.st_value());
             let name = strtab.get_str(symbol.st_name() as usize);
             map.insert(name.as_bytes().to_vec(), idx);
         }

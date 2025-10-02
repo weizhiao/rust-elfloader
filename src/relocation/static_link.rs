@@ -2,26 +2,18 @@ use core::marker::PhantomData;
 
 use crate::{
     CoreComponent, Result,
-    arch::{ElfRelType, ElfShdr, StaticRelocator},
+    arch::{ElfRelType, StaticRelocator},
     format::{Relocated, relocatable::ElfRelocatable},
+    segment::shdr::PltGotSection,
 };
 use alloc::{boxed::Box, vec::Vec};
-use elf::abi::{SHT_REL, SHT_RELA};
 
 pub(crate) struct StaticRelocation {
     relocation: Box<[(&'static [ElfRelType], usize)]>,
 }
 
 impl StaticRelocation {
-    pub(crate) fn new(shdrs: &[ElfShdr]) -> Self {
-        let mut relocation = Vec::with_capacity(shdrs.len());
-        for shdr in shdrs {
-            if shdr.sh_type != SHT_REL && shdr.sh_type != SHT_RELA {
-                continue;
-            }
-            let p = shdrs[shdr.sh_info as usize].sh_addr as usize;
-            relocation.push((shdr.content(), p));
-        }
+    pub(crate) fn new(relocation: Vec<(&'static [ElfRelType], usize)>) -> Self {
         Self {
             relocation: relocation.into_boxed_slice(),
         }
@@ -30,7 +22,7 @@ impl StaticRelocation {
 
 impl ElfRelocatable {
     pub(crate) fn relocate_impl<'lib, 'iter, 'find, F>(
-        self,
+        mut self,
         scope: &[&'iter Relocated],
         pre_find: &'find F,
     ) -> Result<Relocated<'lib>>
@@ -41,7 +33,15 @@ impl ElfRelocatable {
     {
         for (reloc, target_base) in self.relocation.relocation.iter() {
             for rel in *reloc {
-                StaticRelocator::relocate(&self.core, rel, 0, *target_base, scope, pre_find)?;
+                StaticRelocator::relocate(
+                    &self.core,
+                    rel,
+                    &mut self.pltgot,
+                    *target_base,
+                    scope,
+                    pre_find,
+                    self.lazy_bind,
+                )?;
             }
         }
         (self.mprotect)()?;
@@ -56,10 +56,11 @@ pub(crate) trait StaticReloc {
     fn relocate<F>(
         core: &CoreComponent,
         rel_type: &ElfRelType,
-        l: usize,
+        pltgot: &mut PltGotSection,
         target_base: usize,
         scope: &[&Relocated],
         pre_find: &F,
+        lazy: bool,
     ) -> Result<()>
     where
         F: Fn(&str) -> Option<*const ()>;

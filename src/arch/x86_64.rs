@@ -1,6 +1,7 @@
 use crate::{
     arch::ElfRelType,
     relocation::{find_symbol_addr, static_link::StaticReloc, write_val},
+    segment::shdr::{PltEntry, PltGotSection},
 };
 use elf::abi::*;
 
@@ -19,6 +20,26 @@ pub const REL_TPOFF: u32 = R_X86_64_TPOFF64;
 
 pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+pub(crate) const PLT_ENTRY_SIZE: usize = 16;
+pub(crate) const LAZY_PLT_HEADER_SIZE: usize = 32;
+pub(crate) const PLT_HEADER_SIZE: usize = 0;
+
+const LAZY_PLT_HEADER: [u8; LAZY_PLT_HEADER_SIZE] = [
+    0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+    0x41, 0x53, // push %r11
+    0xff, 0x35, 0, 0, 0, 0, // push GOTPLT+8(%rip)
+    0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+16(%rip)
+    0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+    0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+    0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+    0xcc, 0xcc, // (padding)
+];
+
+const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
+    0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+    0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+idx(%rip)
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+];
 
 #[unsafe(naked)]
 pub extern "C" fn dl_runtime_resolve() {
@@ -58,10 +79,11 @@ impl StaticReloc for X86_64Relocator {
     fn relocate<F>(
         core: &crate::CoreComponent,
         rel_type: &ElfRelType,
-        l: usize,
+        pltgot: &mut PltGotSection,
         target_base: usize,
         scope: &[&crate::format::Relocated],
         pre_find: &F,
+        lazy: bool,
     ) -> crate::Result<()>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -70,16 +92,47 @@ impl StaticReloc for X86_64Relocator {
         let r_sym = rel_type.r_symbol();
         let base = core.base();
         let append = rel_type.r_addend(base);
-        let offset = target_base - base + rel_type.r_offset();
-        let p = target_base + rel_type.r_offset();
+        let offset = rel_type.r_offset();
+        let p = base + rel_type.r_offset();
         match rel_type.r_type() as _ {
-            R_X86_64_PC32 | R_X86_64_PLT32 => {
+            R_X86_64_PC32 => {
                 if let Some(sym) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
-                    write_val(
-                        base,
-                        offset,
-                        (sym.wrapping_add_signed(append).wrapping_sub(p)) as u32,
-                    );
+                    if let Ok(val) =
+                        i32::try_from(sym.wrapping_add_signed(append).wrapping_sub(p) as isize)
+                    {
+                        write_val(base, offset, val);
+                        return Ok(());
+                    }
+                }
+            }
+            R_X86_64_PLT32 => {
+                if let Some(sym) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
+                    let val = if let Ok(val) =
+                        i32::try_from(sym.wrapping_add_signed(append).wrapping_sub(p))
+                    {
+                        val
+                    } else {
+                        let plt_entry = pltgot.add_plt_entry(r_sym);
+                        let plt_entry_addr = match plt_entry {
+                            PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
+                            PltEntry::Vacant { plt, pltgot } => {
+                                let plt_entry_addr = plt.as_ptr() as usize;
+                                plt.copy_from_slice(&PLT_ENTRY);
+                                *pltgot = sym;
+                                let call_offset =
+                                    (pltgot as *const _ as isize) - plt_entry_addr as isize - 10;
+                                plt[6..10].copy_from_slice(
+                                    &i32::try_from(call_offset).unwrap().to_ne_bytes(),
+                                );
+                                plt_entry_addr
+                            }
+                        };
+                        i32::try_from(
+                            plt_entry_addr.wrapping_add_signed(append).wrapping_sub(p) as isize
+                        )
+                        .unwrap()
+                    };
+                    write_val(base, offset, val);
                     return Ok(());
                 }
             }
@@ -88,4 +141,8 @@ impl StaticReloc for X86_64Relocator {
         panic!();
         Ok(())
     }
+}
+
+impl PltGotSection {
+    pub(crate) fn init_pltgot(&mut self) {}
 }

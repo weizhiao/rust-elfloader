@@ -6,7 +6,7 @@ use crate::{
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, format};
-use core::{any::Any, ptr::null};
+use core::{any::Any, fmt::Debug, ptr::null};
 use elf::abi::STT_GNU_IFUNC;
 
 pub(crate) mod dynamic_link;
@@ -154,7 +154,7 @@ where
 pub(crate) fn write_val<T>(base: usize, offset: usize, val: T) {
     unsafe {
         let rel_addr = (base + offset) as *mut T;
-        rel_addr.write(val)
+        rel_addr.write(val);
     };
 }
 
