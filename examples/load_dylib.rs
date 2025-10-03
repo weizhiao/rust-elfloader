@@ -13,7 +13,7 @@ fn main() {
     // Load and relocate dynamic library liba.so
     let liba = load_dylib!("target/liba.so")
         .unwrap()
-        .easy_relocate([], &pre_find)
+        .easy_relocate(&[], &pre_find)
         .unwrap();
     // Call function a in liba.so
     let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };

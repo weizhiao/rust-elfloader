@@ -378,7 +378,7 @@ impl<'a> SymbolVersion<'a> {
 }
 
 impl SymbolTable {
-    pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion> {
+    pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'_>> {
         if let Some(gnu_version) = &self.version {
             let ver_ndx = gnu_version.version_ids.get(sym_idx);
             if ver_ndx.index() <= 1 {
@@ -395,7 +395,7 @@ impl SymbolTable {
         None
     }
 
-    pub(crate) fn check_match(&self, sym_idx: usize, version: &Option<SymbolVersion>) -> bool {
+    pub(crate) fn check_match(&self, sym_idx: usize, version: Option<&SymbolVersion>) -> bool {
         if let Some(version) = version {
             let gnu_version = self.version.as_ref().unwrap();
             let ver_ndx = gnu_version.version_ids.get(sym_idx);

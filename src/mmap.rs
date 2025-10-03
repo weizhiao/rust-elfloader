@@ -10,7 +10,7 @@ use core::{
 };
 
 bitflags! {
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, Default)]
     /// Desired memory protection of a memory mapping.
     pub struct ProtFlags: c_int {
         /// Pages cannot be accessed.

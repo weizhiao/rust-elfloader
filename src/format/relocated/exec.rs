@@ -1,18 +1,17 @@
-use super::{ElfCommonPart, Relocated, create_lazy_scope};
+use super::RelocatedCommonPart;
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
-    arch::ElfPhdr,
-    loader::Builder,
+    format::{Relocated, create_lazy_scope},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{LazyScope, UnknownHandler, relocate_impl},
+    relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 impl Deref for ElfExec {
-    type Target = ElfCommonPart;
+    type Target = RelocatedCommonPart;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -21,7 +20,7 @@ impl Deref for ElfExec {
 
 /// An unrelocated executable file
 pub struct ElfExec {
-    inner: ElfCommonPart,
+    inner: RelocatedCommonPart,
 }
 
 impl Debug for ElfExec {
@@ -39,7 +38,7 @@ impl ElfExec {
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl IntoIterator<Item = &'iter RelocatedDylib<'scope>>,
+        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedExec<'lib>>
     where
@@ -57,7 +56,7 @@ impl ElfExec {
                 },
             });
         }
-        let mut helper = Vec::new();
+        let mut helper: Vec<&Relocated<'_>> = Vec::new();
         let temp = unsafe { &RelocatedDylib::from_core_component(self.core_component()) };
         if self.inner.symtab().is_some() {
             helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
@@ -96,7 +95,7 @@ impl ElfExec {
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl AsRef<[&'iter RelocatedDylib<'scope>]>,
+        scope: impl AsRef<[&'iter Relocated<'scope>]>,
         pre_find: &'find F,
         deal_unknown: &mut UnknownHandler,
         local_lazy_scope: Option<LazyScope<'lib>>,
@@ -129,13 +128,6 @@ impl ElfExec {
     }
 }
 
-impl Builder {
-    pub(crate) fn create_exec(self, phdrs: &[ElfPhdr]) -> ElfExec {
-        let inner = self.create_inner(phdrs, false);
-        ElfExec { inner }
-    }
-}
-
 impl<M: Mmap> Loader<M> {
     /// Load a executable file into memory
     pub fn easy_load_exec(&mut self, object: impl ElfObject) -> Result<ElfExec> {
@@ -154,8 +146,8 @@ impl<M: Mmap> Loader<M> {
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_impl(ehdr, object, lazy_bind)?;
-        Ok(builder.create_exec(phdrs))
+        let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+        Ok(ElfExec { inner })
     }
 
     /// Load a executable file into memory
@@ -170,8 +162,8 @@ impl<M: Mmap> Loader<M> {
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-        Ok(builder.create_exec(phdrs))
+        let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
+        Ok(ElfExec { inner })
     }
 }
 
