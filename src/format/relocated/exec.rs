@@ -36,14 +36,13 @@ impl ElfExec {
     /// Relocate the executable file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl IntoIterator<Item = &'iter T>,
+        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedExec<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
-        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -62,7 +61,7 @@ impl ElfExec {
         if self.inner.symtab().is_some() {
             helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
         }
-        let iter = scope.into_iter().map(|raw| raw.as_ref());
+        let iter = scope.into_iter();
         let local_lazy_scope = if self.is_lazy() {
             let mut libs = Vec::new();
             iter.for_each(|lib| {
@@ -151,21 +150,21 @@ impl<M: Mmap> Loader<M> {
         Ok(ElfExec { inner })
     }
 
-    // /// Load a executable file into memory
-    // /// # Note
-    // /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    // pub async fn load_exec_async(
-    //     &mut self,
-    //     mut object: impl ElfObjectAsync,
-    //     lazy_bind: Option<bool>,
-    // ) -> Result<ElfExec> {
-    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
-    //     if ehdr.is_dylib() {
-    //         return Err(parse_ehdr_error("file type mismatch"));
-    //     }
-    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-    //     Ok(builder.create_exec(phdrs))
-    // }
+    /// Load a executable file into memory
+    /// # Note
+    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    pub async fn load_exec_async(
+        &mut self,
+        mut object: impl ElfObjectAsync,
+        lazy_bind: Option<bool>,
+    ) -> Result<ElfExec> {
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        if ehdr.is_dylib() {
+            return Err(parse_ehdr_error("file type mismatch"));
+        }
+        let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
+        Ok(ElfExec { inner })
+    }
 }
 
 /// A executable file that has been relocated

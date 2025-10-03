@@ -78,6 +78,11 @@ impl<'symtab> SymbolInfo<'symtab> {
     pub fn cname(&self) -> Option<&CStr> {
         self.cname
     }
+
+    #[cfg(feature = "version")]
+    pub(crate) fn version(&self) -> Option<&super::version::SymbolVersion<'symtab>> {
+        self.version.as_ref()
+    }
 }
 
 impl SymbolTable {
@@ -110,7 +115,7 @@ impl SymbolTable {
             symtab: symtab.sh_addr as *const ElfSymbol,
             strtab,
             #[cfg(feature = "version")]
-            None,
+            version: None,
         }
     }
 

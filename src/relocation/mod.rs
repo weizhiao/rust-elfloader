@@ -6,7 +6,7 @@ use crate::{
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, format};
-use core::{any::Any, fmt::Debug, ptr::null};
+use core::{any::Any, ptr::null};
 use elf::abi::STT_GNU_IFUNC;
 
 pub(crate) mod dynamic_link;
@@ -39,7 +39,7 @@ impl<'temp> SymDef<'temp> {
 }
 
 #[cold]
-fn reloc_error(
+pub(crate) fn reloc_error(
     r_type: usize,
     r_sym: usize,
     custom_err: Box<dyn Any + Send + Sync>,
@@ -107,12 +107,21 @@ where
     F: Fn(&str) -> Option<*const ()>,
 {
     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
-    pre_find(syminfo.name())
-        .or_else(|| find_symdef_impl(core, scope, dynsym, &syminfo).map(|symdef| symdef.convert()))
+    if let Some(addr) = pre_find(syminfo.name()) {
+        #[cfg(feature = "log")]
+        log::trace!(
+            "binding file [{}] to [pre_find]: symbol [{}]",
+            core.name(),
+            syminfo.name()
+        );
+        return Some(addr as usize);
+    }
+    find_symdef_impl(core, scope, dynsym, &syminfo)
+        .map(|symdef| symdef.convert())
         .map(|addr| addr as usize)
 }
 
-pub(crate) fn find_symdef_impl<'iter, 'lib>(
+fn find_symdef_impl<'iter, 'lib>(
     core: &'lib CoreComponent,
     libs: &[&'iter Relocated],
     sym: &'lib ElfSymbol,

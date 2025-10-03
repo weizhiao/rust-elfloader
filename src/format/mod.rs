@@ -161,14 +161,13 @@ impl Elf {
     /// Relocate the elf file with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl IntoIterator<Item = &'iter T>,
+        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedElf<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
-        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
@@ -241,13 +240,51 @@ impl<'lib, T> Symbol<'lib, T> {
 unsafe impl<T: Send> Send for Symbol<'_, T> {}
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-#[derive(Clone)]
+/// An relocated elf object
+#[derive(Debug, Clone)]
 pub struct Relocated<'scope> {
     pub(crate) core: CoreComponent,
     pub(crate) _marker: PhantomData<&'scope ()>,
 }
 
 impl Relocated<'_> {
+    /// # Safety
+    /// The current elf object has not yet been relocated, so it is dangerous to use this
+    /// function to convert `CoreComponent` to `RelocateDylib`. And lifecycle information is lost
+    #[inline]
+    pub unsafe fn from_core_component(core: CoreComponent) -> Self {
+        Relocated {
+            core,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Gets the core component reference of the elf object.
+    /// # Safety
+    /// Lifecycle information is lost, and the dependencies of the current elf object can be prematurely deallocated,
+    /// which can cause serious problems.
+    #[inline]
+    pub unsafe fn core_component_ref(&self) -> &CoreComponent {
+        &self.core
+    }
+
+    /// # Safety
+    /// The caller needs to ensure that the parameters passed in come from a valid dynamic library.
+    #[inline]
+    pub unsafe fn new_uncheck(
+        name: CString,
+        base: usize,
+        dynamic: ElfDynamic,
+        phdrs: &'static [ElfPhdr],
+        segments: ElfSegments,
+        user_data: UserData,
+    ) -> Self {
+        Self {
+            core: CoreComponent::from_raw(name, base, dynamic, phdrs, segments, user_data),
+            _marker: PhantomData,
+        }
+    }
+
     /// Gets the symbol table.
     pub fn symtab(&self) -> &SymbolTable {
         unsafe { self.core.symtab().unwrap_unchecked() }
@@ -563,17 +600,20 @@ impl<M: Mmap> Loader<M> {
         }
     }
 
-    // /// Load a elf file into memory
-    // /// # Note
-    // /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    // pub async fn load_async(
-    //     &mut self,
-    //     mut object: impl ElfObjectAsync,
-    //     lazy_bind: Option<bool>,
-    // ) -> Result<Elf> {
-    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
-    //     let is_dylib = ehdr.is_dylib();
-    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-    //     Ok(builder.create_elf(phdrs, is_dylib))
-    // }
+    /// Load a elf file into memory
+    /// # Note
+    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    pub async fn load_async(
+        &mut self,
+        mut object: impl ElfObjectAsync,
+        lazy_bind: Option<bool>,
+    ) -> Result<Elf> {
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        let is_dylib = ehdr.is_dylib();
+        if is_dylib {
+            Ok(Elf::Dylib(self.load_dylib_async(object, lazy_bind).await?))
+        } else {
+            Ok(Elf::Exec(self.load_exec_async(object, lazy_bind).await?))
+        }
+    }
 }

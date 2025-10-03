@@ -81,7 +81,7 @@ impl ElfHashTable for ElfHash {
             let cur_symbol = unsafe { &*table.symtab.add(chain_idx) };
             let sym_name = table.strtab.get_str(cur_symbol.st_name());
             #[cfg(feature = "version")]
-            if sym_name == symbol.name && hashtab.check_match(chain_idx, &symbol.version) {
+            if sym_name == symbol.name() && table.check_match(chain_idx, symbol.version()) {
                 return Some(cur_symbol);
             }
             #[cfg(not(feature = "version"))]

@@ -7,6 +7,7 @@ use crate::{
         relocated::{RelocatedBuilder, RelocatedCommonPart},
     },
     mmap::Mmap,
+    object::ElfObjectAsync,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
@@ -47,7 +48,7 @@ impl ElfBuf {
         unsafe {
             Ok(core::slice::from_raw_parts(
                 self.buf.as_ptr().cast::<ElfPhdr>(),
-                self.buf.len() / size_of::<ElfPhdr>(),
+                (phdr_end - phdr_start) / size_of::<ElfPhdr>(),
             ))
         }
     }
@@ -66,7 +67,7 @@ impl ElfBuf {
         unsafe {
             Ok(core::slice::from_raw_parts_mut(
                 self.buf.as_mut_ptr().cast::<ElfShdr>(),
-                self.buf.len() / size_of::<ElfShdr>(),
+                (shdr_end - shdr_start) / size_of::<ElfShdr>(),
             ))
         }
     }
@@ -173,45 +174,29 @@ impl<M: Mmap> Loader<M> {
         Ok(builder.build(phdrs)?)
     }
 
-    // pub(crate) async fn load_async_impl(
-    //     &mut self,
-    //     ehdr: ElfHeader,
-    //     mut object: impl ElfObjectAsync,
-    //     lazy_bind: Option<bool>,
-    // ) -> Result<(Builder, &[ElfPhdr])> {
-    //     let init_fn = self.init_fn.clone();
-    //     let fini_fn = self.fini_fn.clone();
-    //     let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
-    //     // 创建加载动态库所需的空间，并同时映射min_vaddr对应的segment
-    //     let segments =
-    //         ElfSegments::create_segments::<M>(phdrs, ehdr.is_dylib(), object.as_fd().is_some())?;
-    //     let mut builder = Builder::new(
-    //         segments,
-    //         object.file_name().to_owned(),
-    //         lazy_bind,
-    //         ehdr,
-    //         init_fn,
-    //         fini_fn,
-    //     );
-    //     // 根据Phdr的类型进行不同操作
-    //     let mut last_addr = builder.segments.memory.as_ptr() as usize;
-    //     for phdr in phdrs {
-    //         if let Some(hook) = &self.hook {
-    //             builder.exec_hook(hook, phdr)?;
-    //         }
-    //         match phdr.p_type {
-    //             // 将segment加载到内存中
-    //             PT_LOAD => {
-    //                 builder
-    //                     .segments
-    //                     .load_segment_async::<M>(&mut object, phdr, &mut last_addr)
-    //                     .await?
-    //             }
-    //             _ => builder.parse_other_phdr::<M>(phdr),
-    //         }
-    //     }
-    //     Ok((builder, phdrs))
-    // }
+    pub(crate) async fn load_relocated_async<'loader>(
+        &'loader mut self,
+        ehdr: ElfHeader,
+        mut object: impl ElfObjectAsync,
+        lazy_bind: Option<bool>,
+    ) -> Result<RelocatedCommonPart> {
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+        let segments = phdr_segments.load_segments_async::<M>(&mut object).await?;
+        phdr_segments.mprotect::<M>()?;
+        let builder: RelocatedBuilder<'_, M> = RelocatedBuilder::new(
+            self.hook.as_ref(),
+            segments,
+            object.file_name().to_owned(),
+            lazy_bind,
+            ehdr,
+            init_fn,
+            fini_fn,
+        );
+        Ok(builder.build(phdrs)?)
+    }
 
     pub(crate) fn load_rel(
         &mut self,
@@ -238,7 +223,6 @@ impl<M: Mmap> Loader<M> {
             segments,
             mprotect,
             pltgot,
-            lazy_bind,
         );
         Ok(builder.build())
     }

@@ -13,6 +13,7 @@ CARGO=cross
 cargo clean
 
 if [ "${MINI_LOADER}" = "1" ]; then
+	"${CARGO}" build --target="${TARGET}"
 	"${CARGO}" ${OP} --target="${TARGET}" ${ARGS}
 else
 	"${CARGO}" -vv ${OP} --target="${TARGET}" --no-default-features --features "${FEATURES}"

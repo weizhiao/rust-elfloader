@@ -4,153 +4,159 @@
 [![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
 [![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
 [![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
+
 # elf_loader
-`elf_loader`能够从内存、文件加载并重定位各种形式的elf文件，包括`Executable file`、`Shared object file`和`Position-Independent Executable file`。  
 
-[文档](https://docs.rs/elf_loader/)
+⚡ **高性能、跨平台、无标准库依赖的ELF文件加载器** ⚡
 
-# 用途
-`elf_loader`能够加载各种elf文件，并留下了扩展功能的接口。它能够被使用在以下地方：
-* 在操作系统内核中使用它作为elf文件的加载器
-* 使用它实现Rust版本的动态链接器
-* 在嵌入式设备上使用它加载elf动态库  
+`elf_loader` 能够从内存或文件加载各种形式的ELF文件，并提供运行时高效链接（包括静态链接与动态链接）。无论您是在开发操作系统内核、嵌入式系统，还是需要动态加载ELF库的应用程序，`elf_loader` 都能提供卓越的性能和灵活性。
 
-# 优势
-### ✨ 可以在 `no_std` 环境中工作 ✨
-`elf_loader`不依赖Rust `std`，也不强制依赖`libc`和操作系统，因此它可以在内核和嵌入式设备等`no_std`环境中使用。
+[文档](https://docs.rs/elf_loader/) | [示例](https://github.com/weizhiao/rust-elfloader/tree/main/examples)
 
-### ✨ 可以在Windows上加载elf动态库 ✨
-详细内容可以看[windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader)
+---
 
-### ✨ 体积小 ✨
-`elf_loader`的体积非常小。基于`elf_loader`实现的[mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader)编译后的二进制文件大小仅为**26K**。下面是使用`bloat`工具分析二进制文件得到的结果：
+## 🎯 核心应用场景
+
+- **操作系统开发** - 作为内核中的ELF文件加载器
+- **动态链接器实现** - 构建Rust版本的动态链接器
+- **嵌入式系统** - 在资源受限设备上加载ELF动态库
+- **JIT编译系统** - 作为即时编译器的底层链接器
+- **跨平台开发** - 在Windows上加载ELF动态库（详见 [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader)）
+
+---
+
+## ✨ 卓越特性
+
+### 🚀 极致性能
+汲取 `musl` 和 `glibc` 中 `ld.so` 的实现精华，结合Rust的零成本抽象，提供接近原生的性能表现：
+
 ```shell
-cargo bloat --crates --release --target=x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
-    Finished `release` profile [optimized] target(s) in 0.28s
-    Analyzing target/x86_64-unknown-none/release/mini-loader
+# 性能基准测试对比
+elf_loader:new   36.478 µs  
+libloading:new   47.065 µs
 
- File  .text    Size Crate
-23.1%  47.9%  5.9KiB elf_loader
- 9.1%  18.9%  2.3KiB alloc
- 7.1%  14.8%  1.8KiB core
- 3.7%   7.7%    974B [Unknown]
- 3.2%   6.7%    854B linked_list_allocator
- 1.5%   3.0%    383B compiler_builtins
- 0.4%   0.8%    105B __rustc
-48.2% 100.0% 12.4KiB .text section size, the file size is 25.7KiB
-
-Note: numbers above are a result of guesswork. They are not 100% correct and never will be.
+elf_loader:get   10.477 ns 
+libloading:get   93.369 ns
 ```
 
-### ✨ 速度快 ✨
-本库吸取`musl`和`glibc`里`ld.so`实现的优点，并充分利用了Rust的一些特性（比如静态分发），可以生成性能出色的代码。  
-下面是性能测试的结果，你可以在Github Actions中的`bench` job中查看它：
-```shell
-elf_loader:new          time:   [36.333 µs 36.478 µs 36.628 µs]
-Found 9 outliers among 100 measurements (9.00%)
-  2 (2.00%) low mild
-  2 (2.00%) high mild
-  5 (5.00%) high severe
-Benchmarking libloading:new
-Benchmarking libloading:new: Warming up for 3.0000 s
+### 📦 超轻量级
+核心实现极其精简，基于 `elf_loader` 构建的 [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) 编译后仅 **34KB**！
 
-Benchmarking libloading:new: Collecting 100 samples in estimated 5.2174 s (111k iterations)
-Benchmarking libloading:new: Analyzing
-libloading:new          time:   [46.348 µs 47.065 µs 47.774 µs]
-Found 4 outliers among 100 measurements (4.00%)
-  3 (3.00%) high mild
-  1 (1.00%) high severe
+### 🔧 无标准库依赖
+完全支持 `no_std` 环境，不强制依赖 `libc` 或操作系统，可在内核和嵌入式设备中无缝使用。
 
-Benchmarking elf_loader:get
-Benchmarking elf_loader:get: Warming up for 3.0000 s
-Benchmarking elf_loader:get: Collecting 100 samples in estimated 5.0000 s (476M iterations)
-Benchmarking elf_loader:get: Analyzing
-elf_loader:get          time:   [10.459 ns 10.477 ns 10.498 ns]
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high severe
+### 🛡️ 编译期安全保障
+利用Rust的生命周期机制，在编译期检查ELF依赖关系，防止悬垂指针和use-after-free错误：
 
-Benchmarking libloading:get
-Benchmarking libloading:get: Warming up for 3.0000 s
-Benchmarking libloading:get: Collecting 100 samples in estimated 5.0002 s (54M iterations)
-Benchmarking libloading:get: Analyzing
-libloading:get          time:   [93.226 ns 93.369 ns 93.538 ns]
-Found 11 outliers among 100 measurements (11.00%)
-  7 (7.00%) high mild
-  4 (4.00%) high severe
+```rust
+// 如果依赖库在之前被销毁，编译将失败！
+let liba = load_dylib!("liba.so")?;
+let libb = load_dylib!("libb.so")?; // 依赖 liba
+// liba 在 libb 之前被销毁会导致编译错误
 ```
-需要注意的是elf_loader并不是一个动态链接器，它并不能自动解析动态库的依赖，不过它可以作为动态链接器的底层使用。
 
-### ✨ 非常容易移植，具有良好的可扩展性 ✨
-如果你想要移植`elf_loader`，你只需为你的平台实现 `Mmap`和`ElfObject` trait。在实现`Mmap` trait时可以参考`elf_loader`提供的默认实现：[os](https://github.com/weizhiao/rust-elfloader/tree/main/src/os)。  
-此外你可以使用本库提供的`hook`函数来拓展`elf_loader`的功能实现其他任何你想要的功能，在使用`hook`函数时可以参考`dlopen-rs`里的：[hook](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs)。
+### 🔄 高级功能支持
+- **延迟绑定** - 符号在首次调用时解析，提升启动性能
+- **RELR重定位** - 支持现代相对重定位格式，减少内存占用
+- **异步接口** - 为高并发场景提供异步加载能力
+- **高度可扩展** - 通过trait系统轻松移植到新平台
 
-### ✨ 提供异步接口 ✨
-`elf_loader`提供了加载elf文件的异步接口，这使得它在某些并发加载elf文件的场景下有更高的性能上限。不过你需要根据自己的应用场景实现 `Mmap`和`ElfObjectAsync` trait。比如不使用mmap来直接映射elf文件，转而使用mmap+文件读取的方式（mmap创建内存空间再通过文件读取将elf文件的内容读取到mmap创建的空间中）来加载elf文件，这样就能充分利用异步接口带来的优势。
+---
 
-### ✨ 编译期检查 ✨
-利用Rust的生命周期机制，在编译期检查elf文件的依赖库是否被提前销毁，大大提高了安全性。  
-比如说有三个被`elf_loader`加载的动态库`a`,`b`,`c`，其中`c`依赖`b`，`b`依赖`a`，如果`a`，`b`中的任意一个在`c` drop之前被drop了，那么将不会程序通过编译。（你可以在[examples/relocate](https://github.com/weizhiao/rust-elfloader/blob/main/examples/relocate_dylib.rs)中验证这一点）
+## 🏗️ 架构设计
 
-### ✨ 延迟绑定 ✨
-`elf_loader`支持延迟绑定，这意味着当一个符号被解析时，它不会被立即解析，而是会在第一次被调用时才被解析。
+### 易于移植
+只需为您的平台实现 `Mmap` 和 `ElfObject` trait即可完成移植。参考我们的 [默认实现](https://github.com/weizhiao/rust-elfloader/tree/main/src/os) 快速上手。
 
-### ✨ 支持RELR相对重定位格式 ✨
-`elf_loader`支持RELR相对重定位格式，有关RELR的详细内容可以看这里：[Relative relocations and RELR](https://maskray.me/blog/2021-10-31-relative-relocations-and-relr)。
+### 钩子函数扩展
+通过hook函数扩展功能，实现自定义加载逻辑，详见 [dlopen-rs hook示例](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs)。
 
+---
 
-# Feature
+## 📋 平台支持
 
-| 特性            | 描述                                 |
-| --------------- | ------------------------------------ |
-| use-syscall     | 使用`linux syscalls`作为后端         |
-| version         | 在解析符号时使用符号的版本信息       |
-| log             | 启用日志                             |
-| rel             | 将rel作为重定位条目的格式            |
-| portable-atomic | 支持没有native指针大小原子操作的目标 |
+| 指令集       | 支持状态 | 延迟绑定 | 测试覆盖 |
+| ------------ | -------- | -------- | -------- |
+| x86_64       | ✅        | ✅        | CI       |
+| AArch64      | ✅        | ✅        | CI       |
+| RISC-V 64/32 | ✅        | ✅        | CI/手动  |
+| LoongArch64  | ✅        | ✅        | CI       |
+| x86          | ✅        | ✅        | CI       |
+| ARM          | ✅        | ✅        | CI       |
 
-在没有操作系统的情况下请关闭`use-syscall`这个feature。
+---
 
-# 指令集支持
+## 🚀 快速开始
 
-| 指令集      | 支持 | 延迟绑定 | 测试       |
-| ----------- | ---- | -------- | ---------- |
-| x86_64      | ✅    | ✅        | ✅(CI)      |
-| aarch64     | ✅    | ✅        | ✅(CI)      |
-| riscv64     | ✅    | ✅        | ✅(CI)      |
-| riscv32     | ✅    | ✅        | ✅(Manual)  |
-| loongarch64 | ✅    | ✅        | ✅(CI) |
-| x86         | ✅    | ✅        | ✅(CI)      |
-| arm         | ✅    | ✅        | ✅(CI)      |
+### 添加依赖
+```toml
+[dependencies]
+elf_loader = "0.1"
+```
 
-# 示例
-## 加载一个简单的动态库
-
+### 基本用法
 ```rust
 use elf_loader::load_dylib;
 use std::collections::HashMap;
 
-fn main() {
-    fn print(s: &str) {
-        println!("{}", s);
-    }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 提供动态库所需的符号
+    let mut symbols = HashMap::new();
+    symbols.insert("print", print as *const ());
+    
+    let pre_find = |name: &str| -> Option<*const ()> {
+        symbols.get(name).copied()
+    };
 
-    // Symbols required by dynamic library liba.so
-    let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    // Load and relocate dynamic library liba.so
-    let liba = load_dylib!("target/liba.so")
-        .unwrap()
-        .easy_relocate([].iter(), &pre_find)
-        .unwrap();
-    // Call function a in liba.so
-    let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };
-    println!("{}", f());
+    // 加载并重定位动态库
+    let lib = load_dylib!("target/libexample.so")?
+        .easy_relocate([].iter(), &pre_find)?;
+    
+    // 调用库中的函数
+    let func = unsafe { lib.get::<fn() -> i32>("example_function")? };
+    println!("结果: {}", func());
+    
+    Ok(())
+}
+
+fn print(s: &str) {
+    println!("{}", s);
 }
 ```
 
-# 最低编译器版本支持
-Rust 1.88.0及以上
+---
 
-# 补充
-如果你在使用时遇到任何问题，都可以在github上提出issue，此外十分欢迎任何对elf加载器感兴趣的朋友贡献代码（改进elf_loader本身，增加样例，修改文档中存在的问题都可以）。如果觉得elf_loader对你有帮助的话不妨点个star吧。😊
+## ⚙️ 特性开关
+
+| 特性              | 描述                      |
+| ----------------- | ------------------------- |
+| `use-syscall`     | 使用Linux系统调用作为后端 |
+| `version`         | 在符号解析时使用版本信息  |
+| `log`             | 启用日志输出              |
+| `rel`             | 使用REL格式的重定位条目   |
+| `portable-atomic` | 支持无原生原子操作的目标  |
+
+**注意**: 在无操作系统的环境中请禁用 `use-syscall` 特性。
+
+---
+
+## 💡 系统要求
+
+- **最低Rust版本**: 1.88.0+
+- **支持平台**: 所有主要架构（详见平台支持表格）
+
+---
+
+## 🤝 贡献与支持
+
+我们热烈欢迎社区贡献！无论是改进核心功能、增加示例、完善文档还是修复问题，您的参与都将受到高度赞赏。
+
+- **问题反馈**: [GitHub Issues](https://github.com/weizhiao/elf_loader/issues)
+- **功能请求**: 欢迎提出新功能建议
+- **代码贡献**: 提交Pull Request
+
+如果这个项目对您有帮助，请给我们一个 ⭐ 以表示支持！
+
+---
+
+**立即开始使用 `elf_loader`，为您的项目带来高效的ELF加载能力！** 🎉

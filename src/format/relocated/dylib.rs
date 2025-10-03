@@ -1,21 +1,14 @@
 use super::RelocatedCommonPart;
 use crate::{
-    CoreComponent, Loader, Result, UserData,
-    arch::ElfPhdr,
-    dynamic::ElfDynamic,
-    format::{Relocated, Symbol, create_lazy_scope},
+    Loader, Result, UserData,
+    format::{Relocated, create_lazy_scope},
     mmap::Mmap,
     object::{ElfObject, ElfObjectAsync},
     parse_ehdr_error,
-    relocation::{
-        SymDef,
-        dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
-    },
-    segment::ElfSegments,
-    symbol::SymbolInfo,
+    relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
 };
-use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use core::{fmt::Debug, marker::PhantomData, ops::Deref};
+use alloc::{boxed::Box, vec::Vec};
+use core::{fmt::Debug, ops::Deref};
 
 /// An unrelocated dynamic library
 pub struct ElfDylib {
@@ -49,19 +42,18 @@ impl ElfDylib {
     /// Relocate the dynamic library with the given dynamic libraries and function closure.
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F, T>(
+    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
-        scope: impl IntoIterator<Item = &'iter T>,
+        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
         pre_find: &'find F,
     ) -> Result<RelocatedDylib<'lib>>
     where
         F: Fn(&str) -> Option<*const ()>,
-        T: AsRef<Relocated<'scope>> + 'scope,
         'scope: 'iter,
         'iter: 'lib,
         'find: 'lib,
     {
-        let iter = scope.into_iter().map(|raw| raw.as_ref());
+        let iter = scope.into_iter();
         let mut helper = Vec::new();
         let local_lazy_scope = if self.is_lazy() {
             let mut libs = Vec::new();
@@ -104,15 +96,13 @@ impl ElfDylib {
         'iter: 'lib,
         'find: 'lib,
     {
-        Ok(RelocatedDylib {
-            inner: relocate_impl(
-                self.inner,
-                scope.as_ref(),
-                pre_find,
-                deal_unknown,
-                local_lazy_scope,
-            )?,
-        })
+        relocate_impl(
+            self.inner,
+            scope.as_ref(),
+            pre_find,
+            deal_unknown,
+            local_lazy_scope,
+        )
     }
 }
 
@@ -138,170 +128,21 @@ impl<M: Mmap> Loader<M> {
         Ok(ElfDylib { inner })
     }
 
-    // /// Load a dynamic library into memory
-    // /// # Note
-    // /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    // pub async fn load_dylib_async(
-    //     &mut self,
-    //     mut object: impl ElfObjectAsync,
-    //     lazy_bind: Option<bool>,
-    // ) -> Result<ElfDylib> {
-    //     let ehdr = self.buf.prepare_ehdr(&mut object)?;
-    //     if !ehdr.is_dylib() {
-    //         return Err(parse_ehdr_error("file type mismatch"));
-    //     }
-    //     let (builder, phdrs) = self.load_async_impl(ehdr, object, lazy_bind).await?;
-    //     Ok(builder.create_dylib(phdrs))
-    // }
-}
-
-/// A dynamic library that has been relocated
-#[derive(Clone)]
-pub struct RelocatedDylib<'scope> {
-    inner: Relocated<'scope>,
-}
-
-impl<'scope> AsRef<Relocated<'scope>> for RelocatedDylib<'scope> {
-    fn as_ref(&self) -> &Relocated<'scope> {
-        &self
-    }
-}
-
-impl Debug for RelocatedDylib<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-impl<'scope> Deref for RelocatedDylib<'scope> {
-    type Target = Relocated<'scope>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl RelocatedDylib<'_> {
-    /// # Safety
-    /// The current elf object has not yet been relocated, so it is dangerous to use this
-    /// function to convert `CoreComponent` to `RelocateDylib`. And lifecycle information is lost
-    #[inline]
-    pub unsafe fn from_core_component(core: CoreComponent) -> Self {
-        RelocatedDylib {
-            inner: Relocated {
-                core,
-                _marker: PhantomData,
-            },
+    /// Load a dynamic library into memory
+    /// # Note
+    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    pub async fn load_dylib_async(
+        &mut self,
+        mut object: impl ElfObjectAsync,
+        lazy_bind: Option<bool>,
+    ) -> Result<ElfDylib> {
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        if !ehdr.is_dylib() {
+            return Err(parse_ehdr_error("file type mismatch"));
         }
-    }
-
-    /// Gets the core component reference of the elf object.
-    /// # Safety
-    /// Lifecycle information is lost, and the dependencies of the current elf object can be prematurely deallocated,
-    /// which can cause serious problems.
-    #[inline]
-    pub unsafe fn core_component_ref(&self) -> &CoreComponent {
-        &self.inner
-    }
-
-    /// # Safety
-    /// The caller needs to ensure that the parameters passed in come from a valid dynamic library.
-    #[inline]
-    pub unsafe fn new_uncheck(
-        name: CString,
-        base: usize,
-        dynamic: ElfDynamic,
-        phdrs: &'static [ElfPhdr],
-        segments: ElfSegments,
-        user_data: UserData,
-    ) -> Self {
-        Self {
-            inner: Relocated {
-                core: CoreComponent::from_raw(name, base, dynamic, phdrs, segments, user_data),
-                _marker: PhantomData,
-            },
-        }
-    }
-
-    /// Gets a pointer to a function or static variable by symbol name.
-    ///
-    /// The symbol is interpreted as-is; no mangling is done. This means that symbols like `x::y` are
-    /// most likely invalid.
-    ///
-    /// # Safety
-    /// Users of this API must specify the correct type of the function or variable loaded.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
-    /// # let mut loader = Loader::<MmapImpl>::new();
-    /// # let lib = loader
-    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
-    /// unsafe {
-    ///     let awesome_function: Symbol<unsafe extern fn(f64) -> f64> =
-    ///         lib.get("awesome_function").unwrap();
-    ///     awesome_function(0.42);
-    /// }
-    /// ```
-    /// A static variable may also be loaded and inspected:
-    /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
-    /// # let mut loader = Loader::<MmapImpl>::new();
-    /// # let lib = loader
-    /// #     .easy_load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();
-    /// unsafe {
-    ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
-    ///     **awesome_variable = 42.0;
-    /// };
-    /// ```
-    #[inline]
-    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        let syminfo = SymbolInfo::from_str(name, None);
-        let mut precompute = syminfo.precompute();
-        self.symtab()
-            .lookup_filter(&syminfo, &mut precompute)
-            .map(|sym| Symbol {
-                ptr: SymDef {
-                    sym: Some(sym),
-                    lib: self,
-                }
-                .convert() as _,
-                pd: PhantomData,
-            })
-    }
-
-    /// Load a versioned symbol from the elf object.
-    /// # Safety
-    /// Users of this API must specify the correct type of the function or variable loaded.
-    /// # Examples
-    /// ```no_run
-    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
-    /// # let mut loader = Loader::<MmapImpl>::new();
-    /// # let lib = loader
-    /// #     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-    /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
-    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
-    /// ```
-    #[cfg(feature = "version")]
-    #[inline]
-    pub unsafe fn get_version<'lib, T>(
-        &'lib self,
-        name: &str,
-        version: &str,
-    ) -> Option<Symbol<'lib, T>> {
-        let syminfo = SymbolInfo::from_str(name, Some(version));
-        let mut precompute = syminfo.precompute();
-        self.symtab()
-            .lookup_filter(&syminfo, &mut precompute)
-            .map(|sym| Symbol {
-                ptr: SymDef {
-                    sym: Some(sym),
-                    lib: self,
-                }
-                .convert() as _,
-                pd: PhantomData,
-            })
+        let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
+        Ok(ElfDylib { inner })
     }
 }
+
+pub type RelocatedDylib<'lib> = Relocated<'lib>;

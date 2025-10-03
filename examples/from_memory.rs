@@ -1,4 +1,4 @@
-use elf_loader::{RelocatedDylib, load_dylib};
+use elf_loader::load_dylib;
 use std::{fs::File, io::Read};
 
 fn main() {
@@ -8,8 +8,7 @@ fn main() {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     let liba = load_dylib!("target/liba.so", &bytes).unwrap();
-    let empty: [RelocatedDylib; 0] = [];
-    let a = liba.easy_relocate(&empty, &|_| None).unwrap();
+    let a = liba.easy_relocate(&[], &|_| None).unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     println!("{}", f());
 }

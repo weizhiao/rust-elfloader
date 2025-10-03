@@ -105,7 +105,7 @@ impl ElfHashTable for ElfGnuHash {
                 let cur_symbol = unsafe { &*cur_symbol_ptr };
                 let sym_name = table.strtab.get_str(cur_symbol.st_name());
                 #[cfg(feature = "version")]
-                if sym_name == symbol.name && hashtab.check_match(dynsym_idx, &symbol.version) {
+                if sym_name == symbol.name() && table.check_match(dynsym_idx, symbol.version()) {
                     return Some(cur_symbol);
                 }
                 #[cfg(not(feature = "version"))]

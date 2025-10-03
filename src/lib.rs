@@ -86,13 +86,12 @@ use core::{
     fmt::{Debug, Display},
 };
 use object::*;
-use relocation::dynamic_link::{DynamicRelocation, GLOBAL_SCOPE};
-use segment::ELFRelro;
+use relocation::dynamic_link::GLOBAL_SCOPE;
 
 pub use elf::abi;
 pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
-pub use format::{CoreComponent, CoreComponentRef, Elf, UserData};
+pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol, UserData};
 pub use loader::Loader;
 pub use relocation::find_symdef;
 

@@ -1,6 +1,7 @@
 //! Contains content related to the CPU instruction set
-use core::ops::{Deref, DerefMut};
-
+use crate::relocate_error;
+use alloc::{boxed::Box, string::ToString};
+use core::ops::{Add, Deref, DerefMut, Sub};
 use elf::abi::{
     SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
     STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
@@ -8,9 +9,65 @@ use elf::abi::{
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
+        pub(crate) type  StaticRelocator = X86_64Relocator;
+    }else {
+        pub(crate) type  StaticRelocator = DummyRelocator;
+        pub(crate) struct DummyRelocator;
+        pub(crate) const PLT_ENTRY_SIZE: usize = 16;
+        pub(crate) const LAZY_PLT_HEADER_SIZE: usize = 32;
+        pub(crate) const PLT_HEADER_SIZE: usize = 0;
+        pub(crate) const LAZY_PLT_ENTRY_SIZE: usize = 16;
+
+        const LAZY_PLT_HEADER: [u8; LAZY_PLT_HEADER_SIZE] = [
+            0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+            0x41, 0x53, // push %r11
+            0xff, 0x35, 0, 0, 0, 0, // push GOTPLT+8(%rip)
+            0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+16(%rip)
+            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+            0xcc, 0xcc, // (padding)
+        ];
+
+        pub(crate) const LAZY_PLT_ENTRY: [u8; LAZY_PLT_ENTRY_SIZE] = [
+            0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+            0x41, 0xbb, 0, 0, 0, 0, // mov $index_in_relplt, %r11d
+            0xff, 0x25, 0, 0, 0, 0, // jmp *foo@GOTPLT
+        ];
+
+        pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
+            0xf3, 0x0f, 0x1e, 0xfa, // endbr64
+            0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+idx(%rip)
+            0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // (padding)
+        ];
+
+        impl crate::relocation::static_link::StaticReloc for DummyRelocator {
+            fn relocate<F>(
+                _core: &crate::CoreComponent,
+                _rel_type: &ElfRelType,
+                _pltgot: &mut crate::segment::shdr::PltGotSection,
+                _scope: &[&crate::Relocated],
+                _pre_find: &F,
+            ) -> crate::Result<()>
+            where
+                F: Fn(&str) -> Option<*const ()>,
+            {
+                todo!()
+            }
+        }
+
+        impl crate::segment::shdr::PltGotSection{
+            pub(crate) fn init_pltgot(&mut self) {
+                todo!()
+            }
+        }
+    }
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(target_arch = "x86_64")]{
         mod x86_64;
         pub use x86_64::*;
-        pub(crate) type  StaticRelocator=X86_64Relocator;
     }else if #[cfg(target_arch = "riscv64")]{
         mod riscv64;
         pub use riscv64::*;
@@ -158,9 +215,14 @@ impl ElfRel {
     }
 
     #[inline]
-    pub fn r_addend(&self, base: usize) -> usize {
+    pub fn r_addend(&self, base: usize) -> isize {
         let ptr = (self.r_offset() + base) as *mut usize;
-        unsafe { ptr.read() }
+        unsafe { ptr.read() as isize }
+    }
+
+	#[inline]
+	pub(crate) fn set_offset(&mut self, offset: usize) {
+        self.rel.r_offset = offset as _;
     }
 }
 
@@ -304,6 +366,7 @@ impl ElfShdr {
         let len = (self.sh_size / self.sh_entsize) as usize;
         debug_assert!(core::mem::size_of::<T>() == self.sh_entsize as usize);
         debug_assert!(self.sh_size % self.sh_entsize == 0);
+        debug_assert!(self.sh_addr % self.sh_addralign == 0);
         unsafe { core::slice::from_raw_parts_mut(start as *mut T, len) }
     }
 }
@@ -340,6 +403,38 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
         got.add(DYLIB_OFFSET).write(dylib);
         got.add(RESOLVE_FUNCTION_OFFSET)
             .write(dl_runtime_resolve as usize);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RelocValue(pub usize);
+
+impl Add<isize> for RelocValue {
+    type Output = RelocValue;
+
+    fn add(self, rhs: isize) -> Self::Output {
+        RelocValue(self.0.wrapping_add_signed(rhs))
+    }
+}
+
+impl Sub<usize> for RelocValue {
+    type Output = RelocValue;
+    fn sub(self, rhs: usize) -> Self::Output {
+        RelocValue(self.0.wrapping_sub(rhs))
+    }
+}
+
+impl From<RelocValue> for usize {
+    fn from(value: RelocValue) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<RelocValue> for i32 {
+    type Error = crate::Error;
+
+    fn try_from(value: RelocValue) -> Result<Self, Self::Error> {
+        i32::try_from(value.0 as isize).map_err(|err| relocate_error(err.to_string(), Box::new(())))
     }
 }
 

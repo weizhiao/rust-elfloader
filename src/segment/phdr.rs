@@ -109,7 +109,6 @@ impl ElfPhdr {
             addr: Address::Relative(min_vaddr),
             prot,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
-            align: self.p_align as usize,
             len: memsz,
             content_size: filesz,
             zero_size: (self.p_memsz - self.p_filesz) as usize,

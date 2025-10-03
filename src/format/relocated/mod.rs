@@ -30,7 +30,7 @@ pub use exec::{ElfExec, RelocatedExec};
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
-use portable_atomic_util::{Arc, Weak};
+use portable_atomic_util::Arc;
 
 pub(crate) mod dylib;
 pub(crate) mod exec;
@@ -155,7 +155,7 @@ impl State {
                                 phdrs: ElfPhdrs::Mmap(&[]),
                                 fini: None,
                                 fini_array: None,
-                                fini_handler: Arc::new(|_, _| {}),
+                                fini_handler,
                                 segments,
                                 needed_libs: Box::new([]),
                                 user_data,

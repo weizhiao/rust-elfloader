@@ -33,7 +33,7 @@ pub struct PreCompute {
     fofs: usize,
     fmask: usize,
     hash: Option<u32>,
-    custom: Option<u64>,
+    _custom: Option<u64>,
 }
 
 impl HashTable {
@@ -112,7 +112,7 @@ impl SymbolInfo<'_> {
             fofs: gnuhash as usize / usize::BITS as usize,
             fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
             hash: None,
-            custom: None,
+            _custom: None,
         }
     }
 }

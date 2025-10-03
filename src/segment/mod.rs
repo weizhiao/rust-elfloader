@@ -40,7 +40,6 @@ impl Address {
 
 pub(crate) struct ElfSegment {
     addr: Address,
-    align: usize,
     prot: ProtFlags,
     flags: MapFlags,
     len: usize,
@@ -102,6 +101,19 @@ impl ElfSegment {
                 unsafe {
                     let dest = core::slice::from_raw_parts_mut(ptr.add(info.start), info.filesz);
                     object.read(dest, info.offset)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn copy_data_async(&self, object: &mut impl ElfObjectAsync) -> Result<()> {
+        if self.need_copy {
+            let ptr = self.addr.absolute_addr() as *mut u8;
+            for info in self.map_info.iter() {
+                unsafe {
+                    let dest = core::slice::from_raw_parts_mut(ptr.add(info.start), info.filesz);
+                    object.read_async(dest, info.offset).await?;
                 }
             }
         }
@@ -180,6 +192,30 @@ pub(crate) trait SegmentBuilder {
             // }
             segment.mmap_segment::<M>(object)?;
             segment.copy_data(object)?;
+            segment.fill_zero::<M>()?;
+        }
+        Ok(space)
+    }
+
+    async fn load_segments_async<M: Mmap>(
+        &mut self,
+        object: &mut impl ElfObjectAsync,
+    ) -> Result<ElfSegments> {
+        let space = self.create_space::<M>()?;
+        self.create_segments()?;
+        let segments = self.segments_mut();
+        let base = space.base();
+        for segment in segments.iter_mut() {
+            segment.rebase(base);
+            // if object.as_fd().is_some() {
+            //     if segment.addr.absolute_addr() + segment.total_size != space.base() + space.len() {
+            //         let len = param.addr + param.len - *last_address;
+            //         crate::os::virtual_free(*last_address, len)?;
+            //         *last_address = param.addr + param.len;
+            //     }
+            // }
+            segment.mmap_segment::<M>(object)?;
+            segment.copy_data_async(object).await?;
             segment.fill_zero::<M>()?;
         }
         Ok(space)

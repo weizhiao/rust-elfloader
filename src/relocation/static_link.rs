@@ -9,11 +9,11 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 
 pub(crate) struct StaticRelocation {
-    relocation: Box<[(&'static [ElfRelType], usize)]>,
+    relocation: Box<[&'static [ElfRelType]]>,
 }
 
 impl StaticRelocation {
-    pub(crate) fn new(relocation: Vec<(&'static [ElfRelType], usize)>) -> Self {
+    pub(crate) fn new(relocation: Vec<&'static [ElfRelType]>) -> Self {
         Self {
             relocation: relocation.into_boxed_slice(),
         }
@@ -31,20 +31,13 @@ impl ElfRelocatable {
         'iter: 'lib,
         'find: 'lib,
     {
-        for (reloc, target_base) in self.relocation.relocation.iter() {
+        for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
-                StaticRelocator::relocate(
-                    &self.core,
-                    rel,
-                    &mut self.pltgot,
-                    *target_base,
-                    scope,
-                    pre_find,
-                    self.lazy_bind,
-                )?;
+                StaticRelocator::relocate(&self.core, rel, &mut self.pltgot, scope, pre_find)?;
             }
         }
         (self.mprotect)()?;
+        (self.init)(None, self.init_array);
         Ok(Relocated {
             core: self.core,
             _marker: PhantomData,
@@ -57,10 +50,8 @@ pub(crate) trait StaticReloc {
         core: &CoreComponent,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        target_base: usize,
         scope: &[&Relocated],
         pre_find: &F,
-        lazy: bool,
     ) -> Result<()>
     where
         F: Fn(&str) -> Option<*const ()>;

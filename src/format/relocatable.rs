@@ -1,4 +1,4 @@
-use core::sync::atomic::AtomicBool;
+use core::{fmt::Debug, sync::atomic::AtomicBool};
 
 use crate::{
     CoreComponent, Loader, Result, UserData,
@@ -15,7 +15,7 @@ use crate::{
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use elf::abi::{SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
+use elf::abi::{SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
@@ -33,13 +33,13 @@ impl<M: Mmap> Loader<M> {
 pub(crate) struct RelocatableBuilder {
     name: CString,
     symtab: Option<SymbolTable>,
+    init_array: Option<&'static [fn()]>,
     init_fn: FnHandler,
     fini_fn: FnHandler,
     segments: ElfSegments,
     relocation: StaticRelocation,
     mprotect: Box<dyn Fn() -> Result<()>>,
     pltgot: PltGotSection,
-    lazy_bind: bool,
 }
 
 impl RelocatableBuilder {
@@ -51,7 +51,6 @@ impl RelocatableBuilder {
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,
-        lazy_bind: bool,
     ) -> Self {
         let base = segments.base();
         shdrs
@@ -61,6 +60,7 @@ impl RelocatableBuilder {
         pltgot.init_pltgot();
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
+        let mut init_array = None;
         for shdr in shdrs.iter() {
             match shdr.sh_type {
                 SHT_SYMTAB => {
@@ -80,7 +80,11 @@ impl RelocatableBuilder {
                     for rel in rels.iter_mut() {
                         rel.set_offset(section_base + rel.r_offset() - base);
                     }
-                    relocation.push((shdr.content(), section_base));
+                    relocation.push(shdr.content());
+                }
+                SHT_INIT_ARRAY => {
+                    let array: &[usize] = shdr.content_mut();
+                    init_array = Some(unsafe { core::mem::transmute(array) });
                 }
                 _ => {}
             }
@@ -94,7 +98,7 @@ impl RelocatableBuilder {
             mprotect,
             relocation: StaticRelocation::new(relocation),
             pltgot,
-            lazy_bind,
+            init_array,
         }
     }
 
@@ -121,7 +125,8 @@ impl RelocatableBuilder {
             pltgot: self.pltgot,
             relocation: self.relocation,
             mprotect: self.mprotect,
-            lazy_bind: self.lazy_bind,
+            init_array: self.init_array,
+            init: self.init_fn,
         }
     }
 }
@@ -131,7 +136,16 @@ pub struct ElfRelocatable {
     pub(crate) relocation: StaticRelocation,
     pub(crate) pltgot: PltGotSection,
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
-    pub(crate) lazy_bind: bool,
+    pub(crate) init: FnHandler,
+    pub(crate) init_array: Option<&'static [fn()]>,
+}
+
+impl Debug for ElfRelocatable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ElfRelocatable")
+            .field("core", &self.core)
+            .finish()
+    }
 }
 
 impl ElfRelocatable {
