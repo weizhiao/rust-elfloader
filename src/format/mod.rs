@@ -1,3 +1,9 @@
+//! ELF file format handling
+//!
+//! This module provides the core data structures and functionality for working
+//! with ELF files in various stages of processing: from raw ELF files to
+//! relocated and loaded libraries or executables.
+
 pub(crate) mod relocatable;
 pub(crate) mod relocated;
 
@@ -32,22 +38,46 @@ use alloc::sync::{Arc, Weak};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::{Arc, Weak};
 
+/// Internal data item for user-defined data storage
 struct DataItem {
+    /// Key identifier for the data item
     key: u8,
+
+    /// Optional boxed value stored with this key
     value: Option<Box<dyn Any>>,
 }
 
 /// User-defined data associated with the loaded ELF file
+///
+/// This structure allows users to associate custom data with loaded ELF files.
+/// It provides a simple key-value store where keys are bytes and values are
+/// boxed any-type objects.
 pub struct UserData {
+    /// Vector of data items stored as key-value pairs
     data: Vec<DataItem>,
 }
 
 impl UserData {
+    /// Creates an empty UserData instance
+    ///
+    /// # Returns
+    /// A new, empty UserData instance
     #[inline]
     pub const fn empty() -> Self {
         Self { data: Vec::new() }
     }
 
+    /// Inserts a key-value pair into the user data
+    ///
+    /// If a value with the same key already exists, it is replaced with the new value.
+    ///
+    /// # Arguments
+    /// * `key` - The key to associate with the value
+    /// * `value` - The boxed value to store
+    ///
+    /// # Returns
+    /// * `Some(old_value)` - If a value with this key already existed
+    /// * `None` - If this is a new key
     #[inline]
     pub fn insert(&mut self, key: u8, value: Box<dyn Any>) -> Option<Box<dyn Any>> {
         for item in &mut self.data {
@@ -64,6 +94,14 @@ impl UserData {
         None
     }
 
+    /// Retrieves a value by key from the user data
+    ///
+    /// # Arguments
+    /// * `key` - The key of the value to retrieve
+    ///
+    /// # Returns
+    /// * `Some(value)` - A reference to the boxed value if found
+    /// * `None` - If no value with this key exists
     #[inline]
     pub fn get(&self, key: u8) -> Option<&Box<dyn Any>> {
         self.data.iter().find_map(|item| {
@@ -78,26 +116,48 @@ impl UserData {
 impl Deref for Relocated<'_> {
     type Target = CoreComponent;
 
+    /// Dereferences to the underlying CoreComponent
+    ///
+    /// This allows direct access to the CoreComponent fields through the Relocated wrapper.
     fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
 
-/// An unrelocated elf file
+/// An unrelocated ELF file
+///
+/// This enum represents an ELF file that has been loaded into memory but
+/// has not yet undergone relocation. It can be either a dynamic library
+/// or an executable.
 #[derive(Debug)]
 pub enum Elf {
+    /// A dynamic library (shared object)
     Dylib(ElfDylib),
+
+    /// An executable file
     Exec(ElfExec),
 }
 
-/// A elf file that has been relocated
+/// An ELF file that has been relocated
+///
+/// This enum represents an ELF file that has been loaded and relocated.
+/// It maintains lifetime information to prevent premature deallocation
+/// of dependencies.
 #[derive(Debug, Clone)]
 pub enum RelocatedElf<'scope> {
+    /// A relocated dynamic library
     Dylib(RelocatedDylib<'scope>),
+
+    /// A relocated executable
     Exec(RelocatedExec<'scope>),
 }
 
 impl<'scope> RelocatedElf<'scope> {
+    /// Converts this RelocatedElf into a RelocatedDylib if it is one
+    ///
+    /// # Returns
+    /// * `Some(dylib)` - If this is a Dylib variant
+    /// * `None` - If this is an Exec variant
     #[inline]
     pub fn into_dylib(self) -> Option<RelocatedDylib<'scope>> {
         match self {
@@ -106,6 +166,11 @@ impl<'scope> RelocatedElf<'scope> {
         }
     }
 
+    /// Converts this RelocatedElf into a RelocatedExec if it is one
+    ///
+    /// # Returns
+    /// * `Some(exec)` - If this is an Exec variant
+    /// * `None` - If this is a Dylib variant
     #[inline]
     pub fn into_exec(self) -> Option<RelocatedExec<'scope>> {
         match self {
@@ -114,6 +179,11 @@ impl<'scope> RelocatedElf<'scope> {
         }
     }
 
+    /// Gets a reference to the RelocatedDylib if this is one
+    ///
+    /// # Returns
+    /// * `Some(dylib)` - If this is a Dylib variant
+    /// * `None` - If this is an Exec variant
     #[inline]
     pub fn as_dylib(&self) -> Option<&RelocatedDylib<'scope>> {
         match self {
@@ -126,6 +196,9 @@ impl<'scope> RelocatedElf<'scope> {
 impl Deref for Elf {
     type Target = RelocatedCommonPart;
 
+    /// Dereferences to the underlying RelocatedCommonPart
+    ///
+    /// This allows direct access to common fields shared by all ELF file types.
     fn deref(&self) -> &Self::Target {
         match self {
             Elf::Dylib(elf_dylib) => elf_dylib,
@@ -134,7 +207,18 @@ impl Deref for Elf {
     }
 }
 
-// 使用CoreComponentRef是防止出现循环引用
+/// Creates a lazy scope for symbol resolution during lazy binding
+///
+/// This function creates a LazyScope that can be used during lazy binding
+/// to resolve symbols. It searches through the provided libraries and
+/// uses the pre_find function as a fallback.
+///
+/// # Arguments
+/// * `libs` - Vector of CoreComponentRef instances to search for symbols
+/// * `pre_find` - Function to use for initial symbol lookup
+///
+/// # Returns
+/// A LazyScope that can be used for symbol resolution
 pub(crate) fn create_lazy_scope<F>(libs: Vec<CoreComponentRef>, pre_find: &'_ F) -> LazyScope<'_>
 where
     F: Fn(&str) -> Option<*const ()>,
@@ -143,6 +227,7 @@ where
     type Ptr<T> = Arc<T>;
     #[cfg(feature = "portable-atomic")]
     type Ptr<T> = Box<T>;
+
     // workaround unstable CoerceUnsized by create Box<dyn _> then convert using Arc::from
     // https://github.com/rust-lang/rust/issues/18598
     let closure: Ptr<dyn for<'a> Fn(&'a str) -> Option<*const ()>> = Ptr::new(move |name| {
@@ -158,9 +243,17 @@ where
 }
 
 impl Elf {
-    /// Relocate the elf file with the given dynamic libraries and function closure.
-    /// # Note
+    /// Relocate the ELF file with the given dynamic libraries and function closure.
+    ///
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
+    ///
+    /// # Arguments
+    /// * `scope` - Iterator over relocated libraries to use for symbol resolution
+    /// * `pre_find` - Function to use for initial symbol lookup
+    ///
+    /// # Returns
+    /// * `Ok(RelocatedElf)` - The relocated ELF file
+    /// * `Err(Error)` - If relocation fails
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
         scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
@@ -180,12 +273,27 @@ impl Elf {
         }
     }
 
-    /// Relocate the elf file with the given dynamic libraries and function closure.
+    /// Relocate the ELF file with the given dynamic libraries and function closure.
+    ///
+    /// This method provides more control over the relocation process compared to
+    /// [easy_relocate], allowing custom handling of unknown relocations and
+    /// specification of a local lazy scope.
+    ///
     /// # Note
     /// * During relocation, the symbol is first searched in the function closure `pre_find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
-    /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by elf_loader or failed relocations
+    /// * Relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
+    ///
+    /// # Arguments
+    /// * `scope` - Slice of relocated libraries to use for symbol resolution
+    /// * `pre_find` - Function to use for initial symbol lookup
+    /// * `deal_unknown` - Handler for unknown or failed relocations
+    /// * `local_lazy_scope` - Optional local scope for lazy binding
+    ///
+    /// # Returns
+    /// * `Ok(RelocatedElf)` - The relocated ELF file
+    /// * `Err(Error)` - If relocation fails
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
         scope: impl AsRef<[&'iter Relocated<'scope>]>,
@@ -217,40 +325,77 @@ impl Elf {
     }
 }
 
-/// A symbol from elf object
+/// A symbol from ELF object
+///
+/// This structure represents a symbol loaded from an ELF file, such as a
+/// function or global variable. It provides safe access to the symbol
+/// while maintaining proper lifetime information.
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
+    /// Raw pointer to the symbol data
     pub(crate) ptr: *mut (),
+
+    /// Phantom data to maintain lifetime information
     pd: PhantomData<&'lib T>,
 }
 
 impl<'lib, T> Deref for Symbol<'lib, T> {
     type Target = T;
+
+    /// Dereferences to the underlying symbol type
+    ///
+    /// This allows direct use of the symbol as if it were of type T.
     fn deref(&self) -> &T {
         unsafe { &*(&self.ptr as *const *mut _ as *const T) }
     }
 }
 
 impl<'lib, T> Symbol<'lib, T> {
+    /// Consumes the symbol and returns the raw pointer
+    ///
+    /// This method converts the symbol into a raw pointer, transferring
+    /// ownership to the caller.
+    ///
+    /// # Returns
+    /// A raw pointer to the symbol data
     pub fn into_raw(self) -> *const () {
         self.ptr
     }
 }
 
+// Safety: Symbol can be sent between threads if T can
 unsafe impl<T: Send> Send for Symbol<'_, T> {}
+
+// Safety: Symbol can be shared between threads if T can
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-/// An relocated elf object
+/// A relocated ELF object
+///
+/// This structure represents an ELF file that has been loaded and relocated
+/// in memory. It maintains references to its dependencies to prevent
+/// premature deallocation.
 #[derive(Debug, Clone)]
 pub struct Relocated<'scope> {
+    /// The core component containing the actual ELF data
     pub(crate) core: CoreComponent,
+
+    /// Phantom data to maintain lifetime information
     pub(crate) _marker: PhantomData<&'scope ()>,
 }
 
 impl Relocated<'_> {
+    /// Creates a Relocated instance from a CoreComponent
+    ///
     /// # Safety
-    /// The current elf object has not yet been relocated, so it is dangerous to use this
-    /// function to convert `CoreComponent` to `RelocateDylib`. And lifecycle information is lost
+    /// The current ELF object has not yet been relocated, so it is dangerous
+    /// to use this function to convert `CoreComponent` to `RelocateDylib`.
+    /// Lifecycle information is lost.
+    ///
+    /// # Arguments
+    /// * `core` - The CoreComponent to wrap
+    ///
+    /// # Returns
+    /// A new Relocated instance
     #[inline]
     pub unsafe fn from_core_component(core: CoreComponent) -> Self {
         Relocated {
@@ -259,17 +404,35 @@ impl Relocated<'_> {
         }
     }
 
-    /// Gets the core component reference of the elf object.
+    /// Gets the core component reference of the ELF object
+    ///
     /// # Safety
-    /// Lifecycle information is lost, and the dependencies of the current elf object can be prematurely deallocated,
-    /// which can cause serious problems.
+    /// Lifecycle information is lost, and the dependencies of the current
+    /// ELF object can be prematurely deallocated, which can cause serious problems.
+    ///
+    /// # Returns
+    /// A reference to the CoreComponent
     #[inline]
     pub unsafe fn core_component_ref(&self) -> &CoreComponent {
         &self.core
     }
 
+    /// Creates a new Relocated instance without validation
+    ///
     /// # Safety
-    /// The caller needs to ensure that the parameters passed in come from a valid dynamic library.
+    /// The caller needs to ensure that the parameters passed in come
+    /// from a valid dynamic library.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the ELF file
+    /// * `base` - The base address where the ELF is loaded
+    /// * `dynamic` - The parsed dynamic section
+    /// * `phdrs` - The program headers
+    /// * `segments` - The loaded segments
+    /// * `user_data` - User-defined data to associate with the ELF
+    ///
+    /// # Returns
+    /// A new Relocated instance
     #[inline]
     pub unsafe fn new_uncheck(
         name: CString,
@@ -285,18 +448,22 @@ impl Relocated<'_> {
         }
     }
 
-    /// Gets the symbol table.
+    /// Gets the symbol table
+    ///
+    /// # Returns
+    /// A reference to the SymbolTable
     pub fn symtab(&self) -> &SymbolTable {
         unsafe { self.core.symtab().unwrap_unchecked() }
     }
 
-    /// Gets a pointer to a function or static variable by symbol name.
+    /// Gets a pointer to a function or static variable by symbol name
     ///
-    /// The symbol is interpreted as-is; no mangling is done. This means that symbols like `x::y` are
-    /// most likely invalid.
+    /// The symbol is interpreted as-is; no mangling is done. This means
+    /// that symbols like `x::y` are most likely invalid.
     ///
     /// # Safety
-    /// Users of this API must specify the correct type of the function or variable loaded.
+    /// Users of this API must specify the correct type of the function
+    /// or variable loaded.
     ///
     /// # Examples
     /// ```no_run
@@ -311,6 +478,7 @@ impl Relocated<'_> {
     ///     awesome_function(0.42);
     /// }
     /// ```
+    ///
     /// A static variable may also be loaded and inspected:
     /// ```no_run
     /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader};
@@ -323,6 +491,13 @@ impl Relocated<'_> {
     ///     **awesome_variable = 42.0;
     /// };
     /// ```
+    ///
+    /// # Arguments
+    /// * `name` - The name of the symbol to look up
+    ///
+    /// # Returns
+    /// * `Some(symbol)` - If the symbol is found
+    /// * `None` - If the symbol is not found
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
         let syminfo = SymbolInfo::from_str(name, None);
@@ -339,9 +514,12 @@ impl Relocated<'_> {
             })
     }
 
-    /// Load a versioned symbol from the elf object.
+    /// Load a versioned symbol from the ELF object
+    ///
     /// # Safety
-    /// Users of this API must specify the correct type of the function or variable loaded.
+    /// Users of this API must specify the correct type of the function
+    /// or variable loaded.
+    ///
     /// # Examples
     /// ```no_run
     /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
@@ -351,6 +529,14 @@ impl Relocated<'_> {
     /// #        .unwrap().easy_relocate([].iter(), &|_|{None}).unwrap();;
     /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
     /// ```
+    ///
+    /// # Arguments
+    /// * `name` - The name of the symbol to look up
+    /// * `version` - The version of the symbol to look up
+    ///
+    /// # Returns
+    /// * `Some(symbol)` - If the symbol is found
+    /// * `None` - If the symbol is not found
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn get_version<'lib, T>(
@@ -373,43 +559,61 @@ impl Relocated<'_> {
     }
 }
 
+/// Internal representation of ELF program headers
 #[derive(Clone)]
 enum ElfPhdrs {
+    /// Program headers mapped from memory
     Mmap(&'static [ElfPhdr]),
+
+    /// Program headers stored in a vector
     Vec(Vec<ElfPhdr>),
 }
 
+/// Inner structure for CoreComponent
 pub(crate) struct CoreComponentInner {
-    /// is initialized
+    /// Indicates whether the component has been initialized
     is_init: AtomicBool,
-    /// file name
+
+    /// File name of the ELF object
     name: CString,
-    /// elf symbols
+
+    /// ELF symbols table
     pub(crate) symbols: Option<SymbolTable>,
-    /// dynamic
+
+    /// Dynamic section pointer
     dynamic: Option<NonNull<Dyn>>,
-    /// rela.plt
+
+    /// PLT relocations
     #[allow(unused)]
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
-    /// phdrs
+
+    /// Program headers
     phdrs: ElfPhdrs,
-    /// .fini
+
+    /// Finalization function
     fini: Option<fn()>,
-    /// .fini_array
+
+    /// Finalization array of functions
     fini_array: Option<&'static [fn()]>,
-    /// custom fini
+
+    /// Custom finalization handler
     fini_handler: FnHandler,
-    /// needed libs' name
+
+    /// Names of needed libraries
     needed_libs: Box<[&'static str]>,
-    /// user data
+
+    /// User-defined data
     user_data: UserData,
-    /// lazy binding scope
+
+    /// Lazy binding scope
     pub(crate) lazy_scope: Option<LazyScope<'static>>,
-    /// semgents
+
+    /// Memory segments
     pub(crate) segments: ElfSegments,
 }
 
 impl Drop for CoreComponentInner {
+    /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
             (self.fini_handler)(self.fini, self.fini_array);
@@ -418,27 +622,44 @@ impl Drop for CoreComponentInner {
 }
 
 /// `CoreComponentRef` is a version of `CoreComponent` that holds a non-owning reference to the managed allocation.
+#[derive(Clone)]
 pub struct CoreComponentRef {
+    /// Weak reference to the CoreComponentInner
     inner: Weak<CoreComponentInner>,
 }
 
 impl CoreComponentRef {
     /// Attempts to upgrade the Weak pointer to an Arc
+    ///
+    /// # Returns
+    /// * `Some(CoreComponent)` - If the upgrade is successful
+    /// * `None` - If the CoreComponent has been dropped
     pub fn upgrade(&self) -> Option<CoreComponent> {
         self.inner.upgrade().map(|inner| CoreComponent { inner })
     }
 }
 
-/// The core part of an elf object
+/// The core part of an ELF object
+///
+/// This structure represents the core data of an ELF object, including
+/// its metadata, symbols, segments, and other essential information.
 #[derive(Clone)]
 pub struct CoreComponent {
+    /// Shared reference to the inner component data
     pub(crate) inner: Arc<CoreComponentInner>,
 }
 
+// Safety: CoreComponentInner can be shared between threads
 unsafe impl Sync for CoreComponentInner {}
+
+// Safety: CoreComponentInner can be sent between threads
 unsafe impl Send for CoreComponentInner {}
 
 impl CoreComponent {
+    /// Sets the lazy scope for this component
+    ///
+    /// # Arguments
+    /// * `lazy_scope` - The lazy scope to set
     #[inline]
     pub(crate) fn set_lazy_scope(&self, lazy_scope: LazyScope) {
         // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
@@ -451,68 +672,101 @@ impl CoreComponent {
         };
     }
 
+    /// Marks the component as initialized
     #[inline]
     pub(crate) fn set_init(&self) {
         self.inner.is_init.store(true, Ordering::Relaxed);
     }
 
+    /// Creates a new Weak pointer to this allocation
+    ///
+    /// # Returns
+    /// A CoreComponentRef that holds a weak reference to this component
     #[inline]
-    /// Creates a new Weak pointer to this allocation.
     pub fn downgrade(&self) -> CoreComponentRef {
         CoreComponentRef {
             inner: Arc::downgrade(&self.inner),
         }
     }
 
-    /// Gets user data from the elf object.
+    /// Gets user data from the ELF object
+    ///
+    /// # Returns
+    /// A reference to the user data
     #[inline]
     pub fn user_data(&self) -> &UserData {
         &self.inner.user_data
     }
 
-    /// Gets the number of strong references to the elf object.
+    /// Gets the number of strong references to the ELF object
+    ///
+    /// # Returns
+    /// The number of strong (Arc) references
     #[inline]
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.inner)
     }
 
-    /// Gets the number of weak references to the elf object.
+    /// Gets the number of weak references to the ELF object
+    ///
+    /// # Returns
+    /// The number of weak references
     #[inline]
     pub fn weak_count(&self) -> usize {
         Arc::weak_count(&self.inner)
     }
 
-    /// Gets the name of the elf object.
+    /// Gets the name of the ELF object
+    ///
+    /// # Returns
+    /// The name of the ELF object as a string slice
     #[inline]
     pub fn name(&self) -> &str {
         self.inner.name.to_str().unwrap()
     }
 
-    /// Gets the C-style name of the elf object.
+    /// Gets the C-style name of the ELF object
+    ///
+    /// # Returns
+    /// The name of the ELF object as a C string
     #[inline]
     pub fn cname(&self) -> &CStr {
         &self.inner.name
     }
 
-    /// Gets the short name of the elf object.
+    /// Gets the short name of the ELF object
+    ///
+    /// This method returns just the filename portion without any path components.
+    ///
+    /// # Returns
+    /// The short name (filename only) of the ELF object
     #[inline]
     pub fn shortname(&self) -> &str {
         self.name().split('/').next_back().unwrap()
     }
 
-    /// Gets the base address of the elf object.
+    /// Gets the base address of the ELF object
+    ///
+    /// # Returns
+    /// The base address where the ELF object is loaded in memory
     #[inline]
     pub fn base(&self) -> usize {
         self.inner.segments.base()
     }
 
-    /// Gets the memory length of the elf object map.
+    /// Gets the memory length of the ELF object map
+    ///
+    /// # Returns
+    /// The total length of memory occupied by the ELF object
     #[inline]
     pub fn map_len(&self) -> usize {
         self.inner.segments.len()
     }
 
-    /// Gets the program headers of the elf object.
+    /// Gets the program headers of the ELF object
+    ///
+    /// # Returns
+    /// A slice of the program headers
     #[inline]
     pub fn phdrs(&self) -> &[ElfPhdr] {
         match &self.inner.phdrs {
@@ -521,29 +775,54 @@ impl CoreComponent {
         }
     }
 
-    /// Gets the address of the dynamic section.
+    /// Gets the address of the dynamic section
+    ///
+    /// # Returns
+    /// An optional NonNull pointer to the dynamic section
     #[inline]
     pub fn dynamic(&self) -> Option<NonNull<Dyn>> {
         self.inner.dynamic
     }
 
-    /// Gets the needed libs' name of the elf object.
+    /// Gets the needed libs' name of the ELF object
+    ///
+    /// # Returns
+    /// A slice of the names of libraries this ELF object depends on
     #[inline]
     pub fn needed_libs(&self) -> &[&str] {
         &self.inner.needed_libs
     }
 
-    /// Gets the symbol table.
+    /// Gets the symbol table
+    ///
+    /// # Returns
+    /// An optional reference to the symbol table
     #[inline]
     pub fn symtab(&self) -> Option<&SymbolTable> {
         self.inner.symbols.as_ref()
     }
 
+    /// Gets the segments
+    ///
+    /// # Returns
+    /// A reference to the ELF segments
     #[inline]
     pub(crate) fn segments(&self) -> &ElfSegments {
         &self.inner.segments
     }
 
+    /// Creates a CoreComponent from raw data
+    ///
+    /// # Arguments
+    /// * `name` - The name of the ELF file
+    /// * `base` - The base address where the ELF is loaded
+    /// * `dynamic` - The parsed dynamic section
+    /// * `phdrs` - The program headers
+    /// * `segments` - The loaded segments
+    /// * `user_data` - User-defined data to associate with the ELF
+    ///
+    /// # Returns
+    /// A new CoreComponent instance
     fn from_raw(
         name: CString,
         base: usize,
@@ -574,6 +853,7 @@ impl CoreComponent {
 }
 
 impl Debug for CoreComponent {
+    /// Formats the CoreComponent for debugging purposes
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Dylib")
             .field("name", &self.inner.name)
@@ -582,14 +862,32 @@ impl Debug for CoreComponent {
 }
 
 impl<M: Mmap> Loader<M> {
-    /// Load a elf file into memory
+    /// Load an ELF file into memory
+    ///
+    /// This is a convenience method that calls [load] with `lazy_bind` set to `None`.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load
+    ///
+    /// # Returns
+    /// * `Ok(Elf)` - The loaded ELF file
+    /// * `Err(Error)` - If loading fails
     pub fn easy_load(&mut self, object: impl ElfObject) -> Result<Elf> {
         self.load(object, None)
     }
 
-    /// Load a elf file into memory
+    /// Load an ELF file into memory
+    ///
     /// # Note
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load
+    /// * `lazy_bind` - Optional override for lazy binding behavior
+    ///
+    /// # Returns
+    /// * `Ok(Elf)` - The loaded ELF file
+    /// * `Err(Error)` - If loading fails
     pub fn load(&mut self, mut object: impl ElfObject, lazy_bind: Option<bool>) -> Result<Elf> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
@@ -600,9 +898,18 @@ impl<M: Mmap> Loader<M> {
         }
     }
 
-    /// Load a elf file into memory
+    /// Load an ELF file into memory asynchronously
+    ///
     /// # Note
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load
+    /// * `lazy_bind` - Optional override for lazy binding behavior
+    ///
+    /// # Returns
+    /// * `Ok(Elf)` - The loaded ELF file
+    /// * `Err(Error)` - If loading fails
     pub async fn load_async(
         &mut self,
         mut object: impl ElfObjectAsync,

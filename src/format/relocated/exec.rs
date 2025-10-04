@@ -1,3 +1,9 @@
+//! Executable file handling
+//!
+//! This module provides functionality for working with executable ELF files
+//! that have been loaded but not yet relocated. It includes support for
+//! both synchronous and asynchronous loading of executable files.
+
 use super::RelocatedCommonPart;
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
@@ -13,17 +19,31 @@ use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 impl Deref for ElfExec {
     type Target = RelocatedCommonPart;
 
+    /// Dereferences to the underlying RelocatedCommonPart
+    ///
+    /// This implementation allows direct access to the common ELF object
+    /// fields through the ElfExec wrapper.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
 /// An unrelocated executable file
+///
+/// This structure represents an executable ELF file that has been loaded
+/// into memory but has not yet undergone relocation. It contains all the
+/// necessary information to perform relocation and prepare the executable
+/// for execution.
 pub struct ElfExec {
+    /// The common part containing basic ELF object information
     inner: RelocatedCommonPart,
 }
 
 impl Debug for ElfExec {
+    /// Formats the ElfExec for debugging purposes
+    ///
+    /// This implementation provides a debug representation that includes
+    /// the executable name and its dependencies.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExec")
             .field("name", &self.inner.name())
@@ -33,9 +53,21 @@ impl Debug for ElfExec {
 }
 
 impl ElfExec {
-    /// Relocate the executable file with the given dynamic libraries and function closure.
+    /// Relocate the executable file with the given dynamic libraries and function closure
+    ///
+    /// This is a convenience method that performs relocation with default settings.
+    /// It creates a local lazy scope if lazy binding is enabled for this executable.
+    ///
     /// # Note
     /// During relocation, the symbol is first searched in the function closure `pre_find`.
+    ///
+    /// # Arguments
+    /// * `scope` - Iterator over relocated libraries to use for symbol resolution
+    /// * `pre_find` - Function to use for initial symbol lookup
+    ///
+    /// # Returns
+    /// * `Ok(RelocatedExec)` - The relocated executable
+    /// * `Err(Error)` - If relocation fails
     pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
         scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
@@ -47,6 +79,7 @@ impl ElfExec {
         'iter: 'lib,
         'find: 'lib,
     {
+        // If there are no relocations, we can return early
         if self.inner.relocation().is_empty() {
             return Ok(RelocatedExec {
                 entry: self.inner.entry,
@@ -56,11 +89,17 @@ impl ElfExec {
                 },
             });
         }
+
+        // Create a helper vector to store the relocation scope
         let mut helper: Vec<&Relocated<'_>> = Vec::new();
+
+        // Add the executable itself to the scope if it has a symbol table
         let temp = unsafe { &RelocatedDylib::from_core_component(self.core_component()) };
         if self.inner.symtab().is_some() {
             helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
         }
+
+        // Process the provided scope
         let iter = scope.into_iter();
         let local_lazy_scope = if self.is_lazy() {
             let mut libs = Vec::new();
@@ -75,6 +114,8 @@ impl ElfExec {
             });
             None
         };
+
+        // Perform the relocation and return the result
         Ok(RelocatedExec {
             entry: self.inner.entry,
             inner: relocate_impl(
@@ -87,12 +128,27 @@ impl ElfExec {
         })
     }
 
-    /// Relocate the executable file with the given dynamic libraries and function closure.
+    /// Relocate the executable file with the given dynamic libraries and function closure
+    ///
+    /// This method provides full control over the relocation process, allowing
+    /// custom handling of unknown relocations and specification of a local
+    /// lazy scope.
+    ///
     /// # Note
     /// * During relocation, the symbol is first searched in the function closure `pre_find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by efl_loader or failed relocations
-    /// * relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
+    /// * The `deal_unknown` function is used to handle relocation types not implemented by elf_loader or failed relocations
+    /// * Relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
     /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
+    ///
+    /// # Arguments
+    /// * `scope` - Slice of relocated libraries to use for symbol resolution
+    /// * `pre_find` - Function to use for initial symbol lookup
+    /// * `deal_unknown` - Handler for unknown or failed relocations
+    /// * `local_lazy_scope` - Optional local scope for lazy binding
+    ///
+    /// # Returns
+    /// * `Ok(RelocatedExec)` - The relocated executable
+    /// * `Err(Error)` - If relocation fails
     pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
         self,
         scope: impl AsRef<[&'iter Relocated<'scope>]>,
@@ -106,6 +162,7 @@ impl ElfExec {
         'iter: 'lib,
         'find: 'lib,
     {
+        // If there are no relocations, we can return early
         if self.inner.relocation().is_empty() {
             return Ok(RelocatedExec {
                 entry: self.inner.entry,
@@ -115,6 +172,8 @@ impl ElfExec {
                 },
             });
         }
+
+        // Perform the relocation and return the result
         Ok(RelocatedExec {
             entry: self.inner.entry,
             inner: relocate_impl(
@@ -129,52 +188,112 @@ impl ElfExec {
 }
 
 impl<M: Mmap> Loader<M> {
-    /// Load a executable file into memory
+    /// Load an executable file into memory
+    ///
+    /// This is a convenience method that calls [load_exec] with `lazy_bind` set to `None`.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load as an executable
+    ///
+    /// # Returns
+    /// * `Ok(ElfExec)` - The loaded executable
+    /// * `Err(Error)` - If loading fails
     pub fn easy_load_exec(&mut self, object: impl ElfObject) -> Result<ElfExec> {
         self.load_exec(object, None)
     }
 
-    /// Load a executable file into memory
+    /// Load an executable file into memory
+    ///
+    /// This method loads an executable ELF file into memory and prepares it
+    /// for relocation. The file is validated to ensure it is indeed an
+    /// executable and not a dynamic library.
+    ///
     /// # Note
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load as an executable
+    /// * `lazy_bind` - Optional override for lazy binding behavior
+    ///
+    /// # Returns
+    /// * `Ok(ElfExec)` - The loaded executable
+    /// * `Err(Error)` - If loading fails
     pub fn load_exec(
         &mut self,
         mut object: impl ElfObject,
         lazy_bind: Option<bool>,
     ) -> Result<ElfExec> {
+        // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
+
+        // Ensure the file is actually an executable and not a dynamic library
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
+
+        // Load the relocated common part
         let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+
+        // Wrap in ElfExec and return
         Ok(ElfExec { inner })
     }
 
-    /// Load a executable file into memory
+    /// Load an executable file into memory asynchronously
+    ///
+    /// This method loads an executable ELF file into memory asynchronously
+    /// and prepares it for relocation. The file is validated to ensure it
+    /// is indeed an executable and not a dynamic library.
+    ///
     /// # Note
     /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load as an executable
+    /// * `lazy_bind` - Optional override for lazy binding behavior
+    ///
+    /// # Returns
+    /// * `Ok(ElfExec)` - The loaded executable
+    /// * `Err(Error)` - If loading fails
     pub async fn load_exec_async(
         &mut self,
         mut object: impl ElfObjectAsync,
         lazy_bind: Option<bool>,
     ) -> Result<ElfExec> {
+        // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
+
+        // Ensure the file is actually an executable and not a dynamic library
         if ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
+
+        // Load the relocated common part asynchronously
         let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
+
+        // Wrap in ElfExec and return
         Ok(ElfExec { inner })
     }
 }
 
-/// A executable file that has been relocated
+/// An executable file that has been relocated
+///
+/// This structure represents an executable ELF file that has been loaded
+/// and relocated in memory, making it ready for execution. It contains
+/// the entry point and other information needed to run the executable.
 #[derive(Clone)]
 pub struct RelocatedExec<'scope> {
+    /// Entry point of the executable
     entry: usize,
+
+    /// The relocated ELF object
     inner: Relocated<'scope>,
 }
 
 impl RelocatedExec<'_> {
+    /// Gets the entry point of the executable
+    ///
+    /// # Returns
+    /// The virtual address of the entry point
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
@@ -182,6 +301,10 @@ impl RelocatedExec<'_> {
 }
 
 impl Debug for RelocatedExec<'_> {
+    /// Formats the RelocatedExec for debugging purposes
+    ///
+    /// This implementation delegates to the inner Relocated object's
+    /// debug implementation.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.inner.fmt(f)
     }
@@ -190,6 +313,10 @@ impl Debug for RelocatedExec<'_> {
 impl Deref for RelocatedExec<'_> {
     type Target = CoreComponent;
 
+    /// Dereferences to the underlying CoreComponent
+    ///
+    /// This implementation allows direct access to the CoreComponent
+    /// fields through the RelocatedExec wrapper.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }

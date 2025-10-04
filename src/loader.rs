@@ -125,6 +125,7 @@ impl<M: Mmap> Loader<M> {
         self
     }
 
+    /// Set the finalization function handler
     pub fn set_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
         self.fini_fn = fini_fn;
         self
@@ -150,6 +151,7 @@ impl<M: Mmap> Loader<M> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
+    /// Load a relocated ELF object
     pub(crate) fn load_relocated<'loader>(
         &'loader mut self,
         ehdr: ElfHeader,
@@ -174,6 +176,7 @@ impl<M: Mmap> Loader<M> {
         Ok(builder.build(phdrs)?)
     }
 
+    /// Load a relocated ELF object asynchronously
     pub(crate) async fn load_relocated_async<'loader>(
         &'loader mut self,
         ehdr: ElfHeader,
@@ -198,6 +201,7 @@ impl<M: Mmap> Loader<M> {
         Ok(builder.build(phdrs)?)
     }
 
+    /// Load a relocatable ELF object
     pub(crate) fn load_rel(
         &mut self,
         ehdr: ElfHeader,
