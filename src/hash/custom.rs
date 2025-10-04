@@ -4,17 +4,22 @@
 //! when standard ELF hash sections (.hash or .gnu.hash) are not available.
 //! It uses the hashbrown crate for efficient hash table operations.
 
-use core::hash::BuildHasher;
-
-use alloc::vec::Vec;
-use elf::abi::STT_FILE;
-use hashbrown::{DefaultHashBuilder, HashMap};
-
 use crate::{
     arch::{ElfShdr, ElfSymbol},
     hash::{ElfHashTable, PreCompute},
     symbol::{ElfStringTable, SymbolInfo, SymbolTable},
 };
+use core::hash::{Hash, Hasher};
+use elf::abi::STT_FILE;
+use foldhash::{SharedSeed, fast::FoldHasher};
+use hashbrown::HashTable;
+
+struct TableEntry {
+    name: &'static str,
+    idx: usize,
+}
+
+const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
 /// Custom ELF hash table implementation
 ///
@@ -23,7 +28,7 @@ use crate::{
 /// standard ELF hash sections are not available.
 pub(crate) struct CustomHash {
     /// Hash map from symbol names to symbol indices
-    map: HashMap<Vec<u8>, usize>,
+    map: HashTable<TableEntry>,
 }
 
 impl CustomHash {
@@ -44,8 +49,7 @@ impl CustomHash {
         let symbols: &mut [ElfSymbol] = symtab.content_mut();
 
         // Create a hash map with capacity for all symbols
-        let mut map =
-            HashMap::with_capacity_and_hasher(symbols.len(), DefaultHashBuilder::default());
+        let mut map = HashTable::with_capacity(symbols.len());
 
         // Populate the hash map with symbol names and indices
         for (idx, symbol) in symbols.iter_mut().enumerate() {
@@ -56,7 +60,10 @@ impl CustomHash {
 
             // Get the symbol name and add it to the hash map
             let name = strtab.get_str(symbol.st_name() as usize);
-            map.insert(name.as_bytes().to_vec(), idx);
+            let hash = Self::hash(name.as_bytes());
+            map.insert_unique(hash, TableEntry { name, idx }, |val| {
+                Self::hash(val.name.as_bytes())
+            });
         }
 
         Self { map }
@@ -75,7 +82,9 @@ impl ElfHashTable for CustomHash {
     /// # Returns
     /// The computed hash value
     fn hash(name: &[u8]) -> u64 {
-        DefaultHashBuilder::default().hash_one(name)
+        let mut hasher = HASHER.clone();
+        name.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Get the number of symbols in the hash table
@@ -88,12 +97,14 @@ impl ElfHashTable for CustomHash {
 
     /// Look up a symbol in the custom hash table
     ///
-    /// This method performs a symbol lookup using the hashbrown HashMap.
+    /// This method performs a symbol lookup using the hashbrown HashMap,
+    /// utilizing precomputed hash values from the PreCompute structure
+    /// for improved performance.
     ///
     /// # Arguments
     /// * `table` - The symbol table to search in
     /// * `symbol` - Information about the symbol to look up
-    /// * `_precompute` - Precomputed hash values (unused in this implementation)
+    /// * `precompute` - Precomputed hash values for faster lookup
     ///
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
@@ -101,15 +112,24 @@ impl ElfHashTable for CustomHash {
     fn lookup<'sym>(
         table: &'sym SymbolTable,
         symbol: &SymbolInfo,
-        _precompute: &mut PreCompute,
+        precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol> {
-        // TODO: optimize
-        table
-            .hashtab
-            .into_customhash()
-            .unwrap()
+        // Get reference to the custom hash table
+        let custom_hash = table.hashtab.into_customhash().unwrap();
+        let name = symbol.name();
+        // Get or compute the hash value for the symbol
+        let hash = if let Some(hash) = precompute.custom {
+            hash
+        } else {
+            let hash = Self::hash(name.as_bytes());
+            precompute.custom = Some(hash);
+            hash
+        };
+
+        // Try to find the symbol using the precomputed hash
+        custom_hash
             .map
-            .get(symbol.name().as_bytes())
-            .map(|idx| table.symbol_idx(*idx).0)
+            .find(hash, |entry| entry.name == name)
+            .map(|entry| table.symbol_idx(entry.idx).0)
     }
 }

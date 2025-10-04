@@ -108,30 +108,10 @@ pub struct PreCompute {
     hash: Option<u32>,
 
     /// Custom hash value (reserved for future use)
-    _custom: Option<u64>,
+    custom: Option<u64>,
 }
 
 impl HashTable {
-    /// Compute the hash value for a symbol name.
-    ///
-    /// This method computes a hash value for the given symbol name using
-    /// the hash algorithm appropriate for the hash table type.
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name as a byte slice.
-    ///
-    /// # Returns
-    /// The computed hash value.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn hash(&self, name: &[u8]) -> u64 {
-        match &self {
-            HashTable::Gnu(_) => ElfGnuHash::hash(name),
-            HashTable::Elf(_) => ElfHash::hash(name),
-            HashTable::Custom(_) => CustomHash::hash(name),
-        }
-    }
-
     /// Get the number of symbols in the hash table.
     ///
     /// # Returns
@@ -262,7 +242,7 @@ impl SymbolInfo<'_> {
             fofs: gnuhash as usize / usize::BITS as usize,
             fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
             hash: None,
-            _custom: None,
+            custom: None,
         }
     }
 }
