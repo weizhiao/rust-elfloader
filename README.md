@@ -1,3 +1,7 @@
+<p align="center">
+    <img src="./docs/imgs/logo.jpg">
+</p>
+
 [![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
@@ -5,7 +9,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
 [![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
 
-# elf_loader
+# elf loader
 
 English | [中文](README_zh.md)  
 
@@ -158,6 +162,12 @@ We warmly welcome community contributions! Whether it's improving core functiona
 - **Code Contribution**: Submit Pull Requests
 
 If this project is helpful to you, please give us a ⭐ to show your support!
+
+## 🎈Contributors
+
+<a href="https://github.com/weizhiao/rust-elfloader/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="Contributors"/>
+</a>
 
 ---
 

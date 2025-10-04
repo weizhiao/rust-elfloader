@@ -1,3 +1,7 @@
+<p align="center">
+	<img src="./docs/imgs/logo.jpg">
+</p>
+
 [![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
 [![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
@@ -156,6 +160,12 @@ fn print(s: &str) {
 - **代码贡献**: 提交Pull Request
 
 如果这个项目对您有帮助，请给我们一个 ⭐ 以表示支持！
+
+## 🎈贡献者
+
+<a href="https://github.com/weizhiao/rust-elfloader/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="Contributors"/>
+</a>
 
 ---
 
