@@ -7,9 +7,9 @@
 
 # elf_loader
 
-⚡ **高性能、跨平台、无标准库依赖的ELF文件加载器** ⚡
+⚡ **高性能、跨平台、no_std兼容的ELF文件加载器** ⚡
 
-`elf_loader` 能够从内存或文件加载各种形式的ELF文件，并提供运行时高效链接（包括静态链接与动态链接）。无论您是在开发操作系统内核、嵌入式系统，还是需要动态加载ELF库的应用程序，`elf_loader` 都能提供卓越的性能和灵活性。
+`elf_loader` 能够从内存或文件加载各种形式的ELF文件，并提供运行时高效链接（包括静态链接与动态链接）。无论您是在开发操作系统内核、嵌入式系统、JIT编译器，还是需要动态加载ELF库的应用程序，`elf_loader` 都能提供卓越的性能和灵活性。
 
 [文档](https://docs.rs/elf_loader/) | [示例](https://github.com/weizhiao/rust-elfloader/tree/main/examples)
 
@@ -42,7 +42,7 @@ libloading:get   93.369 ns
 ### 📦 超轻量级
 核心实现极其精简，基于 `elf_loader` 构建的 [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) 编译后仅 **34KB**！
 
-### 🔧 无标准库依赖
+### 🔧 no_std兼容
 完全支持 `no_std` 环境，不强制依赖 `libc` 或操作系统，可在内核和嵌入式设备中无缝使用。
 
 ### 🛡️ 编译期安全保障
@@ -75,14 +75,14 @@ let libb = load_dylib!("libb.so")?; // 依赖 liba
 
 ## 📋 平台支持
 
-| 指令集       | 支持状态 | 延迟绑定 | 测试覆盖 |
-| ------------ | -------- | -------- | -------- |
-| x86_64       | ✅        | ✅        | CI       |
-| AArch64      | ✅        | ✅        | CI       |
-| RISC-V 64/32 | ✅        | ✅        | CI/手动  |
-| LoongArch64  | ✅        | ✅        | CI       |
-| x86          | ✅        | ✅        | CI       |
-| ARM          | ✅        | ✅        | CI       |
+| 指令集       | 动态链接 | 延迟绑定 | 静态链接 | 测试覆盖 |
+| ------------ | -------- | -------- | -------- | -------- |
+| x86_64       | ✅        | ✅        | ✅        | CI       |
+| AArch64      | ✅        | ✅        | TODO     | CI       |
+| RISC-V 64/32 | ✅        | ✅        | TODO     | CI/手动  |
+| LoongArch64  | ✅        | ✅        | TODO     | CI       |
+| x86          | ✅        | ✅        | TODO     | CI       |
+| ARM          | ✅        | ✅        | TODO     | CI       |
 
 ---
 

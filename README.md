@@ -9,152 +9,156 @@
 
 English | [中文](README_zh.md)  
 
-`elf_loader` can load and relocate various forms of ELF files from memory or files, including `Executable file`, `Shared object file`, and `Position-Independent Executable file`.
+⚡ **High-performance, cross-platform, no-std compatible ELF file loader** ⚡
 
-[Documentation](https://docs.rs/elf_loader/)
+`elf_loader` can load various forms of ELF files from either memory or storage, and provides efficient runtime linking, including both static and dynamic linking. Whether you are developing an OS kernel, an embedded system, a JIT compiler, or an application that requires dynamic loading of ELF libraries, `elf_loader` delivers exceptional performance and flexibility.
 
-# Usage
-`elf_loader` can load various ELF files and provides interfaces for extended functionality. It can be used in the following areas:
-* Use it as an ELF file loader in operating system kernels.
-* Use it to implement a Rust version of the dynamic linker.
-* Use it to load ELF dynamic libraries on embedded devices.
+[Documentation](https://docs.rs/elf_loader/) | [Examples](https://github.com/weizhiao/rust-elfloader/tree/main/examples)
 
-# Capabilities
-### ✨ Works in `no_std` environments ✨
-`elf_loader` does not depend on Rust `std`, nor does it enforce `libc` and OS dependencies, so it can be used in `no_std` environments such as kernel and embedded devices.
+---
 
-### ✨ Load ELF dynamic libraries on  Windows ✨
-`elf_loader` can load ELF dynamic libraries on Windows. See [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader).
+## 🎯 Core Use Cases
 
-### ✨ Compact Size ✨
-The `elf_loader` is extremely small in size. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) implemented based on `elf_loader` compiles to a binary file of only **26KB**. Below are the results from analyzing the binary using the `bloat` tool:
-```shell
-cargo bloat --crates --release --target=x86_64-unknown-none -Zbuild-std=core,alloc,panic_abort -Zbuild-std-features=panic_immediate_abort,optimize_for_size
-    Finished `release` profile [optimized] target(s) in 0.28s
-    Analyzing target/x86_64-unknown-none/release/mini-loader
+- **Operating System Development** - As an ELF file loader in kernel
+- **Dynamic Linker Implementation** - Building a Rust version of the dynamic linker
+- **Embedded Systems** - Loading ELF dynamic libraries on resource-constrained devices
+- **JIT Compilation Systems** - As a low-level linker for Just-In-Time compilers
+- **Cross-platform Development** - Loading ELF dynamic libraries on Windows (see [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader))
 
- File  .text    Size Crate
-23.1%  47.9%  5.9KiB elf_loader
- 9.1%  18.9%  2.3KiB alloc
- 7.1%  14.8%  1.8KiB core
- 3.7%   7.7%    974B [Unknown]
- 3.2%   6.7%    854B linked_list_allocator
- 1.5%   3.0%    383B compiler_builtins
- 0.4%   0.8%    105B __rustc
-48.2% 100.0% 12.4KiB .text section size, the file size is 25.7KiB
+---
 
-Note: numbers above are a result of guesswork. They are not 100% correct and never will be.
-```
+## ✨ Outstanding Features
 
-### ✨ Fast speed ✨
-This library draws on the strengths of `musl` and `glibc`'s `ld.so` implementation and fully utilizes some features of Rust (such as static dispatch), allowing it to generate `high-performance` code.   
-Below are the performance test results. You can view them in the `bench` job on GitHub Actions.
+### 🚀 Extreme Performance
+Drawing on the implementation essence of `musl` and `glibc`'s `ld.so`, combined with Rust's zero-cost abstractions, it delivers near-native performance:
 
 ```shell
-elf_loader:new          time:   [36.333 µs 36.478 µs 36.628 µs]
-Found 9 outliers among 100 measurements (9.00%)
-  2 (2.00%) low mild
-  2 (2.00%) high mild
-  5 (5.00%) high severe
-Benchmarking libloading:new
-Benchmarking libloading:new: Warming up for 3.0000 s
+# Performance benchmark comparison
+elf_loader:new   36.478 µs  
+libloading:new   47.065 µs
 
-Benchmarking libloading:new: Collecting 100 samples in estimated 5.2174 s (111k iterations)
-Benchmarking libloading:new: Analyzing
-libloading:new          time:   [46.348 µs 47.065 µs 47.774 µs]
-Found 4 outliers among 100 measurements (4.00%)
-  3 (3.00%) high mild
-  1 (1.00%) high severe
-
-Benchmarking elf_loader:get
-Benchmarking elf_loader:get: Warming up for 3.0000 s
-Benchmarking elf_loader:get: Collecting 100 samples in estimated 5.0000 s (476M iterations)
-Benchmarking elf_loader:get: Analyzing
-elf_loader:get          time:   [10.459 ns 10.477 ns 10.498 ns]
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high severe
-
-Benchmarking libloading:get
-Benchmarking libloading:get: Warming up for 3.0000 s
-Benchmarking libloading:get: Collecting 100 samples in estimated 5.0002 s (54M iterations)
-Benchmarking libloading:get: Analyzing
-libloading:get          time:   [93.226 ns 93.369 ns 93.538 ns]
-Found 11 outliers among 100 measurements (11.00%)
-  7 (7.00%) high mild
-  4 (4.00%) high severe
+elf_loader:get   10.477 ns 
+libloading:get   93.369 ns
 ```
-It's important to note that `elf_loader` is not a dynamic linker and cannot automatically resolve dynamic library dependencies. However, it can serve as the underlying layer for implementing a dynamic linker.
 
-### ✨ Very easy to port and has good extensibility ✨
-If you want to port `elf_loader`, you only need to implement the `Mmap` and `ElfObject` traits for your platform. When implementing the `Mmap` trait, you can refer to the default implementation provided by `elf_loader`: [os](https://github.com/weizhiao/rust-elfloader/tree/main/src/os). In addition, you can use the `hook` functions provided by this library to extend the functionality of `elf_loader` to implement any other features you want. When using the `hook` functions, you can refer to: [hook](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs) in `dlopen-rs`.
+### 📦 Ultra Lightweight
+The core implementation is extremely compact. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) built on `elf_loader` compiles to only **34KB**!
 
-### ✨ Provides asynchronous interfaces ✨
-`elf_loader` provides asynchronous interfaces for loading ELF files, which can achieve higher performance in scenarios where ELF files are loaded concurrently.   
-However, you need to implement the `Mmap` and `ElfObjectAsync` traits according to your application scenario. For example, instead of using `mmap` to directly map ELF files, you can use a combination of `mmap` and file reading (`mmap` creates memory space, and then the content of the ELF file is read into the space created by `mmap`) to load ELF files, thus fully utilizing the advantages brought by the asynchronous interface.
+### 🔧 No-std Compatible
+Fully supports `no_std` environments without enforcing `libc` or OS dependencies, seamlessly usable in kernels and embedded devices.
 
-### ✨ Compile-time checking ✨
-Utilize Rust's lifetime mechanism to check at compile time whether the dependent libraries of a dynamic library are deallocated prematurely.   
-For example, there are three dynamic libraries loaded by `elf_loader`: `a`, `b`, and `c`. Library `c` depends on `b`, and `b` depends on `a`. If either `a` or `b` is dropped before `c` is dropped, the program will not pass compilation. (You can try this in the [examples/relocate](https://github.com/weizhiao/rust-elfloader/blob/main/examples/relocate_dylib.rs).)
+### 🛡️ Compile-time Safety
+Utilizing Rust's lifetime mechanism to check ELF dependency relationships at compile-time, preventing dangling pointers and use-after-free errors:
 
-### ✨ Supports Lazy Binding ✨
-The `elf_loader` supports lazy binding, which means that when a symbol is resolved, it is not resolved immediately, but is instead resolved when it is first called.
+```rust
+// Compilation will fail if dependent libraries are dropped prematurely!
+let liba = load_dylib!("liba.so")?;
+let libb = load_dylib!("libb.so")?; // Depends on liba
+// Dropping liba before libb will cause a compile error
+```
 
-### ✨ Supports RELR relative relocation format ✨
-The `elf_loader` supports the RELR relative relocation format. For detailed information on RELR, please refer to: [Relative relocations and RELR](https://maskray.me/blog/2021-10-31-relative-relocations-and-relr).
+### 🔄 Advanced Features Support
+- **Lazy Binding** - Symbols resolved on first call, improving startup performance
+- **RELR Relocation** - Supports modern relative relocation format, reducing memory footprint
+- **Async Interface** - Provides asynchronous loading capabilities for high-concurrency scenarios
+- **Highly Extensible** - Easily port to new platforms through the trait system
 
-# Feature
+---
 
-| Feature         | Description                                                                        |
-| --------------- | ---------------------------------------------------------------------------------- |
-| use-syscall     | If `use-syscall` is enabled, `elf_loader` will use `linux syscalls` as the backend |
-| version         | Use the version information of symbols when resolving them.                        |
-| log             | Enable logging                                                                     |
-| rel             | Use rel as the relocation type                                                     |
-| portable-atomic | support target without native pointer size atomic operation                        |
+## 🏗️ Architecture Design
 
-Disable the `use-syscall` feature if you don't have an operating system.
+### Easy to Port
+Just implement the `Mmap` and `ElfObject` traits for your platform to complete the port. Refer to our [default implementation](https://github.com/weizhiao/rust-elfloader/tree/main/src/os) for quick start.
 
-# Architecture Support
+### Hook Function Extension
+Extend functionality through hook functions to implement custom loading logic. See [dlopen-rs hook example](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs).
 
-| Arch        | Support | Lazy Binding | Test      |
-| ----------- | ------- | ------------ | --------- |
-| x86_64      | ✅       | ✅            | ✅(CI)     |
-| aarch64     | ✅       | ✅            | ✅(CI)     |
-| riscv64     | ✅       | ✅            | ✅(CI)     |
-| riscv32     | ✅       | ✅            | ✅(Manual) |
-| loongarch64 | ✅       | ✅            | ✅(CI) |
-| x86         | ✅       | ✅            | ✅(CI)     |
-| arm         | ✅       | ✅            | ✅(CI)     |
+---
 
-# Example
-## Load a simple dynamic library
+## 📋 Platform Support
+
+| Architecture | Dynamic Linking | Lazy Binding | Static Linking | Test Coverage |
+| ------------ | --------------- | ------------ | -------------- | ------------- |
+| x86_64       | ✅               | ✅            | ✅              | CI            |
+| AArch64      | ✅               | ✅            | TODO           | CI            |
+| RISC-V 64/32 | ✅               | ✅            | TODO           | CI/Manual     |
+| LoongArch64  | ✅               | ✅            | TODO           | CI            |
+| x86          | ✅               | ✅            | TODO           | CI            |
+| ARM          | ✅               | ✅            | TODO           | CI            |
+
+---
+
+## 🚀 Quick Start
+
+### Add Dependency
+```toml
+[dependencies]
+elf_loader = "0.1"
+```
+
+### Basic Usage
 ```rust
 use elf_loader::load_dylib;
 use std::collections::HashMap;
 
-fn main() {
-    fn print(s: &str) {
-        println!("{}", s);
-    }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Provide symbols required by the dynamic library
+    let mut symbols = HashMap::new();
+    symbols.insert("print", print as *const ());
+    
+    let pre_find = |name: &str| -> Option<*const ()> {
+        symbols.get(name).copied()
+    };
 
-    // Symbols required by dynamic library liba.so
-    let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    // Load and relocate dynamic library liba.so
-    let liba = load_dylib!("target/liba.so")
-        .unwrap()
-        .easy_relocate([].iter(), &pre_find)
-        .unwrap();
-    // Call function a in liba.so
-    let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };
-    println!("{}", f());
+    // Load and relocate dynamic library
+    let lib = load_dylib!("target/libexample.so")?
+        .easy_relocate([].iter(), &pre_find)?;
+    
+    // Call function in the library
+    let func = unsafe { lib.get::<fn() -> i32>("example_function")? };
+    println!("Result: {}", func());
+    
+    Ok(())
+}
+
+fn print(s: &str) {
+    println!("{}", s);
 }
 ```
 
-# Minimum Supported Rust Version
-Rust 1.88 or higher.
+---
 
-# Supplement
-If you encounter any issues while using it, you can raise an issue on GitHub. Additionally, we warmly welcome any friends interested in the `elf_loader` to contribute code (improving `elf_loader` itself, adding examples, and fixing issues in the documentation are all welcome). If you find `elf_loader` helpful, feel free to give it a star.
-😊
+## ⚙️ Feature Flags
+
+| Feature           | Description                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| `use-syscall`     | Use Linux system calls as backend                             |
+| `version`         | Use version information when resolving symbols                |
+| `log`             | Enable logging output                                         |
+| `rel`             | Use REL as relocation type                                    |
+| `portable-atomic` | Support targets without native pointer size atomic operations |
+
+**Note**: Disable the `use-syscall` feature in environments without an operating system.
+
+---
+
+## 💡 System Requirements
+
+- **Minimum Rust Version**: 1.88.0+
+- **Supported Platforms**: All major architectures (see platform support table)
+
+---
+
+## 🤝 Contribution and Support
+
+We warmly welcome community contributions! Whether it's improving core functionality, adding examples, perfecting documentation, or fixing issues, your participation will be highly appreciated.
+
+- **Issue Reporting**: [GitHub Issues](https://github.com/weizhiao/elf_loader/issues)
+- **Feature Requests**: Welcome new feature suggestions
+- **Code Contribution**: Submit Pull Requests
+
+If this project is helpful to you, please give us a ⭐ to show your support!
+
+---
+
+**Start using `elf_loader` now to bring efficient ELF loading capabilities to your project!** 🎉

@@ -9,7 +9,7 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["elf", "unix", "loader", "async"]
 categories = ["no-std", "os", "embedded", "asynchronous"]
-description = "A pure-rust library for loading all ELF format files from both memory and files."
+description = "Load ELF files from memory/storage and efficient static/dynamic runtime linking."
 exclude = [".gitignore", "ci"]
 
 [workspace.package]
