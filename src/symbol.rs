@@ -125,7 +125,7 @@ impl<'symtab> SymbolInfo<'symtab> {
     /// # Returns
     /// A new SymbolInfo instance
     #[allow(unused_variables)]
-    pub(crate) fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
+    pub fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
         SymbolInfo {
             name,
             cname: None,
@@ -238,6 +238,12 @@ impl SymbolTable {
     /// A reference to the string table
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
+    }
+
+    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol> {
+        let info = SymbolInfo::from_str(name.as_ref(), None);
+        let mut precompute = info.precompute();
+        self.lookup(&info, &mut precompute)
     }
 
     /// Look up a symbol in the symbol table
