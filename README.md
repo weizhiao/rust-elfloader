@@ -64,7 +64,6 @@ let libb = load_dylib!("libb.so")?; // Depends on liba
 ### 🔄 Advanced Features Support
 - **Lazy Binding** - Symbols resolved on first call, improving startup performance
 - **RELR Relocation** - Supports modern relative relocation format, reducing memory footprint
-- **Async Interface** - Provides asynchronous loading capabilities for high-concurrency scenarios
 - **Highly Extensible** - Easily port to new platforms through the trait system
 
 ---
@@ -97,7 +96,7 @@ Extend functionality through hook functions to implement custom loading logic. S
 ### Add Dependency
 ```toml
 [dependencies]
-elf_loader = "0.1"
+elf_loader = "0.13"
 ```
 
 ### Basic Usage

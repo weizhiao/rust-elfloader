@@ -62,7 +62,6 @@ let libb = load_dylib!("libb.so")?; // 依赖 liba
 ### 🔄 高级功能支持
 - **延迟绑定** - 符号在首次调用时解析，提升启动性能
 - **RELR重定位** - 支持现代相对重定位格式，减少内存占用
-- **异步接口** - 为高并发场景提供异步加载能力
 - **高度可扩展** - 通过trait系统轻松移植到新平台
 
 ---
@@ -95,7 +94,7 @@ let libb = load_dylib!("libb.so")?; // 依赖 liba
 ### 添加依赖
 ```toml
 [dependencies]
-elf_loader = "0.1"
+elf_loader = "0.13"
 ```
 
 ### 基本用法

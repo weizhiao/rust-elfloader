@@ -2,14 +2,14 @@
 //!
 //! This module provides functionality for working with executable ELF files
 //! that have been loaded but not yet relocated. It includes support for
-//! both synchronous and asynchronous loading of executable files.
+//! synchronous loading of executable files.
 
 use super::RelocatedCommonPart;
 use crate::{
     CoreComponent, Loader, RelocatedDylib, Result,
     format::{Relocated, create_lazy_scope},
     mmap::Mmap,
-    object::{ElfObject, ElfObjectAsync},
+    object::ElfObject,
     parse_ehdr_error,
     relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
 };
@@ -233,42 +233,6 @@ impl<M: Mmap> Loader<M> {
 
         // Load the relocated common part
         let inner = self.load_relocated(ehdr, object, lazy_bind)?;
-
-        // Wrap in ElfExec and return
-        Ok(ElfExec { inner })
-    }
-
-    /// Load an executable file into memory asynchronously
-    ///
-    /// This method loads an executable ELF file into memory asynchronously
-    /// and prepares it for relocation. The file is validated to ensure it
-    /// is indeed an executable and not a dynamic library.
-    ///
-    /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as an executable
-    /// * `lazy_bind` - Optional override for lazy binding behavior
-    ///
-    /// # Returns
-    /// * `Ok(ElfExec)` - The loaded executable
-    /// * `Err(Error)` - If loading fails
-    pub async fn load_exec_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfExec> {
-        // Prepare and validate the ELF header
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-
-        // Ensure the file is actually an executable and not a dynamic library
-        if ehdr.is_dylib() {
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-
-        // Load the relocated common part asynchronously
-        let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
 
         // Wrap in ElfExec and return
         Ok(ElfExec { inner })

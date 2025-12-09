@@ -7,8 +7,8 @@ repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 readme = "README.md"
-keywords = ["elf", "unix", "loader", "async"]
-categories = ["no-std", "os", "embedded", "asynchronous"]
+keywords = ["elf", "unix", "loader"]
+categories = ["no-std", "os", "embedded"]
 description = "Load ELF files from memory/storage and efficient static/dynamic runtime linking."
 exclude = [".gitignore", "ci"]
 

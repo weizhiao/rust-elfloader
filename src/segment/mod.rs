@@ -8,12 +8,7 @@ pub(crate) mod phdr;
 pub(crate) mod shdr;
 
 use super::mmap::{self, Mmap, ProtFlags};
-use crate::{
-    Result,
-    arch::Phdr,
-    mmap::MapFlags,
-    object::{ElfObject, ElfObjectAsync},
-};
+use crate::{Result, arch::Phdr, mmap::MapFlags, object::ElfObject};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
@@ -202,30 +197,6 @@ impl ElfSegment {
         Ok(())
     }
 
-    /// Copy data into the mapped segment asynchronously
-    ///
-    /// This method copies data from the ELF object into the mapped
-    /// memory segment when manual copying is required, using async I/O.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to copy data from
-    ///
-    /// # Returns
-    /// * `Ok(())` - If copying succeeds
-    /// * `Err(Error)` - If copying fails
-    async fn copy_data_async(&self, object: &mut impl ElfObjectAsync) -> Result<()> {
-        if self.need_copy {
-            let ptr = self.addr.absolute_addr() as *mut u8;
-            for info in self.map_info.iter() {
-                unsafe {
-                    let dest = core::slice::from_raw_parts_mut(ptr.add(info.start), info.filesz);
-                    object.read_async(dest, info.offset).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Change memory protection of the segment
     ///
     /// This method adjusts the memory protection of the segment
@@ -355,45 +326,6 @@ pub(crate) trait SegmentBuilder {
             // }
             segment.mmap_segment::<M>(object)?;
             segment.copy_data(object)?;
-            segment.fill_zero::<M>()?;
-        }
-        Ok(space)
-    }
-
-    /// Load segments into memory asynchronously
-    ///
-    /// This method orchestrates the loading of all segments
-    /// into memory using async I/O, including mapping, data
-    /// copying, and zero-filling.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load segments from
-    ///
-    /// # Returns
-    /// * `Ok(ElfSegments)` - The loaded segments
-    /// * `Err(Error)` - If loading fails
-    async fn load_segments_async<M: Mmap>(
-        &mut self,
-        object: &mut impl ElfObjectAsync,
-    ) -> Result<ElfSegments> {
-        // Create the address space for segments
-        let space = self.create_space::<M>()?;
-        self.create_segments()?;
-        let segments = self.segments_mut();
-        let base = space.base();
-
-        // Process each segment
-        for segment in segments.iter_mut() {
-            segment.rebase(base);
-            // if object.as_fd().is_some() {
-            //     if segment.addr.absolute_addr() + segment.total_size != space.base() + space.len() {
-            //         let len = param.addr + param.len - *last_address;
-            //         crate::os::virtual_free(*last_address, len)?;
-            //         *last_address = param.addr + param.len;
-            //     }
-            // }
-            segment.mmap_segment::<M>(object)?;
-            segment.copy_data_async(object).await?;
             segment.fill_zero::<M>()?;
         }
         Ok(space)

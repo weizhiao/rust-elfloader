@@ -66,41 +66,6 @@ pub trait ElfObject {
     fn as_fd(&self) -> Option<isize>;
 }
 
-/// An extension trait for ELF objects that support asynchronous reading.
-///
-/// This trait extends [ElfObject] to provide asynchronous reading capabilities.
-/// It is particularly useful in environments where non-blocking I/O operations
-/// are preferred, such as in async runtime contexts.
-///
-/// # Safety
-/// Implementors must ensure that the async operations are properly implemented
-/// and that the future returned by [read_async] is `Send` to allow it to be
-/// used across thread boundaries.
-pub trait ElfObjectAsync: ElfObject {
-    /// Reads data from the ELF object asynchronously.
-    ///
-    /// This method reads a specified number of bytes from the ELF object
-    /// starting at a given offset and copies them into the provided buffer.
-    /// Unlike the synchronous [ElfObject::read] method, this method returns
-    /// a future that can be awaited, allowing other tasks to run while the
-    /// I/O operation is in progress.
-    ///
-    /// # Arguments
-    /// * `buf` - A mutable slice where the read data will be stored.
-    ///           The length of this buffer determines how many bytes to read.
-    /// * `offset` - The byte offset within the ELF object where reading begins.
-    ///
-    /// # Returns
-    /// A future that resolves to:
-    /// * `Ok(())` - If the read operation was successful.
-    /// * `Err` - If the read operation failed (e.g., I/O error, invalid offset).
-    fn read_async(
-        &mut self,
-        buf: &mut [u8],
-        offset: usize,
-    ) -> impl core::future::Future<Output = Result<()>> + Send;
-}
-
 /// An ELF object stored in memory.
 ///
 /// This struct represents an ELF object that is entirely stored in memory

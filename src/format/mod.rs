@@ -14,7 +14,7 @@ use crate::{
     format::relocated::{ElfDylib, ElfExec, RelocatedCommonPart, RelocatedDylib, RelocatedExec},
     loader::FnHandler,
     mmap::Mmap,
-    object::{ElfObject, ElfObjectAsync},
+    object::ElfObject,
     relocation::{
         SymDef,
         dynamic_link::{LazyScope, UnknownHandler},
@@ -898,29 +898,5 @@ impl<M: Mmap> Loader<M> {
         }
     }
 
-    /// Load an ELF file into memory asynchronously
-    ///
-    /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load
-    /// * `lazy_bind` - Optional override for lazy binding behavior
-    ///
-    /// # Returns
-    /// * `Ok(Elf)` - The loaded ELF file
-    /// * `Err(Error)` - If loading fails
-    pub async fn load_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<Elf> {
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        let is_dylib = ehdr.is_dylib();
-        if is_dylib {
-            Ok(Elf::Dylib(self.load_dylib_async(object, lazy_bind).await?))
-        } else {
-            Ok(Elf::Exec(self.load_exec_async(object, lazy_bind).await?))
-        }
-    }
+
 }

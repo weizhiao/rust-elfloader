@@ -7,7 +7,6 @@ use crate::{
         relocated::{RelocatedBuilder, RelocatedCommonPart},
     },
     mmap::Mmap,
-    object::ElfObjectAsync,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
@@ -163,31 +162,6 @@ impl<M: Mmap> Loader<M> {
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
-        phdr_segments.mprotect::<M>()?;
-        let builder: RelocatedBuilder<'_, M> = RelocatedBuilder::new(
-            self.hook.as_ref(),
-            segments,
-            object.file_name().to_owned(),
-            lazy_bind,
-            ehdr,
-            init_fn,
-            fini_fn,
-        );
-        Ok(builder.build(phdrs)?)
-    }
-
-    /// Load a relocated ELF object asynchronously
-    pub(crate) async fn load_relocated_async<'loader>(
-        &'loader mut self,
-        ehdr: ElfHeader,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<RelocatedCommonPart> {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
-        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
-        let segments = phdr_segments.load_segments_async::<M>(&mut object).await?;
         phdr_segments.mprotect::<M>()?;
         let builder: RelocatedBuilder<'_, M> = RelocatedBuilder::new(
             self.hook.as_ref(),

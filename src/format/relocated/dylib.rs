@@ -2,14 +2,14 @@
 //!
 //! This module provides functionality for working with dynamic libraries
 //! (shared objects) that have been loaded but not yet relocated. It includes
-//! support for both synchronous and asynchronous loading of dynamic libraries.
+//! support for synchronous loading of dynamic libraries.
 
 use super::RelocatedCommonPart;
 use crate::{
     Loader, Result, UserData,
     format::{Relocated, create_lazy_scope},
     mmap::Mmap,
-    object::{ElfObject, ElfObjectAsync},
+    object::ElfObject,
     parse_ehdr_error,
     relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
 };
@@ -206,42 +206,6 @@ impl<M: Mmap> Loader<M> {
 
         // Load the relocated common part
         let inner = self.load_relocated(ehdr, object, lazy_bind)?;
-
-        // Wrap in ElfDylib and return
-        Ok(ElfDylib { inner })
-    }
-
-    /// Load a dynamic library into memory asynchronously
-    ///
-    /// This method loads a dynamic library (shared object) file into memory
-    /// asynchronously and prepares it for relocation. The file is validated
-    /// to ensure it is indeed a dynamic library.
-    ///
-    /// # Note
-    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as a dynamic library
-    /// * `lazy_bind` - Optional override for lazy binding behavior
-    ///
-    /// # Returns
-    /// * `Ok(ElfDylib)` - The loaded dynamic library
-    /// * `Err(Error)` - If loading fails
-    pub async fn load_dylib_async(
-        &mut self,
-        mut object: impl ElfObjectAsync,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfDylib> {
-        // Prepare and validate the ELF header
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-
-        // Ensure the file is actually a dynamic library
-        if !ehdr.is_dylib() {
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-
-        // Load the relocated common part asynchronously
-        let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
 
         // Wrap in ElfDylib and return
         Ok(ElfDylib { inner })
