@@ -1,10 +1,8 @@
 use crate::{
-    Result,
-    arch::{
-        ElfShdr, LAZY_PLT_ENTRY, LAZY_PLT_ENTRY_SIZE, LAZY_PLT_HEADER_SIZE, PLT_ENTRY,
-        PLT_ENTRY_SIZE, PLT_HEADER_SIZE, RelocValue, Shdr,
-    },
+    ElfObject, Result,
+    arch::{ElfShdr, PLT_ENTRY, PLT_ENTRY_SIZE, RelocValue, Shdr, StaticRelocator},
     mmap::{MapFlags, Mmap, ProtFlags},
+    relocation::static_link::StaticReloc,
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -14,7 +12,7 @@ use alloc::vec::Vec;
 use elf::abi::{
     SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_INIT_ARRAY, SHT_NOBITS, SHT_REL, SHT_RELA,
 };
-use hashbrown::{HashMap, hash_map::Entry};
+use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 /// Convert section flags to memory protection flags
 pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
@@ -84,13 +82,15 @@ impl SegmentBuilder for ShdrSegments {
 
 impl ShdrSegments {
     /// Create a new ShdrSegments instance from section headers
-    pub(crate) fn new(shdrs: &mut [ElfShdr], lazy_bind: bool) -> Self {
+    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfObject) -> Self {
         // Create section units for different memory protection types
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
 
-        // Create special sections for GOT, PLT, and PLTGOT
-        let mut got_shdr = PltGotSection::create_got_shdr(shdrs);
-        let (mut pltgot_shdr, mut plt_shdr) = PltGotSection::create_plt_shdr(shdrs, lazy_bind);
+        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object);
+
+        // Create special sections for GOT and PLT
+        let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
+        let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
 
         // Group sections by their protection flags
         for shdr in shdrs.iter_mut() {
@@ -100,7 +100,6 @@ impl ShdrSegments {
         // Add special sections to their respective units
         units[flags_to_idx(got_shdr.sh_flags.into())].add_section(&mut got_shdr);
         units[flags_to_idx(plt_shdr.sh_flags.into())].add_section(&mut plt_shdr);
-        units[flags_to_idx(pltgot_shdr.sh_flags.into())].add_section(&mut pltgot_shdr);
 
         // Create segments from section units
         let mut segments = Vec::new();
@@ -115,12 +114,7 @@ impl ShdrSegments {
         Self {
             segments,
             total_size: offset,
-            pltgot: Some(PltGotSection::new(
-                &got_shdr,
-                &plt_shdr,
-                &pltgot_shdr,
-                lazy_bind,
-            )),
+            pltgot: Some(PltGotSection::new(&got_shdr, &plt_shdr)),
         }
     }
 
@@ -134,17 +128,9 @@ impl ShdrSegments {
 pub(crate) struct PltGotSection {
     got_base: usize,                // Base address of GOT
     plt_base: usize,                // Base address of PLT
-    pltgot_base: usize,             // Base address of PLTGOT
-    cur_got_idx: usize,             // Current index in GOT
-    cur_plt_idx: usize,             // Current index in PLT
+    cur_idx: usize,                 // Current index in GOT
     got_map: HashMap<usize, usize>, // Map from symbol index to GOT entry index
     plt_map: HashMap<usize, usize>, // Map from symbol index to PLT entry index
-    got_size: usize,                // Size of GOT section
-    plt_size: usize,                // Size of PLT section
-    pltgot_size: usize,             // Size of PLTGOT section
-    plt_header_size: usize,         // Size of PLT header
-    plt_entry_size: usize,          // Size of each PLT entry
-    lazy_bind: bool,                // Whether to use lazy binding
 }
 
 /// Wrapper for a mutable usize value
@@ -176,23 +162,57 @@ pub(crate) enum PltEntry<'plt> {
     Occupied(RelocValue),
     /// Entry is vacant and can be filled
     Vacant {
-        plt: &'plt mut [u8],      // PLT entry data
-        pltgot: UsizeEntry<'plt>, // Corresponding PLTGOT entry
+        plt: &'plt mut [u8],   // PLT entry data
+        got: UsizeEntry<'plt>, // Corresponding PLTGOT entry
     },
 }
 
 impl PltGotSection {
-    /// Create a GOT section header based on relocation entries
-    fn create_got_shdr(shdrs: &[ElfShdr]) -> ElfShdr {
-        // TODO: optimize to reduce the size
-        let mut elem_cnt = 0;
-        // Count total number of relocation entries
-        for shdr in shdrs.iter() {
-            if shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA {
-                elem_cnt += (shdr.sh_size / shdr.sh_entsize) as usize;
+    fn count_needed_entries(shdrs: &[ElfShdr], object: &mut impl ElfObject) -> (usize, usize) {
+        let mut got_set = HashSet::new();
+        let mut plt_set = HashSet::new();
+
+        for shdr in shdrs {
+            if !matches!(shdr.sh_type, SHT_REL | SHT_RELA) {
+                continue;
+            }
+
+            let size = shdr.sh_size as usize;
+            let entsize = shdr.sh_entsize as usize;
+            if size == 0 || entsize == 0 {
+                continue;
+            }
+
+            let mut buf = alloc::vec![0u8; size];
+            if object.read(&mut buf, shdr.sh_offset as usize).is_err() {
+                continue;
+            }
+
+            for chunk in buf.chunks(entsize) {
+                if chunk.len() < entsize {
+                    break;
+                }
+                // Safety: we read bytes from file, and we are casting to a POD type (ElfRelType)
+                // We use read_unaligned to handle potential misalignment.
+                let rel_entry = unsafe {
+                    core::ptr::read_unaligned(chunk.as_ptr() as *const crate::arch::ElfRelType)
+                };
+                let r_type = rel_entry.r_type() as u32;
+                let r_sym = rel_entry.r_symbol();
+
+                if StaticRelocator::needs_got(r_type) {
+                    got_set.insert(r_sym);
+                }
+                if StaticRelocator::needs_plt(r_type) {
+                    plt_set.insert(r_sym);
+                }
             }
         }
+        (got_set.len(), plt_set.len())
+    }
 
+    /// Create a GOT section header based on relocation entries
+    fn create_got_shdr(elem_cnt: usize) -> ElfShdr {
         // Create a NOBITS section for the GOT
         ElfShdr::new(
             0,
@@ -209,79 +229,30 @@ impl PltGotSection {
     }
 
     /// Create PLT and PLTGOT section headers based on relocation entries
-    fn create_plt_shdr(shdrs: &[ElfShdr], lazy: bool) -> (ElfShdr, ElfShdr) {
-        // TODO: optimize to reduce the size
-        // Count total number of relocation entries
-        let mut elem_cnt = 0;
-        for shdr in shdrs.iter() {
-            if shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA {
-                elem_cnt += (shdr.sh_size / shdr.sh_entsize) as usize;
-            }
-        }
-
-        // Determine PLT header and entry sizes based on lazy binding
-        let header_size = if lazy {
-            LAZY_PLT_HEADER_SIZE
-        } else {
-            PLT_HEADER_SIZE
-        };
-        let entry_size = if lazy {
-            LAZY_PLT_ENTRY_SIZE
-        } else {
-            PLT_ENTRY_SIZE
-        };
-
-        // Create GOT section (for PLT targets)
-        let got_section = ElfShdr::new(
-            0,
-            SHT_NOBITS,
-            (SHF_ALLOC | SHF_WRITE) as _,
-            0,
-            0,
-            elem_cnt * size_of::<usize>(),
-            0,
-            0,
-            size_of::<usize>(),
-            size_of::<usize>(),
-        );
-
+    fn create_plt_shdr(elem_cnt: usize) -> ElfShdr {
         // Create PLT section (executable code stubs)
-        let plt_section = ElfShdr::new(
+        ElfShdr::new(
             0,
             SHT_NOBITS,
             (SHF_ALLOC | SHF_EXECINSTR) as _,
             0,
             0,
-            elem_cnt * entry_size + header_size,
+            elem_cnt * PLT_ENTRY_SIZE,
             0,
             0,
             size_of::<usize>(),
-            entry_size,
-        );
-
-        (got_section, plt_section)
+            PLT_ENTRY_SIZE,
+        )
     }
 
     /// Create a new PltGotSection instance
-    fn new(got: &Shdr, plt: &Shdr, pltgot: &Shdr, lazy: bool) -> Self {
+    fn new(got: &Shdr, plt: &Shdr) -> Self {
         Self {
-            cur_got_idx: 0,
-            cur_plt_idx: 0,
+            cur_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
             got_base: got.sh_addr as usize,
-            plt_base: plt.sh_addr as usize + LAZY_PLT_HEADER_SIZE,
-            pltgot_base: pltgot.sh_addr as usize,
-            got_size: got.sh_size as usize,
-            plt_size: plt.sh_size as usize,
-            pltgot_size: pltgot.sh_size as usize,
-            plt_entry_size: plt.sh_entsize as usize,
-            plt_header_size: if lazy {
-                LAZY_PLT_HEADER_SIZE
-            } else {
-                PLT_HEADER_SIZE
-            },
-            lazy_bind: lazy,
+            plt_base: plt.sh_addr as usize,
         }
     }
 
@@ -289,32 +260,6 @@ impl PltGotSection {
     pub(crate) fn rebase(&mut self, base: usize) {
         self.got_base = self.got_base + base;
         self.plt_base = self.plt_base + base;
-        self.pltgot_base = self.pltgot_base + base;
-    }
-
-    /// Get the base address of the PLT section
-    pub(crate) fn plt_base(&self) -> usize {
-        self.plt_base
-    }
-
-    /// Get the base address of the PLTGOT section
-    pub(crate) fn pltgot_base(&self) -> usize {
-        self.pltgot_base
-    }
-
-    /// Check if lazy binding is enabled
-    pub(crate) fn is_lazy(&self) -> bool {
-        self.lazy_bind
-    }
-
-    /// Get the PLT header as a mutable byte slice
-    pub(crate) fn get_plt_header(&mut self) -> &mut [u8] {
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                (self.plt_base - self.plt_header_size) as *mut u8,
-                self.plt_header_size,
-            )
-        }
     }
 
     /// Add or retrieve a GOT entry for a symbol
@@ -328,8 +273,8 @@ impl PltGotSection {
             }
             Entry::Vacant(entry) => {
                 // Create new GOT entry
-                let idx = *entry.insert(self.cur_got_idx);
-                self.cur_got_idx += 1;
+                let idx = *entry.insert(self.cur_idx);
+                self.cur_idx += 1;
                 GotEntry::Vacant(unsafe {
                     UsizeEntry(&mut *((idx * ent_size + base) as *mut usize))
                 })
@@ -340,8 +285,8 @@ impl PltGotSection {
     /// Add or retrieve a PLT entry for a symbol
     pub(crate) fn add_plt_entry(&mut self, r_sym: usize) -> PltEntry<'_> {
         let plt_base = self.plt_base;
-        let pltgot_base = self.pltgot_base;
-        let plt_ent_size = self.plt_entry_size;
+        let got_base = self.got_base;
+        let plt_ent_size = PLT_ENTRY_SIZE;
         let got_ent_size = size_of::<usize>();
         match self.plt_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
@@ -350,7 +295,7 @@ impl PltGotSection {
             }
             Entry::Vacant(entry) => {
                 // Create new PLT entry
-                let idx = *entry.insert(self.cur_plt_idx);
+                let idx = *entry.insert(self.cur_idx);
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
                         (idx * plt_ent_size + plt_base) as *mut u8,
@@ -359,17 +304,13 @@ impl PltGotSection {
                 };
 
                 // Copy the appropriate PLT entry template
-                if self.lazy_bind {
-                    plt.copy_from_slice(&LAZY_PLT_ENTRY);
-                } else {
-                    plt.copy_from_slice(&PLT_ENTRY);
-                }
+                plt.copy_from_slice(&PLT_ENTRY);
 
-                self.cur_plt_idx += 1;
+                self.cur_idx += 1;
                 PltEntry::Vacant {
                     plt,
-                    pltgot: unsafe {
-                        UsizeEntry(&mut *((idx * got_ent_size + pltgot_base) as *mut usize))
+                    got: unsafe {
+                        UsizeEntry(&mut *((idx * got_ent_size + got_base) as *mut usize))
                     },
                 }
             }

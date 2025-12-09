@@ -14,26 +14,6 @@ cfg_if::cfg_if! {
         pub(crate) type  StaticRelocator = DummyRelocator;
         pub(crate) struct DummyRelocator;
         pub(crate) const PLT_ENTRY_SIZE: usize = 16;
-        pub(crate) const LAZY_PLT_HEADER_SIZE: usize = 32;
-        pub(crate) const PLT_HEADER_SIZE: usize = 0;
-        pub(crate) const LAZY_PLT_ENTRY_SIZE: usize = 16;
-
-        const LAZY_PLT_HEADER: [u8; LAZY_PLT_HEADER_SIZE] = [
-            0xf3, 0x0f, 0x1e, 0xfa, // endbr64
-            0x41, 0x53, // push %r11
-            0xff, 0x35, 0, 0, 0, 0, // push GOTPLT+8(%rip)
-            0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+16(%rip)
-            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
-            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
-            0xcc, 0xcc, 0xcc, 0xcc, // (padding)
-            0xcc, 0xcc, // (padding)
-        ];
-
-        pub(crate) const LAZY_PLT_ENTRY: [u8; LAZY_PLT_ENTRY_SIZE] = [
-            0xf3, 0x0f, 0x1e, 0xfa, // endbr64
-            0x41, 0xbb, 0, 0, 0, 0, // mov $index_in_relplt, %r11d
-            0xff, 0x25, 0, 0, 0, 0, // jmp *foo@GOTPLT
-        ];
 
         pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
             0xf3, 0x0f, 0x1e, 0xfa, // endbr64
@@ -52,12 +32,6 @@ cfg_if::cfg_if! {
             where
                 F: Fn(&str) -> Option<*const ()>,
             {
-                todo!()
-            }
-        }
-
-        impl crate::segment::shdr::PltGotSection{
-            pub(crate) fn init_pltgot(&mut self) {
                 todo!()
             }
         }
@@ -220,8 +194,8 @@ impl ElfRel {
         unsafe { ptr.read() as isize }
     }
 
-	#[inline]
-	pub(crate) fn set_offset(&mut self, offset: usize) {
+    #[inline]
+    pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rel.r_offset = offset as _;
     }
 }
@@ -435,6 +409,14 @@ impl TryFrom<RelocValue> for i32 {
 
     fn try_from(value: RelocValue) -> Result<Self, Self::Error> {
         i32::try_from(value.0 as isize).map_err(|err| relocate_error(err.to_string(), Box::new(())))
+    }
+}
+
+impl TryFrom<RelocValue> for u32 {
+    type Error = crate::Error;
+
+    fn try_from(value: RelocValue) -> Result<Self, Self::Error> {
+        u32::try_from(value.0).map_err(|err| relocate_error(err.to_string(), Box::new(())))
     }
 }
 

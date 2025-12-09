@@ -55,4 +55,12 @@ pub(crate) trait StaticReloc {
     ) -> Result<()>
     where
         F: Fn(&str) -> Option<*const ()>;
+
+    fn needs_got(_rel_type: u32) -> bool {
+        false
+    }
+
+    fn needs_plt(_rel_type: u32) -> bool {
+        false
+    }
 }

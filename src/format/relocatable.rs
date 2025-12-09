@@ -39,13 +39,9 @@ impl<M: Mmap> Loader<M> {
     /// # Returns
     /// * `Ok(ElfRelocatable)` - The loaded relocatable ELF file
     /// * `Err(Error)` - If loading fails
-    pub fn load_relocatable(
-        &mut self,
-        mut object: impl ElfObject,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfRelocatable> {
+    pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
-        self.load_rel(ehdr, object, lazy_bind)
+        self.load_rel(ehdr, object)
     }
 }
 
@@ -119,7 +115,6 @@ impl RelocatableBuilder {
 
         // Rebase and initialize the PLT/GOT section
         pltgot.rebase(base);
-        pltgot.init_pltgot();
 
         // Initialize optional components
         let mut symtab = None;

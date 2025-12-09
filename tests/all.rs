@@ -153,17 +153,17 @@ fn load_relocatable() {
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
-        .load_relocatable(object, None)
+        .load_relocatable(object)
         .unwrap()
         .relocate(&[], &pre_find)
         .unwrap();
     let b = loader
-        .load_relocatable(ElfFile::from_path("target/b.o").unwrap(), None)
+        .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
         .relocate(&[&a], &pre_find)
         .unwrap();
     let c = loader
-        .load_relocatable(ElfFile::from_path("target/c.o").unwrap(), None)
+        .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocate(&[&a, &b], &pre_find)
         .unwrap();
@@ -173,4 +173,34 @@ fn load_relocatable() {
     assert!(f() == 2);
     let f = unsafe { c.get::<extern "C" fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
+}
+
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn test_relocatable() {
+    extern "C" fn external_func_impl() -> i32 {
+        100
+    }
+    static EXTERNAL_VAR_IMPL: i32 = 200;
+
+    let mut map = HashMap::new();
+    map.insert("external_func", external_func_impl as _);
+    map.insert("external_var", &EXTERNAL_VAR_IMPL as *const _ as _);
+    map.insert("external_var_32", 0x1000 as *const () as _);
+
+    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+
+    let mut loader = Loader::<MmapImpl>::new();
+    let object = ElfFile::from_path("target/x86_64.o").unwrap();
+    let lib = loader
+        .load_relocatable(object)
+        .unwrap()
+        .relocate(&[], &pre_find)
+        .unwrap();
+
+    unsafe {
+        let asm_test_func = lib.get::<extern "C" fn() -> i32>("asm_test_func").unwrap();
+        let result = asm_test_func();
+        assert_eq!(result, 0x1156);
+    }
 }

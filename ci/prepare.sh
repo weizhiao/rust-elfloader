@@ -35,6 +35,17 @@ compile_relocatable() {
             }
     done
 
+    if [[ $target == x86_64* ]]; then
+        local reloc_files=("x86_64.rs")
+        for name in "${reloc_files[@]}"; do
+            echo "Compiling relocatable object: $name"
+            rustc -O --target "$target" --emit obj -C panic=abort -C linker=rust-lld \
+                "test-relocatable/$name" --out-dir target || {
+                    echo "Could not compile the relocatable object!"
+                    exit 1
+                }
+        done
+    fi
 }
 
 # 编译可执行文件

@@ -18,7 +18,6 @@ use windows_sys::Win32::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_SHARE_READ, OPEN_EXISTING, ReadFile,
         SetFilePointerEx,
     },
-    System::Threading::GetCurrentProcess,
     System::Memory::{
         self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
         MEM_REPLACE_PLACEHOLDER, MEM_RESERVE, MEM_RESERVE_PLACEHOLDER, MapViewOfFile3,
@@ -26,6 +25,7 @@ use windows_sys::Win32::{
         PAGE_NOACCESS, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
         VirtualFree,
     },
+    System::Threading::GetCurrentProcess,
 };
 
 pub struct MmapImpl;

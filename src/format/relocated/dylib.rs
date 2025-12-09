@@ -198,15 +198,15 @@ impl<M: Mmap> Loader<M> {
     ) -> Result<ElfDylib> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        
+
         // Ensure the file is actually a dynamic library
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        
+
         // Load the relocated common part
         let inner = self.load_relocated(ehdr, object, lazy_bind)?;
-        
+
         // Wrap in ElfDylib and return
         Ok(ElfDylib { inner })
     }
@@ -234,15 +234,15 @@ impl<M: Mmap> Loader<M> {
     ) -> Result<ElfDylib> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        
+
         // Ensure the file is actually a dynamic library
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
-        
+
         // Load the relocated common part asynchronously
         let inner = self.load_relocated_async(ehdr, object, lazy_bind).await?;
-        
+
         // Wrap in ElfDylib and return
         Ok(ElfDylib { inner })
     }

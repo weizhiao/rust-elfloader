@@ -16,17 +16,17 @@ fn main() {
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
-        .load_relocatable(object, None)
+        .load_relocatable(object)
         .unwrap()
         .relocate(&[], &pre_find)
         .unwrap();
     let b = loader
-        .load_relocatable(ElfFile::from_path("target/b.o").unwrap(), None)
+        .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
         .relocate(&[&a], &pre_find)
         .unwrap();
     let c = loader
-        .load_relocatable(ElfFile::from_path("target/c.o").unwrap(), None)
+        .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocate(&[&a, &b], &pre_find)
         .unwrap();
