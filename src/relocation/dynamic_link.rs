@@ -3,7 +3,7 @@ use crate::{
     CoreComponent, Result,
     arch::*,
     format::{Relocated, relocated::RelocatedCommonPart},
-    relocation::{find_symbol_addr, find_symdef, likely, reloc_error, unlikely, write_val},
+    relocation::{RelocValue, find_symbol_addr, find_symdef, likely, reloc_error, unlikely},
 };
 use alloc::boxed::Box;
 use core::{
@@ -29,6 +29,16 @@ pub(crate) type UnknownHandler = dyn FnMut(
     &CoreComponent,
     &[&Relocated],
 ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>;
+
+/// Resolve indirect function address
+///
+/// # Safety
+/// The address must point to a valid IFUNC function.
+#[inline(always)]
+unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
+    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.0) };
+    RelocValue::new(ifunc())
+}
 
 /// Perform relocations on an ELF object
 pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
@@ -60,6 +70,7 @@ unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_id
     let rela = unsafe { &*dylib.pltrel.unwrap().add(rela_idx).as_ptr() };
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
+    let segments = &dylib.segments;
 
     // Ensure this is a jump slot relocation for a valid symbol
     assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
@@ -80,8 +91,7 @@ unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_id
     .expect("lazy bind fail") as usize;
 
     // Write the resolved symbol address to the GOT entry
-    let ptr = (dylib.segments.base() + rela.r_offset()) as *mut usize;
-    unsafe { ptr.write(symbol) };
+    segments.write(rela.r_offset(), RelocValue::new(symbol));
     symbol
 }
 
@@ -127,6 +137,7 @@ impl RelocatedCommonPart {
     {
         let core = self.core_component_ref();
         let base = core.base();
+        let segments = core.segments();
         let reloc = self.relocation();
         let symtab = self.symtab().unwrap();
         let is_lazy = self.is_lazy();
@@ -139,7 +150,8 @@ impl RelocatedCommonPart {
 
                 // Handle jump slot relocations
                 if likely(r_type == REL_JUMP_SLOT) {
-                    let ptr = (base + rel.r_offset()) as *mut usize;
+                    let addr = RelocValue::new(base) + rel.r_offset();
+                    let ptr = addr.as_mut_ptr::<usize>();
                     // Even with lazy binding, basic relocation is needed for PLT to work
                     unsafe {
                         let origin_val = ptr.read();
@@ -148,9 +160,8 @@ impl RelocatedCommonPart {
                     }
                 } else if unlikely(r_type == REL_IRELATIVE) {
                     // Handle indirect function relocations
-                    let ifunc: fn() -> usize =
-                        unsafe { core::mem::transmute(base.wrapping_add_signed(r_addend)) };
-                    write_val(base, rel.r_offset(), ifunc());
+                    let addr = RelocValue::new(base) + r_addend;
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 } else {
                     unreachable!()
                 }
@@ -186,14 +197,13 @@ impl RelocatedCommonPart {
                 // Handle jump slot relocations
                 if likely(r_type == REL_JUMP_SLOT) {
                     if let Some(symbol) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
-                        write_val(base, rel.r_offset(), symbol);
+                        segments.write(rel.r_offset(), symbol);
                         continue;
                     }
                 } else if unlikely(r_type == REL_IRELATIVE) {
                     // Handle indirect function relocations
-                    let ifunc: fn() -> usize =
-                        unsafe { core::mem::transmute(base.wrapping_add_signed(r_addend)) };
-                    write_val(base, rel.r_offset(), ifunc());
+                    let addr = RelocValue::new(base) + r_addend;
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                     continue;
                 }
 
@@ -214,6 +224,7 @@ impl RelocatedCommonPart {
     fn relocate_relative(&self) -> &Self {
         let core = self.core_component_ref();
         let reloc = self.relocation();
+        let segments = core.segments();
         let base = core.base();
 
         match reloc.relative {
@@ -223,7 +234,8 @@ impl RelocatedCommonPart {
                 rel.iter().for_each(|rel| {
                     debug_assert!(rel.r_type() == REL_RELATIVE as usize);
                     let r_addend = rel.r_addend(base);
-                    write_val(base, rel.r_offset(), base.wrapping_add_signed(r_addend));
+                    let val = RelocValue::new(base) + r_addend;
+                    segments.write(rel.r_offset(), val);
                 })
             }
             RelativeRel::Relr(relr) => {
@@ -278,6 +290,7 @@ impl RelocatedCommonPart {
         let core = self.core_component_ref();
         let reloc = self.relocation();
         let symtab = self.symtab().unwrap();
+        let segments = core.segments();
         let base = core.base();
 
         // Process each dynamic relocation entry
@@ -290,7 +303,7 @@ impl RelocatedCommonPart {
                 // Handle GOT and symbolic relocations
                 REL_GOT | REL_SYMBOLIC => {
                     if let Some(symbol) = find_symbol_addr(pre_find, core, symtab, scope, r_sym) {
-                        write_val(base, rel.r_offset(), symbol);
+                        segments.write(rel.r_offset(), symbol);
                         continue;
                     }
                 }
@@ -298,10 +311,9 @@ impl RelocatedCommonPart {
                 REL_DTPOFF => {
                     if let Some(symdef) = find_symdef(core, scope, r_sym) {
                         // Calculate offset within TLS block
-                        let tls_val =
-                            (symdef.sym.unwrap().st_value().wrapping_add_signed(r_addend))
-                                .wrapping_sub(TLS_DTV_OFFSET);
-                        write_val(base, rel.r_offset(), tls_val);
+                        let tls_val = RelocValue::new(symdef.sym.unwrap().st_value()) + r_addend
+                            - TLS_DTV_OFFSET;
+                        segments.write(rel.r_offset(), tls_val);
                         continue;
                     }
                 }

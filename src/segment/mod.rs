@@ -8,7 +8,13 @@ pub(crate) mod phdr;
 pub(crate) mod shdr;
 
 use super::mmap::{self, Mmap, ProtFlags};
-use crate::{Result, arch::Phdr, mmap::MapFlags, object::ElfObject};
+use crate::{
+    Result,
+    arch::Phdr,
+    mmap::MapFlags,
+    object::ElfObject,
+    relocation::RelocValue,
+};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
@@ -70,10 +76,8 @@ impl Address {
 struct FileMapInfo {
     /// Start offset within the segment
     start: usize,
-
     /// Size of the file data in bytes
     filesz: usize,
-
     /// Offset within the file
     offset: usize,
 }
@@ -357,10 +361,8 @@ pub(crate) trait SegmentBuilder {
 pub(crate) struct ELFRelro {
     /// Virtual address of the RELRO segment
     addr: usize,
-
     /// Size of the RELRO segment
     len: usize,
-
     /// Function pointer to the mprotect function
     mprotect: unsafe fn(NonNull<c_void>, usize, ProtFlags) -> Result<()>,
 }
@@ -420,13 +422,10 @@ fn rounddown(x: usize, align: usize) -> usize {
 pub struct ElfSegments {
     /// Pointer to the mapped memory
     pub(crate) memory: NonNull<c_void>,
-
     /// Offset from memory address to base address
     pub(crate) offset: usize,
-
     /// Total length of the mapped memory
     pub(crate) len: usize,
-
     /// Function pointer to the munmap function
     pub(crate) munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
 }
@@ -576,6 +575,12 @@ impl ElfSegments {
     #[inline]
     pub(crate) fn get_mut_ptr<T>(&self, offset: usize) -> *mut T {
         self.get_ptr::<T>(offset) as *mut T
+    }
+
+    /// Write a value into the mapped memory
+    #[inline]
+    pub(crate) fn write<T>(&self, r_offset: usize, val: RelocValue<T>) {
+        unsafe { self.get_mut_ptr::<T>(r_offset).write(val.0) };
     }
 
     /// Get the base address of the mapped memory

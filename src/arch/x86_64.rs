@@ -1,6 +1,6 @@
 use crate::{
-    arch::{ElfRelType, RelocValue},
-    relocation::{find_symbol_addr, reloc_error, static_link::StaticReloc, write_val},
+    arch::ElfRelType,
+    relocation::{RelocValue, find_symbol_addr, reloc_error, static_link::StaticReloc},
     segment::shdr::{GotEntry, PltEntry, PltGotSection},
 };
 use alloc::boxed::Box;
@@ -78,32 +78,31 @@ impl StaticReloc for X86_64Relocator {
         let r_sym = rel_type.r_symbol();
         let r_type = rel_type.r_type();
         let base = core.base();
+        let segments = core.segments();
         let append = rel_type.r_addend(base);
         let offset = rel_type.r_offset();
         let p = base + rel_type.r_offset();
-        let find_symbol = |r_sym: usize| {
-            find_symbol_addr(pre_find, core, symtab, scope, r_sym).map(|addr| RelocValue(addr))
-        };
+        let find_symbol = |r_sym: usize| find_symbol_addr(pre_find, core, symtab, scope, r_sym);
         let boxed_error = || reloc_error(r_type, r_sym, Box::new(()), core);
         match r_type as _ {
             R_X86_64_64 => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                write_val(base, offset, sym + append);
+                segments.write(offset, sym + append);
             }
             R_X86_64_PC32 => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val = i32::try_from(sym + append - p).unwrap();
-                write_val(base, offset, val);
+                let val: RelocValue<i32> = (sym + append - p).try_into().unwrap();
+                segments.write(offset, val);
             }
             R_X86_64_PLT32 => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val = if let Ok(val) = i32::try_from(sym + append - p) {
+                let val: RelocValue<i32> = if let Ok(val) = (sym + append - p).try_into() {
                     val
                 } else {
                     let plt_entry = pltgot.add_plt_entry(r_sym);
@@ -113,15 +112,14 @@ impl StaticReloc for X86_64Relocator {
                             let plt_entry_addr = plt.as_ptr() as usize;
                             got.update(sym.into());
                             let call_offset = got.get_addr() - plt_entry_addr - 10;
-                            plt[6..10].copy_from_slice(
-                                &i32::try_from(call_offset).unwrap().to_ne_bytes(),
-                            );
-                            RelocValue(plt_entry_addr)
+                            let call_offset_val: RelocValue<i32> = call_offset.try_into().unwrap();
+                            plt[6..10].copy_from_slice(&call_offset_val.0.to_ne_bytes());
+                            RelocValue::new(plt_entry_addr)
                         }
                     };
-                    i32::try_from(plt_entry_addr + append - p).unwrap()
+                    (plt_entry_addr + append - p).try_into().unwrap()
                 };
-                write_val(base, offset, val);
+                segments.write(offset, val);
             }
             R_X86_64_GOTPCREL => {
                 let Some(sym) = find_symbol(r_sym) else {
@@ -135,25 +133,22 @@ impl StaticReloc for X86_64Relocator {
                         got.get_addr()
                     }
                 };
-                write_val(
-                    base,
-                    offset,
-                    i32::try_from(got_entry_addr + append - p).unwrap(),
-                );
+                let val: RelocValue<i32> = (got_entry_addr + append - p).try_into().unwrap();
+                segments.write(offset, val);
             }
             R_X86_64_32 => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val = u32::try_from(sym + append).unwrap();
-                write_val(base, offset, val);
+                let val: RelocValue<u32> = (sym + append).try_into().unwrap();
+                segments.write(offset, val);
             }
             R_X86_64_32S => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val = i32::try_from(sym + append).unwrap();
-                write_val(base, offset, val);
+                let val: RelocValue<i32> = (sym + append).try_into().unwrap();
+                segments.write(offset, val);
             }
             _ => {
                 return Err(boxed_error());

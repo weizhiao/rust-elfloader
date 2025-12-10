@@ -897,6 +897,4 @@ impl<M: Mmap> Loader<M> {
             Ok(Elf::Exec(self.load_exec(object, lazy_bind)?))
         }
     }
-
-
 }

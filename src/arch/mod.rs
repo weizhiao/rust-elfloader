@@ -1,7 +1,5 @@
 //! Contains content related to the CPU instruction set
-use crate::relocate_error;
-use alloc::{boxed::Box, string::ToString};
-use core::ops::{Add, Deref, DerefMut, Sub};
+use core::ops::{Deref, DerefMut};
 use elf::abi::{
     SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
     STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
@@ -377,46 +375,6 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
         got.add(DYLIB_OFFSET).write(dylib);
         got.add(RESOLVE_FUNCTION_OFFSET)
             .write(dl_runtime_resolve as usize);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct RelocValue(pub usize);
-
-impl Add<isize> for RelocValue {
-    type Output = RelocValue;
-
-    fn add(self, rhs: isize) -> Self::Output {
-        RelocValue(self.0.wrapping_add_signed(rhs))
-    }
-}
-
-impl Sub<usize> for RelocValue {
-    type Output = RelocValue;
-    fn sub(self, rhs: usize) -> Self::Output {
-        RelocValue(self.0.wrapping_sub(rhs))
-    }
-}
-
-impl From<RelocValue> for usize {
-    fn from(value: RelocValue) -> Self {
-        value.0
-    }
-}
-
-impl TryFrom<RelocValue> for i32 {
-    type Error = crate::Error;
-
-    fn try_from(value: RelocValue) -> Result<Self, Self::Error> {
-        i32::try_from(value.0 as isize).map_err(|err| relocate_error(err.to_string(), Box::new(())))
-    }
-}
-
-impl TryFrom<RelocValue> for u32 {
-    type Error = crate::Error;
-
-    fn try_from(value: RelocValue) -> Result<Self, Self::Error> {
-        u32::try_from(value.0).map_err(|err| relocate_error(err.to_string(), Box::new(())))
     }
 }
 

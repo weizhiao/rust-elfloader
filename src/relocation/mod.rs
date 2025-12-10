@@ -5,12 +5,103 @@ use crate::{
     relocate_error,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{boxed::Box, format};
-use core::{any::Any, ptr::null};
+use alloc::{boxed::Box, format, string::ToString};
+use core::{
+    any::Any,
+    ops::{Add, Sub},
+    ptr::null,
+};
 use elf::abi::STT_GNU_IFUNC;
 
 pub(crate) mod dynamic_link;
 pub(crate) mod static_link;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub(crate) struct RelocValue<T>(pub T);
+
+impl<T> RelocValue<T> {
+    #[inline]
+    pub const fn new(val: T) -> Self {
+        Self(val)
+    }
+}
+
+impl RelocValue<usize> {
+    #[inline]
+    #[allow(dead_code)]
+    pub const fn as_ptr<T>(self) -> *const T {
+        self.0 as *const T
+    }
+
+    #[inline]
+    pub const fn as_mut_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+impl Add<usize> for RelocValue<usize> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: usize) -> Self::Output {
+        RelocValue(self.0.wrapping_add(rhs))
+    }
+}
+
+impl Add<isize> for RelocValue<usize> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: isize) -> Self::Output {
+        RelocValue(self.0.wrapping_add_signed(rhs))
+    }
+}
+
+impl Sub<usize> for RelocValue<usize> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: usize) -> Self::Output {
+        RelocValue(self.0.wrapping_sub(rhs))
+    }
+}
+
+impl From<usize> for RelocValue<usize> {
+    #[inline]
+    fn from(val: usize) -> Self {
+        Self(val)
+    }
+}
+
+impl From<RelocValue<usize>> for usize {
+    #[inline]
+    fn from(value: RelocValue<usize>) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<RelocValue<usize>> for RelocValue<i32> {
+    type Error = crate::Error;
+
+    #[inline]
+    fn try_from(value: RelocValue<usize>) -> Result<Self, Self::Error> {
+        i32::try_from(value.0 as isize)
+            .map(RelocValue)
+            .map_err(|err| relocate_error(err.to_string(), Box::new(())))
+    }
+}
+
+impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
+    type Error = crate::Error;
+
+    #[inline]
+    fn try_from(value: RelocValue<usize>) -> Result<Self, Self::Error> {
+        u32::try_from(value.0)
+            .map(RelocValue)
+            .map_err(|err| relocate_error(err.to_string(), Box::new(())))
+    }
+}
 
 pub struct SymDef<'lib> {
     pub sym: Option<&'lib ElfSymbol>,
@@ -102,7 +193,7 @@ pub(crate) fn find_symbol_addr<F>(
     symtab: &SymbolTable,
     scope: &[&Relocated],
     r_sym: usize,
-) -> Option<usize>
+) -> Option<RelocValue<usize>>
 where
     F: Fn(&str) -> Option<*const ()>,
 {
@@ -114,11 +205,11 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some(addr as usize);
+        return Some(RelocValue::new(addr as usize));
     }
     find_symdef_impl(core, scope, dynsym, &syminfo)
         .map(|symdef| symdef.convert())
-        .map(|addr| addr as usize)
+        .map(|addr| RelocValue::new(addr as usize))
 }
 
 fn find_symdef_impl<'iter, 'lib>(
@@ -157,14 +248,6 @@ where
             })
             .or_else(|| find_weak(core, sym))
     }
-}
-
-#[inline(always)]
-pub(crate) fn write_val<T>(base: usize, offset: usize, val: T) {
-    unsafe {
-        let rel_addr = (base + offset) as *mut T;
-        rel_addr.write(val);
-    };
 }
 
 #[inline]

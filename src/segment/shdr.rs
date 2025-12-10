@@ -1,8 +1,8 @@
 use crate::{
     ElfObject, Result,
-    arch::{ElfShdr, PLT_ENTRY, PLT_ENTRY_SIZE, RelocValue, Shdr, StaticRelocator},
+    arch::{ElfShdr, PLT_ENTRY, PLT_ENTRY_SIZE, Shdr, StaticRelocator},
     mmap::{MapFlags, Mmap, ProtFlags},
-    relocation::static_link::StaticReloc,
+    relocation::{RelocValue, static_link::StaticReloc},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -138,12 +138,12 @@ pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
 
 impl UsizeEntry<'_> {
     /// Update the value pointed to by this entry
-    pub(crate) fn update(&mut self, value: RelocValue) {
+    pub(crate) fn update(&mut self, value: RelocValue<usize>) {
         *self.0 = value.into();
     }
 
     /// Get the address of the value pointed to by this entry
-    pub(crate) fn get_addr(&self) -> RelocValue {
+    pub(crate) fn get_addr(&self) -> RelocValue<usize> {
         RelocValue(self.0 as *const _ as usize)
     }
 }
@@ -151,7 +151,7 @@ impl UsizeEntry<'_> {
 /// Represents a GOT entry that may or may not be occupied
 pub(crate) enum GotEntry<'got> {
     /// Entry is already occupied with a value
-    Occupied(RelocValue),
+    Occupied(RelocValue<usize>),
     /// Entry is vacant and can be filled
     Vacant(UsizeEntry<'got>),
 }
@@ -159,7 +159,7 @@ pub(crate) enum GotEntry<'got> {
 /// Represents a PLT entry that may or may not be occupied
 pub(crate) enum PltEntry<'plt> {
     /// Entry is already occupied with a value
-    Occupied(RelocValue),
+    Occupied(RelocValue<usize>),
     /// Entry is vacant and can be filled
     Vacant {
         plt: &'plt mut [u8],   // PLT entry data
