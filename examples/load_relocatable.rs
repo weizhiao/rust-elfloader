@@ -1,6 +1,8 @@
 use core::str;
+use elf_loader::Relocatable;
 use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 fn main() {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
@@ -11,24 +13,34 @@ fn main() {
     }
 
     let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    map.insert("print", print as *const () as usize);
+    let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
+        map.get(name).copied().map(|p| p as *const ())
+    });
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
         .load_relocatable(object)
         .unwrap()
-        .relocate(&[], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .run()
         .unwrap();
     let b = loader
         .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
-        .relocate(&[&a], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .scope([&a])
+        .run()
         .unwrap();
     let c = loader
         .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
-        .relocate(&[&a, &b], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .scope([&a, &b])
+        .run()
         .unwrap();
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

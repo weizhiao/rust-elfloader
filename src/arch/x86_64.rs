@@ -1,10 +1,13 @@
 use crate::{
     arch::ElfRelType,
-    relocation::{RelocValue, find_symbol_addr, reloc_error, static_link::StaticReloc},
+    relocation::{RelocValue, find_symbol_addr, reloc_error, static_link::StaticReloc, SymbolLookup},
     segment::shdr::{GotEntry, PltEntry, PltGotSection},
 };
 use alloc::boxed::Box;
 use elf::abi::*;
+
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
 
 pub const EM_ARCH: u16 = EM_X86_64;
 pub const TLS_DTV_OFFSET: usize = 0;
@@ -64,16 +67,13 @@ pub extern "C" fn dl_runtime_resolve() {
 pub(crate) struct X86_64Relocator;
 
 impl StaticReloc for X86_64Relocator {
-    fn relocate<F>(
+    fn relocate<S: SymbolLookup + ?Sized>(
         core: &crate::CoreComponent,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[&crate::format::Relocated],
-        pre_find: &F,
-    ) -> crate::Result<()>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-    {
+        scope: &[crate::format::Relocated],
+        pre_find: &S,
+    ) -> crate::Result<()> {
         let symtab = core.symtab().unwrap();
         let r_sym = rel_type.r_symbol();
         let r_type = rel_type.r_type();

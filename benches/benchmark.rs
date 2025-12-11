@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::{Loader, Relocatable, mmap::MmapImpl, object::ElfFile};
 use libloading::Library;
 
 fn load_benchmark(c: &mut Criterion) {
@@ -8,9 +8,9 @@ fn load_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut loader = Loader::<MmapImpl>::new();
             let liba = loader
-                .easy_load_dylib(ElfFile::from_path(&path).unwrap())
+                .load_dylib(ElfFile::from_path(&path).unwrap())
                 .unwrap();
-            let _ = liba.easy_relocate([].iter(), &|_| None).unwrap();
+            let _ = liba.relocator().run().unwrap();
         });
     });
     c.bench_function("libloading:new", |b| {
@@ -24,9 +24,9 @@ fn get_symbol_benchmark(c: &mut Criterion) {
     let path = "target/liba.so";
     let mut loader = Loader::<MmapImpl>::new();
     let liba = loader
-        .easy_load_dylib(ElfFile::from_path(&path).unwrap())
+        .load_dylib(ElfFile::from_path(&path).unwrap())
         .unwrap();
-    let lib1 = liba.easy_relocate([].iter(), &|_| None).unwrap();
+    let lib1 = liba.relocator().run().unwrap();
     let lib2 = unsafe { Library::new(path).unwrap() };
     c.bench_function("elf_loader:get", |b| {
         b.iter(|| unsafe { lib1.get::<fn(i32, i32) -> i32>("a").unwrap() })

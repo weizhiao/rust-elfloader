@@ -9,11 +9,15 @@ use core::{fmt::Debug, sync::atomic::AtomicBool};
 use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::{ElfRelType, ElfShdr, ElfSymbol},
-    format::{CoreComponentInner, ElfPhdrs, Relocated},
+    format::{CoreComponentInner, ElfPhdrs, ElfType, Relocated},
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
-    relocation::static_link::StaticRelocation,
+    relocation::{
+        Relocatable, SymbolLookup,
+        dynamic_link::{LazyScope, UnknownHandler},
+        static_link::StaticRelocation,
+    },
     segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
@@ -201,6 +205,7 @@ impl RelocatableBuilder {
             user_data: UserData::empty(),
             lazy_scope: None,
             segments: self.segments,
+            elf_type: ElfType::Relocatable,
         };
 
         // Construct and return the ElfRelocatable object
@@ -251,32 +256,18 @@ impl Debug for ElfRelocatable {
     }
 }
 
-impl ElfRelocatable {
-    /// Relocate the ELF object
-    ///
-    /// This method performs the relocation process on the ELF object,
-    /// resolving symbols and applying relocations to prepare the object
-    /// for execution.
-    ///
-    /// # Arguments
-    /// * `scope` - Slice of relocated libraries to use for symbol resolution
-    /// * `pre_find` - Function to use for initial symbol lookup
-    ///
-    /// # Returns
-    /// * `Ok(Relocated)` - The relocated ELF object
-    /// * `Err(Error)` - If relocation fails
-    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
+impl Relocatable for ElfRelocatable {
+    type Output = Relocated;
+
+    fn relocate<S: SymbolLookup>(
         self,
-        scope: impl AsRef<[&'iter Relocated<'scope>]>,
-        pre_find: &'find F,
-    ) -> Result<Relocated<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        let object = self.relocate_impl(scope.as_ref(), pre_find)?;
-        Ok(object)
+        scope: &[Relocated],
+        pre_find: &S,
+        _unknown_handler: Option<&mut UnknownHandler>,
+        _lazy: Option<bool>,
+        _lazy_scope: Option<LazyScope>,
+        _use_scope_as_lazy: bool,
+    ) -> Result<Self::Output> {
+        self.relocate_impl(scope, pre_find)
     }
 }

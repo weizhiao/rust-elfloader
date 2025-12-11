@@ -30,10 +30,10 @@
 //! // Load dynamic library liba.so
 //! let mut loader = Loader::<MmapImpl>::new();
 //! let liba = loader
-//!     .easy_load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+//!     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
 //!     .unwrap();
 //!     // Relocate symbols in liba.so
-//! let a = liba.easy_relocate([].iter(), &pre_find).unwrap();
+//! let a = liba.relocator().pre_find(&pre_find).scope([].iter()).run().unwrap();
 //! // Call function a in liba.so
 //! let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
 //! f();
@@ -99,14 +99,13 @@ use core::{
     fmt::{Debug, Display},
 };
 use object::*;
-use relocation::dynamic_link::GLOBAL_SCOPE;
 
 pub use elf::abi;
 pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol, UserData};
 pub use loader::Loader;
-pub use relocation::find_symdef;
+pub use relocation::{Relocatable, find_symdef};
 
 /// Error types used throughout the elf_loader library
 ///
@@ -297,24 +296,6 @@ fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) 
 /// Set the global scope for symbol resolution
 ///
 /// This function sets a global symbol resolution function that will be used
-/// during lazy binding to look up symbols that are not found in the local
-/// scope of a dynamic library.
-///
-/// # Safety
-/// This function is marked as unsafe because it directly interacts with raw pointers,
-/// and it also requires the user to ensure thread safety.  
-/// It is the caller's responsibility to ensure that the provided function `f` behaves correctly.
-///
-/// # Parameters
-/// - `f`: A function that takes a symbol name as a parameter and returns an optional raw pointer.
-///   If the symbol is found in the global scope, the function should return `Some(raw_pointer)`,
-///   otherwise, it should return `None`.
-///
-/// # Return
-/// This function does not return a value. It sets the global scope for lazy binding.
-pub unsafe fn set_global_scope(f: fn(&str) -> Option<*const ()>) {
-    GLOBAL_SCOPE.store(f as usize, core::sync::atomic::Ordering::Release);
-}
 
 /// A type alias for Results returned by elf_loader functions
 ///

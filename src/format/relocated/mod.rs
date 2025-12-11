@@ -6,17 +6,22 @@
 
 use crate::{
     CoreComponent, Result, UserData,
-    arch::{Dyn, ElfPhdr},
+    arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
-    format::{CoreComponentInner, ElfPhdrs},
+    format::{CoreComponentInner, ElfPhdrs, ElfType, Relocated, create_lazy_scope},
     loader::{FnHandler, Hook},
     mmap::Mmap,
     parse_phdr_error,
-    relocation::dynamic_link::DynamicRelocation,
+    relocation::{
+        SymbolLookup,
+        dynamic_link::{DynamicRelocation, LazyScope, UnknownHandler, relocate_impl},
+    },
     segment::{ELFRelro, ElfSegments},
     symbol::SymbolTable,
 };
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, format, vec::Vec};
 use core::{
     cell::Cell,
@@ -29,14 +34,11 @@ use core::{
 use delegate::delegate;
 use elf::abi::PT_LOAD;
 use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_PHDR};
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
 
 pub use dylib::{ElfDylib, RelocatedDylib};
 pub use exec::{ElfExec, RelocatedExec};
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 pub(crate) mod dylib;
 pub(crate) mod exec;
@@ -90,8 +92,8 @@ enum State {
 
     /// Uninitialized state with all necessary data to perform initialization
     Uninit {
-        /// Indicates whether this is a dynamic library
-        is_dylib: bool,
+        /// Indicates the type of the ELF file
+        elf_type: ElfType,
 
         /// Program headers
         phdrs: ElfPhdrs,
@@ -116,9 +118,6 @@ enum State {
 
         /// User-defined data
         user_data: UserData,
-
-        /// Lazy binding override setting
-        lazy_bind: Option<bool>,
     },
 
     /// Initialized state with all data ready for relocation
@@ -141,11 +140,10 @@ impl State {
                 segments,
                 relro,
                 user_data,
-                lazy_bind,
                 init_handler,
                 fini_handler,
                 phdrs,
-                is_dylib,
+                elf_type,
             } => {
                 // If we have a dynamic section, parse it and prepare relocation data
                 if let Some(dynamic_ptr) = dynamic_ptr {
@@ -171,7 +169,7 @@ impl State {
                     LazyData {
                         extra: ElfExtraData {
                             // Determine if lazy binding should be enabled
-                            lazy: lazy_bind.unwrap_or(!dynamic.bind_now),
+                            lazy: !dynamic.bind_now,
 
                             // Store GNU_RELRO segment information
                             relro,
@@ -214,12 +212,13 @@ impl State {
                                 needed_libs: needed_libs.into_boxed_slice(),
                                 user_data,
                                 lazy_scope: None,
+                                elf_type,
                             }),
                         },
                     }
                 } else {
                     // If there's no dynamic section (e.g., for executables)
-                    assert!(!is_dylib, "dylib does not have dynamic");
+                    assert!(!elf_type.is_dylib(), "dylib does not have dynamic");
                     let relocation = DynamicRelocation::new(None, None, None, None);
 
                     // Create minimal lazy data structure
@@ -239,10 +238,11 @@ impl State {
                                 needed_libs: Box::new([]),
                                 user_data,
                                 lazy_scope: None,
+                                elf_type,
                             }),
                         },
                         extra: ElfExtraData {
-                            lazy: lazy_bind.unwrap_or(false),
+                            lazy: false,
                             relro,
                             relocation,
                             init: Box::new(|| {}),
@@ -560,9 +560,6 @@ pub(crate) struct RelocatedBuilder<'hook, M: Mmap> {
     /// Name of the ELF file
     name: CString,
 
-    /// Lazy binding override setting
-    lazy_bind: Option<bool>,
-
     /// ELF header
     ehdr: ElfHeader,
 
@@ -598,7 +595,6 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
     /// * `hook` - Optional hook function for processing program headers
     /// * `segments` - Memory segments of the ELF file
     /// * `name` - Name of the ELF file
-    /// * `lazy_bind` - Lazy binding override setting
     /// * `ehdr` - ELF header
     /// * `init_fn` - Initialization function handler
     /// * `fini_fn` - Finalization function handler
@@ -609,7 +605,6 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
         hook: Option<&'hook Hook>,
         segments: ElfSegments,
         name: CString,
-        lazy_bind: Option<bool>,
         ehdr: ElfHeader,
         init_fn: FnHandler,
         fini_fn: FnHandler,
@@ -618,7 +613,6 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
             hook,
             phdr_mmap: None,
             name,
-            lazy_bind,
             ehdr,
             relro: None,
             dynamic_ptr: None,
@@ -737,7 +731,11 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
     /// * `Err(Error)` - If building fails
     pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<RelocatedCommonPart> {
         // Determine if this is a dynamic library
-        let is_dylib = self.ehdr.is_dylib();
+        let elf_type = if self.ehdr.is_dylib() {
+            ElfType::Dylib
+        } else {
+            ElfType::Exec
+        };
 
         // Parse all program headers
         for phdr in phdrs {
@@ -749,7 +747,12 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
 
         // Build and return the relocated common part
         Ok(RelocatedCommonPart {
-            entry: self.ehdr.e_entry as usize + if is_dylib { self.segments.base() } else { 0 },
+            entry: self.ehdr.e_entry as usize
+                + if elf_type.is_dylib() {
+                    self.segments.base()
+                } else {
+                    0
+                },
             interp: self
                 .interp
                 .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
@@ -757,7 +760,7 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
             phdrs: phdrs.clone(),
             data: LazyParse {
                 state: Cell::new(State::Uninit {
-                    is_dylib,
+                    elf_type,
                     phdrs,
                     init_handler: self.init_fn,
                     fini_handler: self.fini_fn,
@@ -766,9 +769,51 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
                     segments: self.segments,
                     relro: self.relro,
                     user_data: self.user_data,
-                    lazy_bind: self.lazy_bind,
                 }),
             },
         })
     }
+}
+
+pub(crate) fn relocate_common<S: SymbolLookup>(
+    common: RelocatedCommonPart,
+    scope: &[Relocated],
+    pre_find: &S,
+    unknown_handler: Option<&mut UnknownHandler>,
+    lazy: Option<bool>,
+    lazy_scope: Option<LazyScope>,
+    use_scope_as_lazy: bool,
+) -> Result<(Relocated, usize)> {
+    // Optimization: check if relocation is empty
+    if common.relocation().is_empty() {
+        let entry = common.entry();
+        let core = common.into_core_component();
+        let relocated = unsafe { Relocated::from_core_component(core) };
+        return Ok((relocated, entry));
+    }
+
+    let is_lazy = lazy.unwrap_or(common.is_lazy());
+    let entry = common.entry();
+
+    // Setup default handler if none provided
+    let mut default_handler = |_: &ElfRelType, _: &CoreComponent, _: &[Relocated]| {
+        Err(Box::new(()) as Box<dyn core::any::Any + Send + Sync>)
+    };
+    let deal_unknown = unknown_handler.unwrap_or(&mut default_handler);
+
+    // Setup lazy scope if needed
+    let lazy_scope = if is_lazy {
+        if use_scope_as_lazy {
+            let libs = scope.iter().map(|lib| lib.downgrade()).collect();
+            Some(create_lazy_scope(libs, Arc::new(|_| None)))
+        } else {
+            lazy_scope
+        }
+    } else {
+        None
+    };
+
+    let relocated = relocate_impl(common, scope, pre_find, deal_unknown, lazy_scope)?;
+
+    Ok((relocated, entry))
 }

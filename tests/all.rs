@@ -1,9 +1,7 @@
 use elf_loader::{
-    Elf, Loader, RelocatedDylib, load, load_dylib, load_exec, mmap::MmapImpl, object::ElfFile,
+    Elf, Loader, Relocatable, load, load_dylib, load_exec, mmap::MmapImpl, object::ElfFile,
 };
-use std::{collections::HashMap, fs::File, io::Read};
-
-const EMPTY: &[RelocatedDylib; 0] = &[];
+use std::{collections::HashMap, fs::File, io::Read, sync::Arc};
 
 #[test]
 fn relocate_dylib() {
@@ -17,41 +15,49 @@ fn relocate_dylib() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.easy_relocate(EMPTY, &pre_find).unwrap();
+    let a = liba.relocator().pre_find(&pre_find).run().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
-    let b = libb.easy_relocate([&a].into_iter(), &pre_find).unwrap();
+    let b = libb
+        .relocator()
+        .pre_find(&pre_find)
+        .scope([&a].into_iter())
+        .run()
+        .unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
-    let c = libc.easy_relocate([&b].into_iter(), &pre_find).unwrap();
+    let c = libc
+        .relocator()
+        .pre_find(&pre_find)
+        .scope([&b].into_iter())
+        .run()
+        .unwrap();
     let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
 }
 
 #[test]
 fn lazy_binding() {
-    use std::sync::Arc;
-
     fn print(s: &str) {
         println!("{}", s);
     }
     let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    map.insert("print", print as *const () as usize);
+    let map = Arc::new(map);
+    let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
+        map.get(name).copied().map(|p| p as *const ())
+    });
     let liba = load_dylib!("target/liba.so").unwrap();
-    let libb = load_dylib!("target/libb.so", lazy : true).unwrap();
-    let a = liba.easy_relocate(EMPTY, &pre_find).unwrap();
+    let libb = load_dylib!("target/libb.so").unwrap();
+    let a = liba.relocator().pre_find(&*pre_find).run().unwrap();
+    let pre_find_clone = pre_find.clone();
     let b = libb
-        .relocate(
-            [&a],
-            &pre_find,
-            &mut |_, _, _| Err(Box::new(())),
-            Some(Arc::new(|name| unsafe {
-                a.get::<()>(name)
-                    .map(|sym| sym.into_raw())
-                    .or_else(|| pre_find(name))
-            })),
-        )
+        .relocator()
+        .pre_find(pre_find.clone())
+        .scope([&a])
+        .lazy(true)
+        .lazy_scope(Some(Arc::new(move |name| pre_find_clone(name))))
+        .run()
         .unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
@@ -63,7 +69,7 @@ fn load_from_memory() {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     let liba = load_dylib!("target/liba.so", &bytes).unwrap();
-    let a = liba.easy_relocate(EMPTY, &|_| None).unwrap();
+    let a = liba.relocator().run().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
 }
@@ -84,11 +90,7 @@ fn type_mismatch() {
 fn load_elf() {
     let liba = load!("target/liba.so").unwrap();
     assert!(matches!(liba, Elf::Dylib(_)));
-    let a = liba
-        .easy_relocate(EMPTY, &|_| None)
-        .unwrap()
-        .into_dylib()
-        .unwrap();
+    let a = liba.relocator().run().unwrap().into_dylib().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
 }
@@ -97,11 +99,11 @@ fn load_elf() {
 fn missing_symbol_fails() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
-        .easy_relocate(EMPTY, &|_| None)
+        .relocator()
+        .run()
         .unwrap();
-    unsafe {
-        assert!(lib.get::<*mut ()>("test_does_not_exist").is_none());
-    }
+    let f = unsafe { lib.get::<fn() -> i32>("b") };
+    assert!(f.is_none());
 }
 
 #[repr(C)]
@@ -117,7 +119,8 @@ struct S {
 fn test_id_struct() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
-        .easy_relocate(EMPTY, &|_| None)
+        .relocator()
+        .run()
         .unwrap();
     unsafe {
         let f = lib
@@ -148,24 +151,34 @@ fn load_relocatable() {
     }
 
     let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    map.insert("print", print as *const () as usize);
+    let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
+        map.get(name).copied().map(|p| p as *const ())
+    });
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
         .load_relocatable(object)
         .unwrap()
-        .relocate(&[], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .run()
         .unwrap();
     let b = loader
         .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
-        .relocate(&[&a], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .scope([&a])
+        .run()
         .unwrap();
     let c = loader
         .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
-        .relocate(&[&a, &b], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .scope([&a, &b])
+        .run()
         .unwrap();
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
@@ -184,18 +197,22 @@ fn test_relocatable() {
     static EXTERNAL_VAR_IMPL: i32 = 200;
 
     let mut map = HashMap::new();
-    map.insert("external_func", external_func_impl as _);
-    map.insert("external_var", &EXTERNAL_VAR_IMPL as *const _ as _);
-    map.insert("external_var_32", 0x1000 as *const () as _);
+    map.insert("external_func", external_func_impl as *const () as usize);
+    map.insert("external_var", &EXTERNAL_VAR_IMPL as *const _ as usize);
+    map.insert("external_var_32", 0x1000 as usize);
 
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
+        map.get(name).copied().map(|p| p as *const ())
+    });
 
     let mut loader = Loader::<MmapImpl>::new();
     let object = ElfFile::from_path("target/x86_64.o").unwrap();
     let lib = loader
         .load_relocatable(object)
         .unwrap()
-        .relocate(&[], &pre_find)
+        .relocator()
+        .pre_find(pre_find.clone())
+        .run()
         .unwrap();
 
     unsafe {

@@ -6,15 +6,45 @@
 
 use super::RelocatedCommonPart;
 use crate::{
-    CoreComponent, Loader, RelocatedDylib, Result,
-    format::{Relocated, create_lazy_scope},
+    CoreComponent, Loader, Result,
+    format::Relocated,
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
+    relocation::{
+        Relocatable, SymbolLookup,
+        dynamic_link::{LazyScope, UnknownHandler},
+    },
 };
-use alloc::{boxed::Box, vec::Vec};
-use core::{fmt::Debug, marker::PhantomData, ops::Deref};
+use core::{fmt::Debug, ops::Deref};
+
+impl Relocatable for ElfExec {
+    type Output = RelocatedExec;
+
+    fn relocate<S: SymbolLookup>(
+        self,
+        scope: &[Relocated],
+        pre_find: &S,
+        unknown_handler: Option<&mut UnknownHandler>,
+        lazy: Option<bool>,
+        lazy_scope: Option<LazyScope>,
+        use_scope_as_lazy: bool,
+    ) -> Result<Self::Output> {
+        let (relocated, entry) = super::relocate_common(
+            self.inner,
+            scope,
+            pre_find,
+            unknown_handler,
+            lazy,
+            lazy_scope,
+            use_scope_as_lazy,
+        )?;
+        Ok(RelocatedExec {
+            entry,
+            inner: relocated,
+        })
+    }
+}
 
 impl Deref for ElfExec {
     type Target = RelocatedCommonPart;
@@ -52,177 +82,20 @@ impl Debug for ElfExec {
     }
 }
 
-impl ElfExec {
-    /// Relocate the executable file with the given dynamic libraries and function closure
-    ///
-    /// This is a convenience method that performs relocation with default settings.
-    /// It creates a local lazy scope if lazy binding is enabled for this executable.
-    ///
-    /// # Note
-    /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    ///
-    /// # Arguments
-    /// * `scope` - Iterator over relocated libraries to use for symbol resolution
-    /// * `pre_find` - Function to use for initial symbol lookup
-    ///
-    /// # Returns
-    /// * `Ok(RelocatedExec)` - The relocated executable
-    /// * `Err(Error)` - If relocation fails
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
-        self,
-        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
-        pre_find: &'find F,
-    ) -> Result<RelocatedExec<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        // If there are no relocations, we can return early
-        if self.inner.relocation().is_empty() {
-            return Ok(RelocatedExec {
-                entry: self.inner.entry,
-                inner: Relocated {
-                    core: self.inner.into_core_component(),
-                    _marker: PhantomData,
-                },
-            });
-        }
-
-        // Create a helper vector to store the relocation scope
-        let mut helper: Vec<&Relocated<'_>> = Vec::new();
-
-        // Add the executable itself to the scope if it has a symbol table
-        let temp = unsafe { &RelocatedDylib::from_core_component(self.core_component()) };
-        if self.inner.symtab().is_some() {
-            helper.push(unsafe { core::mem::transmute::<&RelocatedDylib, &RelocatedDylib>(temp) });
-        }
-
-        // Process the provided scope
-        let iter = scope.into_iter();
-        let local_lazy_scope = if self.is_lazy() {
-            let mut libs = Vec::new();
-            iter.for_each(|lib| {
-                libs.push(lib.downgrade());
-                helper.push(lib);
-            });
-            Some(create_lazy_scope(libs, pre_find))
-        } else {
-            iter.for_each(|lib| {
-                helper.push(lib);
-            });
-            None
-        };
-
-        // Perform the relocation and return the result
-        Ok(RelocatedExec {
-            entry: self.inner.entry,
-            inner: relocate_impl(
-                self.inner,
-                &helper,
-                pre_find,
-                &mut |_, _, _| Err(Box::new(())),
-                local_lazy_scope,
-            )?,
-        })
-    }
-
-    /// Relocate the executable file with the given dynamic libraries and function closure
-    ///
-    /// This method provides full control over the relocation process, allowing
-    /// custom handling of unknown relocations and specification of a local
-    /// lazy scope.
-    ///
-    /// # Note
-    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by elf_loader or failed relocations
-    /// * Relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
-    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    ///
-    /// # Arguments
-    /// * `scope` - Slice of relocated libraries to use for symbol resolution
-    /// * `pre_find` - Function to use for initial symbol lookup
-    /// * `deal_unknown` - Handler for unknown or failed relocations
-    /// * `local_lazy_scope` - Optional local scope for lazy binding
-    ///
-    /// # Returns
-    /// * `Ok(RelocatedExec)` - The relocated executable
-    /// * `Err(Error)` - If relocation fails
-    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
-        self,
-        scope: impl AsRef<[&'iter Relocated<'scope>]>,
-        pre_find: &'find F,
-        deal_unknown: &mut UnknownHandler,
-        local_lazy_scope: Option<LazyScope<'lib>>,
-    ) -> Result<RelocatedExec<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        // If there are no relocations, we can return early
-        if self.inner.relocation().is_empty() {
-            return Ok(RelocatedExec {
-                entry: self.inner.entry,
-                inner: Relocated {
-                    core: self.inner.into_core_component(),
-                    _marker: PhantomData,
-                },
-            });
-        }
-
-        // Perform the relocation and return the result
-        Ok(RelocatedExec {
-            entry: self.inner.entry,
-            inner: relocate_impl(
-                self.inner,
-                scope.as_ref(),
-                pre_find,
-                deal_unknown,
-                local_lazy_scope,
-            )?,
-        })
-    }
-}
-
 impl<M: Mmap> Loader<M> {
-    /// Load an executable file into memory
-    ///
-    /// This is a convenience method that calls [load_exec] with `lazy_bind` set to `None`.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as an executable
-    ///
-    /// # Returns
-    /// * `Ok(ElfExec)` - The loaded executable
-    /// * `Err(Error)` - If loading fails
-    pub fn easy_load_exec(&mut self, object: impl ElfObject) -> Result<ElfExec> {
-        self.load_exec(object, None)
-    }
-
     /// Load an executable file into memory
     ///
     /// This method loads an executable ELF file into memory and prepares it
     /// for relocation. The file is validated to ensure it is indeed an
     /// executable and not a dynamic library.
     ///
-    /// # Note
-    /// * When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    ///
     /// # Arguments
     /// * `object` - The ELF object to load as an executable
-    /// * `lazy_bind` - Optional override for lazy binding behavior
     ///
     /// # Returns
     /// * `Ok(ElfExec)` - The loaded executable
     /// * `Err(Error)` - If loading fails
-    pub fn load_exec(
-        &mut self,
-        mut object: impl ElfObject,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfExec> {
+    pub fn load_exec(&mut self, mut object: impl ElfObject) -> Result<ElfExec> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -232,7 +105,7 @@ impl<M: Mmap> Loader<M> {
         }
 
         // Load the relocated common part
-        let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+        let inner = self.load_relocated(ehdr, object)?;
 
         // Wrap in ElfExec and return
         Ok(ElfExec { inner })
@@ -245,15 +118,14 @@ impl<M: Mmap> Loader<M> {
 /// and relocated in memory, making it ready for execution. It contains
 /// the entry point and other information needed to run the executable.
 #[derive(Clone)]
-pub struct RelocatedExec<'scope> {
+pub struct RelocatedExec {
     /// Entry point of the executable
     entry: usize,
-
     /// The relocated ELF object
-    inner: Relocated<'scope>,
+    inner: Relocated,
 }
 
-impl RelocatedExec<'_> {
+impl RelocatedExec {
     /// Gets the entry point of the executable
     ///
     /// # Returns
@@ -264,7 +136,7 @@ impl RelocatedExec<'_> {
     }
 }
 
-impl Debug for RelocatedExec<'_> {
+impl Debug for RelocatedExec {
     /// Formats the RelocatedExec for debugging purposes
     ///
     /// This implementation delegates to the inner Relocated object's
@@ -274,7 +146,7 @@ impl Debug for RelocatedExec<'_> {
     }
 }
 
-impl Deref for RelocatedExec<'_> {
+impl Deref for RelocatedExec {
     type Target = CoreComponent;
 
     /// Dereferences to the underlying CoreComponent

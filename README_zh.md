@@ -113,7 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 加载并重定位动态库
     let lib = load_dylib!("target/libexample.so")?
-        .easy_relocate([].iter(), &pre_find)?;
+        .relocator()
+        .pre_find(pre_find)
+        .run()?;
     
     // 调用库中的函数
     let func = unsafe { lib.get::<fn() -> i32>("example_function")? };

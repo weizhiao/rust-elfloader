@@ -21,13 +21,13 @@ fn main() {
     let libc = loader
         .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
         .unwrap();
-    let a = liba.easy_relocate([], &pre_find).unwrap();
+    let a = liba.relocate([], &pre_find).unwrap();
     let f = unsafe { a.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
-    let b = libb.easy_relocate([&a], &pre_find).unwrap();
+    let b = libb.relocate([&a], &pre_find).unwrap();
     let f = unsafe { b.get::<extern "sysv64" fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
-    let c = libc.easy_relocate([&b], &pre_find).unwrap();
+    let c = libc.relocate([&b], &pre_find).unwrap();
     let f = unsafe { c.get::<extern "sysv64" fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
 }

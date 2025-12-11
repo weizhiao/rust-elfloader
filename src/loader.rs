@@ -155,7 +155,6 @@ impl<M: Mmap> Loader<M> {
         &'loader mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
-        lazy_bind: Option<bool>,
     ) -> Result<RelocatedCommonPart> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
@@ -167,7 +166,6 @@ impl<M: Mmap> Loader<M> {
             self.hook.as_ref(),
             segments,
             object.file_name().to_owned(),
-            lazy_bind,
             ehdr,
             init_fn,
             fini_fn,

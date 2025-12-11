@@ -20,15 +20,13 @@ cfg_if::cfg_if! {
         ];
 
         impl crate::relocation::static_link::StaticReloc for DummyRelocator {
-            fn relocate<F>(
+            fn relocate<S: crate::format::SymbolLookup + ?Sized>(
                 _core: &crate::CoreComponent,
                 _rel_type: &ElfRelType,
                 _pltgot: &mut crate::segment::shdr::PltGotSection,
-                _scope: &[&crate::Relocated],
-                _pre_find: &F,
+                _scope: &[crate::Relocated],
+                _pre_find: &S,
             ) -> crate::Result<()>
-            where
-                F: Fn(&str) -> Option<*const ()>,
             {
                 todo!()
             }
@@ -193,8 +191,9 @@ impl ElfRel {
     }
 
     #[inline]
-    pub(crate) fn set_offset(&mut self, offset: usize) {
-        self.rel.r_offset = offset as _;
+    #[allow(unused)]
+    pub(crate) fn set_offset(&mut self, _offset: usize) {
+        todo!()
     }
 }
 

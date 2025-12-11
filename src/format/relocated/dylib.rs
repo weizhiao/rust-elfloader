@@ -7,13 +7,15 @@
 use super::RelocatedCommonPart;
 use crate::{
     Loader, Result, UserData,
-    format::{Relocated, create_lazy_scope},
+    format::Relocated,
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::dynamic_link::{LazyScope, UnknownHandler, relocate_impl},
+    relocation::{
+        Relocatable, SymbolLookup,
+        dynamic_link::{LazyScope, UnknownHandler},
+    },
 };
-use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ops::Deref};
 
 /// An unrelocated dynamic library
@@ -52,6 +54,35 @@ impl Debug for ElfDylib {
     }
 }
 
+#[cfg(not(feature = "portable-atomic"))]
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
+
+impl Relocatable for ElfDylib {
+    type Output = RelocatedDylib;
+
+    fn relocate<S: SymbolLookup>(
+        self,
+        scope: &[Relocated],
+        pre_find: &S,
+        unknown_handler: Option<&mut UnknownHandler>,
+        lazy: Option<bool>,
+        lazy_scope: Option<LazyScope>,
+        use_scope_as_lazy: bool,
+    ) -> Result<Self::Output> {
+        let (relocated, _) = super::relocate_common(
+            self.inner,
+            scope,
+            pre_find,
+            unknown_handler,
+            lazy,
+            lazy_scope,
+            use_scope_as_lazy,
+        )?;
+        Ok(relocated)
+    }
+}
+
 impl ElfDylib {
     /// Gets mutable user data from the ELF object
     ///
@@ -65,137 +96,22 @@ impl ElfDylib {
     pub fn user_data_mut(&mut self) -> Option<&mut UserData> {
         self.inner.user_data_mut()
     }
-
-    /// Relocate the dynamic library with the given dynamic libraries and function closure
-    ///
-    /// This is a convenience method that performs relocation with default settings.
-    /// It creates a local lazy scope if lazy binding is enabled for this library.
-    ///
-    /// # Note
-    /// During relocation, the symbol is first searched in the function closure `pre_find`.
-    ///
-    /// # Arguments
-    /// * `scope` - Iterator over relocated libraries to use for symbol resolution
-    /// * `pre_find` - Function to use for initial symbol lookup
-    ///
-    /// # Returns
-    /// * `Ok(RelocatedDylib)` - The relocated dynamic library
-    /// * `Err(Error)` - If relocation fails
-    pub fn easy_relocate<'iter, 'scope, 'find, 'lib, F>(
-        self,
-        scope: impl IntoIterator<Item = &'iter Relocated<'scope>>,
-        pre_find: &'find F,
-    ) -> Result<RelocatedDylib<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        let iter = scope.into_iter();
-        let mut helper = Vec::new();
-        let local_lazy_scope = if self.is_lazy() {
-            let mut libs = Vec::new();
-            iter.for_each(|lib| {
-                libs.push(lib.downgrade());
-                helper.push(lib);
-            });
-            Some(create_lazy_scope(libs, pre_find))
-        } else {
-            iter.for_each(|lib| {
-                helper.push(lib);
-            });
-            None
-        };
-        self.relocate(
-            helper,
-            pre_find,
-            &mut |_, _, _| Err(Box::new(())),
-            local_lazy_scope,
-        )
-    }
-
-    /// Relocate the dynamic library with the given dynamic libraries and function closure
-    ///
-    /// This method provides full control over the relocation process, allowing
-    /// custom handling of unknown relocations and specification of a local
-    /// lazy scope.
-    ///
-    /// # Note
-    /// * During relocation, the symbol is first searched in the function closure `pre_find`.
-    /// * The `deal_unknown` function is used to handle relocation types not implemented by elf_loader or failed relocations
-    /// * Typically, the `scope` should also contain the current dynamic library itself,
-    ///   relocation will be done in the exact order in which the dynamic libraries appear in `scope`.
-    /// * When lazy binding, the symbol is first looked for in the global scope and then in the local lazy scope
-    ///
-    /// # Arguments
-    /// * `scope` - Slice of relocated libraries to use for symbol resolution
-    /// * `pre_find` - Function to use for initial symbol lookup
-    /// * `deal_unknown` - Handler for unknown or failed relocations
-    /// * `local_lazy_scope` - Optional local scope for lazy binding
-    ///
-    /// # Returns
-    /// * `Ok(RelocatedDylib)` - The relocated dynamic library
-    /// * `Err(Error)` - If relocation fails
-    pub fn relocate<'iter, 'scope, 'find, 'lib, F>(
-        self,
-        scope: impl AsRef<[&'iter Relocated<'scope>]>,
-        pre_find: &'find F,
-        deal_unknown: &mut UnknownHandler,
-        local_lazy_scope: Option<LazyScope<'lib>>,
-    ) -> Result<RelocatedDylib<'lib>>
-    where
-        F: Fn(&str) -> Option<*const ()>,
-        'scope: 'iter,
-        'iter: 'lib,
-        'find: 'lib,
-    {
-        relocate_impl(
-            self.inner,
-            scope.as_ref(),
-            pre_find,
-            deal_unknown,
-            local_lazy_scope,
-        )
-    }
 }
 
 impl<M: Mmap> Loader<M> {
-    /// Load a dynamic library into memory
-    ///
-    /// This is a convenience method that calls [load_dylib] with `lazy_bind` set to `None`.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as a dynamic library
-    ///
-    /// # Returns
-    /// * `Ok(ElfDylib)` - The loaded dynamic library
-    /// * `Err(Error)` - If loading fails
-    pub fn easy_load_dylib(&mut self, object: impl ElfObject) -> Result<ElfDylib> {
-        self.load_dylib(object, None)
-    }
-
     /// Load a dynamic library into memory
     ///
     /// This method loads a dynamic library (shared object) file into memory
     /// and prepares it for relocation. The file is validated to ensure it
     /// is indeed a dynamic library.
     ///
-    /// # Note
-    /// When `lazy_bind` is not set, lazy binding is enabled using the dynamic library's DT_FLAGS flag.
-    ///
     /// # Arguments
     /// * `object` - The ELF object to load as a dynamic library
-    /// * `lazy_bind` - Optional override for lazy binding behavior
     ///
     /// # Returns
     /// * `Ok(ElfDylib)` - The loaded dynamic library
     /// * `Err(Error)` - If loading fails
-    pub fn load_dylib(
-        &mut self,
-        mut object: impl ElfObject,
-        lazy_bind: Option<bool>,
-    ) -> Result<ElfDylib> {
+    pub fn load_dylib(&mut self, mut object: impl ElfObject) -> Result<ElfDylib> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -205,7 +121,7 @@ impl<M: Mmap> Loader<M> {
         }
 
         // Load the relocated common part
-        let inner = self.load_relocated(ehdr, object, lazy_bind)?;
+        let inner = self.load_relocated(ehdr, object)?;
 
         // Wrap in ElfDylib and return
         Ok(ElfDylib { inner })
@@ -216,4 +132,4 @@ impl<M: Mmap> Loader<M> {
 ///
 /// This type represents a dynamic library that has been loaded and relocated
 /// in memory, making it ready for symbol resolution and execution.
-pub type RelocatedDylib<'lib> = Relocated<'lib>;
+pub type RelocatedDylib = Relocated;

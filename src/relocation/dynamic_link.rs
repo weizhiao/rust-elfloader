@@ -3,31 +3,24 @@ use crate::{
     CoreComponent, Result,
     arch::*,
     format::{Relocated, relocated::RelocatedCommonPart},
-    relocation::{RelocValue, find_symbol_addr, find_symdef, likely, reloc_error, unlikely},
+    relocation::{
+        RelocValue, SymbolLookup, find_symbol_addr, find_symdef, likely, reloc_error, unlikely,
+    },
 };
 use alloc::boxed::Box;
-use core::{
-    any::Any,
-    marker::PhantomData,
-    num::NonZeroUsize,
-    ptr::null_mut,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use core::{any::Any, num::NonZeroUsize, ptr::null_mut};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-/// Global scope for lazy binding - symbols will be looked up here first
-pub(crate) static GLOBAL_SCOPE: AtomicUsize = AtomicUsize::new(0);
-
-pub(crate) type LazyScope<'lib> = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()> + 'lib>;
+pub(crate) type LazyScope = Arc<dyn for<'a> Fn(&'a str) -> Option<*const ()>>;
 
 pub(crate) type UnknownHandler = dyn FnMut(
     &ElfRelType,
     &CoreComponent,
-    &[&Relocated],
+    &[Relocated],
 ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>;
 
 /// Resolve indirect function address
@@ -41,26 +34,21 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
 }
 
 /// Perform relocations on an ELF object
-pub(crate) fn relocate_impl<'iter, 'find, 'lib, F>(
+pub(crate) fn relocate_impl<'find, S>(
     elf: RelocatedCommonPart,
-    scope: &[&'iter Relocated],
-    pre_find: &'find F,
-    deal_unknown: &mut UnknownHandler,
-    local_lazy_scope: Option<LazyScope<'lib>>,
-) -> Result<Relocated<'lib>>
+    scope: &[Relocated],
+    pre_find: &'find S,
+    unknown_handler: &mut UnknownHandler,
+    lazy_scope: Option<LazyScope>,
+) -> Result<Relocated>
 where
-    F: Fn(&str) -> Option<*const ()>,
-    'iter: 'lib,
-    'find: 'lib,
+    S: SymbolLookup + ?Sized,
 {
     elf.relocate_relative()
-        .relocate_dynrel(&scope, pre_find, deal_unknown)?
-        .relocate_pltrel(local_lazy_scope, &scope, pre_find, deal_unknown)?
+        .relocate_dynrel(scope, pre_find, unknown_handler)?
+        .relocate_pltrel(lazy_scope, scope, pre_find, unknown_handler)?
         .finish();
-    Ok(Relocated {
-        core: elf.into_core_component(),
-        _marker: PhantomData,
-    })
+    Ok(unsafe { Relocated::from_core_component(elf.into_core_component()) })
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
@@ -78,17 +66,9 @@ unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_id
     // Get symbol information
     let (_, syminfo) = dylib.symbols.as_ref().unwrap().symbol_idx(r_sym);
 
-    // Look up symbol in global scope first, then local scope
-    let scope = GLOBAL_SCOPE.load(core::sync::atomic::Ordering::Acquire);
-    let symbol = if scope == 0 {
-        dylib.lazy_scope.as_ref().unwrap()(syminfo.name())
-    } else {
-        unsafe {
-            core::mem::transmute::<usize, fn(&str) -> Option<*const ()>>(scope)(syminfo.name())
-        }
-        .or_else(|| dylib.lazy_scope.as_ref().unwrap()(syminfo.name()))
-    }
-    .expect("lazy bind fail") as usize;
+    // Look up symbol in local scope
+    let symbol =
+        dylib.lazy_scope.as_ref().unwrap()(syminfo.name()).expect("lazy bind fail") as usize;
 
     // Write the resolved symbol address to the GOT entry
     segments.write(rela.r_offset(), RelocValue::new(symbol));
@@ -125,15 +105,15 @@ pub(crate) struct DynamicRelocation {
 
 impl RelocatedCommonPart {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<F>(
+    fn relocate_pltrel<S>(
         &self,
-        local_lazy_scope: Option<LazyScope<'_>>,
-        scope: &[&Relocated],
-        pre_find: &F,
+        local_lazy_scope: Option<LazyScope>,
+        scope: &[Relocated],
+        pre_find: &S,
         deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
     where
-        F: Fn(&str) -> Option<*const ()>,
+        S: SymbolLookup + ?Sized,
     {
         let core = self.core_component_ref();
         let base = core.base();
@@ -177,10 +157,8 @@ impl RelocatedCommonPart {
 
             // Ensure either local or global lazy scope is available
             assert!(
-                reloc.pltrel.is_empty()
-                    || local_lazy_scope.is_some()
-                    || GLOBAL_SCOPE.load(Ordering::Relaxed) != 0,
-                "neither local lazy scope nor global scope is set"
+                reloc.pltrel.is_empty() || local_lazy_scope.is_some(),
+                "local lazy scope is not set"
             );
 
             // Set the local lazy scope if provided
@@ -271,14 +249,14 @@ impl RelocatedCommonPart {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<F>(
+    fn relocate_dynrel<S>(
         &self,
-        scope: &[&Relocated],
-        pre_find: &F,
+        scope: &[Relocated],
+        pre_find: &S,
         deal_unknown: &mut UnknownHandler,
     ) -> Result<&Self>
     where
-        F: Fn(&str) -> Option<*const ()>,
+        S: SymbolLookup + ?Sized,
     {
         /*
             Relocation formula components:
