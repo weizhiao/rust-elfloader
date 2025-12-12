@@ -1,6 +1,3 @@
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
-
 use crate::{
     CoreComponent, Result,
     arch::{ElfRelType, StaticRelocator},
@@ -35,7 +32,7 @@ impl ElfRelocatable {
         }
         (self.mprotect)()?;
         (self.init)(None, self.init_array);
-        Ok(unsafe { Relocated::from_core_component(self.core) })
+        Ok(unsafe { Relocated::from_core(self.core) })
     }
 }
 

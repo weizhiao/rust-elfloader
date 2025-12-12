@@ -14,8 +14,8 @@ fn main() {
     let liba = load_dylib!("target/liba.so")
         .unwrap()
         .relocator()
-        .pre_find(&pre_find)
-        .run()
+        .symbols(&pre_find)
+        .relocate()
         .unwrap();
     // Call function a in liba.so
     let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };

@@ -16,7 +16,7 @@ fn main() {
         .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
         .unwrap()
         .relocator()
-        .pre_find(&pre_find)
+        .symbols(&pre_find)
         .scope([])
         .run()
         .unwrap();

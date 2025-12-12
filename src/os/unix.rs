@@ -195,7 +195,7 @@ impl ElfObject for RawFile {
 #[cold]
 #[inline(never)]
 fn map_error(msg: &str) -> Error {
-    Error::MmapError {
-        msg: msg.to_string(),
+    Error::Mmap {
+        msg: msg.to_string().into(),
     }
 }

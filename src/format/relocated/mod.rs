@@ -6,17 +6,14 @@
 
 use crate::{
     CoreComponent, Result, UserData,
-    arch::{Dyn, ElfPhdr, ElfRelType},
+    arch::{Dyn, ElfPhdr},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
-    format::{CoreComponentInner, ElfPhdrs, ElfType, Relocated, create_lazy_scope},
+    format::{CoreComponentInner, DynamicComponent, ElfPhdrs, ElfType},
     loader::{FnHandler, Hook},
     mmap::Mmap,
     parse_phdr_error,
-    relocation::{
-        SymbolLookup,
-        dynamic_link::{DynamicRelocation, LazyScope, UnknownHandler, relocate_impl},
-    },
+    relocation::dynamic_link::DynamicRelocation,
     segment::{ELFRelro, ElfSegments},
     symbol::SymbolTable,
 };
@@ -200,18 +197,20 @@ impl State {
                                 is_init: AtomicBool::new(false),
                                 name,
                                 symbols: Some(symbols),
-                                dynamic: NonNull::new(dynamic.dyn_ptr as _),
-                                pltrel: NonNull::new(
-                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
-                                ),
-                                phdrs,
+                                dynamic_info: Some(DynamicComponent {
+                                    dynamic: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                                    pltrel: NonNull::new(
+                                        dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
+                                    ),
+                                    phdrs,
+                                    needed_libs: needed_libs.into_boxed_slice(),
+                                    lazy_scope: None,
+                                }),
                                 fini: dynamic.fini_fn,
                                 fini_array: dynamic.fini_array_fn,
                                 fini_handler,
                                 segments,
-                                needed_libs: needed_libs.into_boxed_slice(),
                                 user_data,
-                                lazy_scope: None,
                                 elf_type,
                             }),
                         },
@@ -228,16 +227,12 @@ impl State {
                                 is_init: AtomicBool::new(false),
                                 name,
                                 symbols: None,
-                                dynamic: None,
-                                pltrel: None,
-                                phdrs: ElfPhdrs::Mmap(&[]),
+                                dynamic_info: None,
                                 fini: None,
                                 fini_array: None,
                                 fini_handler,
                                 segments,
-                                needed_libs: Box::new([]),
                                 user_data,
-                                lazy_scope: None,
                                 elf_type,
                             }),
                         },
@@ -378,7 +373,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// A reference to the CoreComponent
     #[inline]
-    pub fn core_component_ref(&self) -> &CoreComponent {
+    pub fn core_ref(&self) -> &CoreComponent {
         &self.data.core
     }
 
@@ -387,7 +382,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// A cloned CoreComponent
     #[inline]
-    pub fn core_component(&self) -> CoreComponent {
+    pub fn core(&self) -> CoreComponent {
         self.data.core.clone()
     }
 
@@ -396,7 +391,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// The CoreComponent
     #[inline]
-    pub fn into_core_component(self) -> CoreComponent {
+    pub fn into_core(self) -> CoreComponent {
         self.data.force();
         match self.data.state.into_inner() {
             State::Empty | State::Uninit { .. } => unreachable!(),
@@ -641,13 +636,11 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
         // Execute hook function if provided
         if let Some(hook) = self.hook {
             hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
-                parse_phdr_error(
-                    format!(
-                        "failed to execute the hook function on dylib: {}",
-                        self.name.to_str().unwrap()
-                    ),
-                    err,
-                )
+                parse_phdr_error(format!(
+                    "failed to execute the hook function on dylib: {}, error: {:?}",
+                    self.name.to_str().unwrap(),
+                    err
+                ))
             })?;
         }
 
@@ -773,47 +766,4 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
             },
         })
     }
-}
-
-pub(crate) fn relocate_common<S: SymbolLookup>(
-    common: RelocatedCommonPart,
-    scope: &[Relocated],
-    pre_find: &S,
-    unknown_handler: Option<&mut UnknownHandler>,
-    lazy: Option<bool>,
-    lazy_scope: Option<LazyScope>,
-    use_scope_as_lazy: bool,
-) -> Result<(Relocated, usize)> {
-    // Optimization: check if relocation is empty
-    if common.relocation().is_empty() {
-        let entry = common.entry();
-        let core = common.into_core_component();
-        let relocated = unsafe { Relocated::from_core_component(core) };
-        return Ok((relocated, entry));
-    }
-
-    let is_lazy = lazy.unwrap_or(common.is_lazy());
-    let entry = common.entry();
-
-    // Setup default handler if none provided
-    let mut default_handler = |_: &ElfRelType, _: &CoreComponent, _: &[Relocated]| {
-        Err(Box::new(()) as Box<dyn core::any::Any + Send + Sync>)
-    };
-    let deal_unknown = unknown_handler.unwrap_or(&mut default_handler);
-
-    // Setup lazy scope if needed
-    let lazy_scope = if is_lazy {
-        if use_scope_as_lazy {
-            let libs = scope.iter().map(|lib| lib.downgrade()).collect();
-            Some(create_lazy_scope(libs, Arc::new(|_| None)))
-        } else {
-            lazy_scope
-        }
-    } else {
-        None
-    };
-
-    let relocated = relocate_impl(common, scope, pre_find, deal_unknown, lazy_scope)?;
-
-    Ok((relocated, entry))
 }

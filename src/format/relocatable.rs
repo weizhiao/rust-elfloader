@@ -4,18 +4,17 @@
 //! ELF files (also known as object files). These are typically .o files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use core::{fmt::Debug, sync::atomic::AtomicBool};
+use core::{fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
 
 use crate::{
     CoreComponent, Loader, Result, UserData,
     arch::{ElfRelType, ElfShdr, ElfSymbol},
-    format::{CoreComponentInner, ElfPhdrs, ElfType, Relocated},
+    format::{CoreComponentInner, ElfType, Relocated},
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
     relocation::{
-        Relocatable, SymbolLookup,
-        dynamic_link::{LazyScope, UnknownHandler},
+        Relocatable, RelocationHandler, SymbolLookup, dynamic_link::LazyScope,
         static_link::StaticRelocation,
     },
     segment::{ElfSegments, shdr::PltGotSection},
@@ -195,15 +194,11 @@ impl RelocatableBuilder {
             is_init: AtomicBool::new(false),
             name: self.name,
             symbols: self.symtab,
-            dynamic: None,
-            pltrel: None,
-            phdrs: ElfPhdrs::Mmap(&[]),
+            dynamic_info: None,
             fini: None,
             fini_array: None,
             fini_handler: self.fini_fn,
-            needed_libs: Box::new([]),
             user_data: UserData::empty(),
-            lazy_scope: None,
             segments: self.segments,
             elf_type: ElfType::Relocatable,
         };
@@ -247,6 +242,14 @@ pub struct ElfRelocatable {
     pub(crate) init_array: Option<&'static [fn()]>,
 }
 
+impl Deref for ElfRelocatable {
+    type Target = CoreComponent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
 impl Debug for ElfRelocatable {
     /// Formats the ElfRelocatable for debugging purposes
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -259,15 +262,21 @@ impl Debug for ElfRelocatable {
 impl Relocatable for ElfRelocatable {
     type Output = Relocated;
 
-    fn relocate<S: SymbolLookup>(
+    fn relocate<S, PreH, PostH>(
         self,
         scope: &[Relocated],
         pre_find: &S,
-        _unknown_handler: Option<&mut UnknownHandler>,
+        _pre_handler: PreH,
+        _post_handler: PostH,
         _lazy: Option<bool>,
         _lazy_scope: Option<LazyScope>,
         _use_scope_as_lazy: bool,
-    ) -> Result<Self::Output> {
+    ) -> Result<Self::Output>
+    where
+        S: SymbolLookup + ?Sized,
+        PreH: RelocationHandler,
+        PostH: RelocationHandler,
+    {
         self.relocate_impl(scope, pre_find)
     }
 }

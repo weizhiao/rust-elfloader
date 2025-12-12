@@ -15,22 +15,22 @@ fn main() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.relocator().pre_find(&pre_find).run().unwrap();
+    let a = liba.relocator().symbols(&pre_find).relocate().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let b = libb
         .relocator()
-        .pre_find(&pre_find)
+        .symbols(&pre_find)
         .scope([&a])
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
     let c = libc
         .relocator()
-        .pre_find(&pre_find)
+        .symbols(&pre_find)
         .scope([&a, &b])
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
     assert!(f() == 3);

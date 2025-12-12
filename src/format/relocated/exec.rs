@@ -11,30 +11,33 @@ use crate::{
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::{
-        Relocatable, SymbolLookup,
-        dynamic_link::{LazyScope, UnknownHandler},
-    },
+    relocation::{Relocatable, RelocationHandler, SymbolLookup, dynamic_link::LazyScope},
 };
 use core::{fmt::Debug, ops::Deref};
 
 impl Relocatable for ElfExec {
     type Output = RelocatedExec;
 
-    fn relocate<S: SymbolLookup>(
+    fn relocate<S, PreH, PostH>(
         self,
         scope: &[Relocated],
         pre_find: &S,
-        unknown_handler: Option<&mut UnknownHandler>,
+        pre_handler: PreH,
+        post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyScope>,
         use_scope_as_lazy: bool,
-    ) -> Result<Self::Output> {
-        let (relocated, entry) = super::relocate_common(
-            self.inner,
+    ) -> Result<Self::Output>
+    where
+        S: SymbolLookup + ?Sized,
+        PreH: RelocationHandler,
+        PostH: RelocationHandler,
+    {
+        let (relocated, entry) = self.inner.relocate_impl(
             scope,
             pre_find,
-            unknown_handler,
+            pre_handler,
+            post_handler,
             lazy,
             lazy_scope,
             use_scope_as_lazy,

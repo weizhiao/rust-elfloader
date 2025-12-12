@@ -16,8 +16,8 @@
 //! * Use it to load ELF dynamic libraries on embedded devices
 //!
 //! ## Example
-//! ```rust, ignore
-//! use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+//! ```rust
+//! use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile, Relocatable};
 //! use std::collections::HashMap;
 //!
 //! fn print(s: &str) {
@@ -31,11 +31,13 @@
 //! let mut loader = Loader::<MmapImpl>::new();
 //! let liba = loader
 //!     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+//!     .unwrap()
+//!     .relocator()
+//!     .symbols(&pre_find)
+//!     .relocate()
 //!     .unwrap();
-//!     // Relocate symbols in liba.so
-//! let a = liba.relocator().pre_find(&pre_find).scope([].iter()).run().unwrap();
 //! // Call function a in liba.so
-//! let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
+//! let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };
 //! f();
 //! ```
 #![no_std]
@@ -90,14 +92,8 @@ mod symbol;
 #[cfg(feature = "version")]
 mod version;
 
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-};
-use core::{
-    any::Any,
-    fmt::{Debug, Display},
-};
+use alloc::borrow::Cow;
+use core::fmt::{Debug, Display};
 use object::*;
 
 pub use elf::abi;
@@ -105,7 +101,7 @@ pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol, UserData};
 pub use loader::Loader;
-pub use relocation::{Relocatable, find_symdef};
+pub use relocation::{Relocatable, RelocationHandler, SymbolLookup, find_symdef};
 
 /// Error types used throughout the elf_loader library
 ///
@@ -119,9 +115,9 @@ pub enum Error {
     /// * File not found
     /// * Permission denied
     /// * I/O errors during read/write operations
-    IOError {
+    Io {
         /// A descriptive message about the I/O error
-        msg: String,
+        msg: Cow<'static, str>,
     },
 
     /// An error occurred during memory mapping operations
@@ -130,9 +126,9 @@ pub enum Error {
     /// * Failed to map file into memory
     /// * Failed to change memory protection
     /// * Failed to unmap memory regions
-    MmapError {
+    Mmap {
         /// A descriptive message about the memory mapping error
-        msg: String,
+        msg: Cow<'static, str>,
     },
 
     /// An error occurred during dynamic library relocation
@@ -142,12 +138,9 @@ pub enum Error {
     /// * Undefined symbols
     /// * Incompatible symbol types
     /// * Relocation calculation errors
-    RelocateError {
+    Relocation {
         /// A descriptive message about the relocation error
-        msg: String,
-
-        /// Custom error information that may be provided by user-defined handlers
-        custom_err: Box<dyn Any + Send + Sync>,
+        msg: Cow<'static, str>,
     },
 
     /// An error occurred while parsing the dynamic section
@@ -156,9 +149,9 @@ pub enum Error {
     /// * Invalid dynamic entry types
     /// * Missing required dynamic entries
     /// * Malformed dynamic section data
-    ParseDynamicError {
+    ParseDynamic {
         /// A descriptive message about the dynamic section parsing error
-        msg: &'static str,
+        msg: Cow<'static, str>,
     },
 
     /// An error occurred while parsing the ELF header
@@ -167,9 +160,9 @@ pub enum Error {
     /// * Invalid magic bytes
     /// * Unsupported ELF class or data encoding
     /// * Invalid ELF header fields
-    ParseEhdrError {
+    ParseEhdr {
         /// A descriptive message about the ELF header parsing error
-        msg: String,
+        msg: Cow<'static, str>,
     },
 
     /// An error occurred while parsing program headers
@@ -178,12 +171,15 @@ pub enum Error {
     /// * Invalid program header types
     /// * Malformed program header data
     /// * Incompatible program header entries
-    ParsePhdrError {
+    ParsePhdr {
         /// A descriptive message about the program header parsing error
-        msg: String,
+        msg: Cow<'static, str>,
+    },
 
-        /// Custom error information that may be provided by user-defined handlers
-        custom_err: Box<dyn Any + Send + Sync>,
+    /// An error occurred in a user-defined callback or handler
+    Custom {
+        /// A descriptive message about the custom error
+        msg: Cow<'static, str>,
     },
 }
 
@@ -193,12 +189,13 @@ impl Display for Error {
     /// This implementation provides human-readable error messages for all error variants.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Error::IOError { msg } => write!(f, "I/O error: {msg}"),
-            Error::MmapError { msg } => write!(f, "Memory mapping error: {msg}"),
-            Error::RelocateError { msg, .. } => write!(f, "Relocation error: {msg}"),
-            Error::ParseDynamicError { msg } => write!(f, "Dynamic section parsing error: {msg}"),
-            Error::ParseEhdrError { msg } => write!(f, "ELF header parsing error: {msg}"),
-            Error::ParsePhdrError { msg, .. } => write!(f, "Program header parsing error: {msg}"),
+            Error::Io { msg } => write!(f, "I/O error: {msg}"),
+            Error::Mmap { msg } => write!(f, "Memory mapping error: {msg}"),
+            Error::Relocation { msg, .. } => write!(f, "Relocation error: {msg}"),
+            Error::ParseDynamic { msg } => write!(f, "Dynamic section parsing error: {msg}"),
+            Error::ParseEhdr { msg } => write!(f, "ELF header parsing error: {msg}"),
+            Error::ParsePhdr { msg, .. } => write!(f, "Program header parsing error: {msg}"),
+            Error::Custom { msg } => write!(f, "Custom error: {msg}"),
         }
     }
 }
@@ -213,33 +210,27 @@ impl core::error::Error for Error {}
 /// * `msg` - The error message
 ///
 /// # Returns
-/// An Error::IOError variant with the specified message
+/// An Error::Io variant with the specified message
 #[cold]
 #[inline(never)]
 #[allow(unused)]
-fn io_error(msg: impl ToString) -> Error {
-    Error::IOError {
-        msg: msg.to_string(),
-    }
+fn io_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::Io { msg: msg.into() }
 }
 
-/// Creates a relocation error with the specified message and custom error data
+/// Creates a relocation error with the specified message
 ///
 /// This is a convenience function for creating RelocateError variants.
 ///
 /// # Arguments
 /// * `msg` - The error message
-/// * `custom_err` - Custom error data
 ///
 /// # Returns
-/// An Error::RelocateError variant with the specified message and custom error data
+/// An Error::Relocation variant with the specified message
 #[cold]
 #[inline(never)]
-fn relocate_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) -> Error {
-    Error::RelocateError {
-        msg: msg.to_string(),
-        custom_err,
-    }
+fn relocate_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::Relocation { msg: msg.into() }
 }
 
 /// Creates a dynamic section parsing error with the specified message
@@ -250,11 +241,11 @@ fn relocate_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) ->
 /// * `msg` - The error message
 ///
 /// # Returns
-/// An Error::ParseDynamicError variant with the specified message
+/// An Error::ParseDynamic variant with the specified message
 #[cold]
 #[inline(never)]
-fn parse_dynamic_error(msg: &'static str) -> Error {
-    Error::ParseDynamicError { msg }
+fn parse_dynamic_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::ParseDynamic { msg: msg.into() }
 }
 
 /// Creates an ELF header parsing error with the specified message
@@ -265,32 +256,42 @@ fn parse_dynamic_error(msg: &'static str) -> Error {
 /// * `msg` - The error message
 ///
 /// # Returns
-/// An Error::ParseEhdrError variant with the specified message
+/// An Error::ParseEhdr variant with the specified message
 #[cold]
 #[inline(never)]
-fn parse_ehdr_error(msg: impl ToString) -> Error {
-    Error::ParseEhdrError {
-        msg: msg.to_string(),
-    }
+fn parse_ehdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::ParseEhdr { msg: msg.into() }
 }
 
-/// Creates a program header parsing error with the specified message and custom error data
+/// Creates a program header parsing error with the specified message
 ///
 /// This is a convenience function for creating ParsePhdrError variants.
 ///
 /// # Arguments
 /// * `msg` - The error message
-/// * `custom_err` - Custom error data
 ///
 /// # Returns
-/// An Error::ParsePhdrError variant with the specified message and custom error data
+/// An Error::ParsePhdr variant with the specified message
 #[cold]
 #[inline(never)]
-fn parse_phdr_error(msg: impl ToString, custom_err: Box<dyn Any + Send + Sync>) -> Error {
-    Error::ParsePhdrError {
-        msg: msg.to_string(),
-        custom_err,
-    }
+fn parse_phdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::ParsePhdr { msg: msg.into() }
+}
+
+/// Creates a custom error with the specified message
+///
+/// This is a convenience function for creating Custom variants.
+///
+/// # Arguments
+/// * `msg` - The error message
+///
+/// # Returns
+/// An Error::Custom variant with the specified message
+#[cold]
+#[inline(never)]
+#[allow(unused)]
+pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::Custom { msg: msg.into() }
 }
 
 /// Set the global scope for symbol resolution

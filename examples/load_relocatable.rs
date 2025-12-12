@@ -23,24 +23,24 @@ fn main() {
         .load_relocatable(object)
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
-        .run()
+        .symbols(pre_find.clone())
+        .relocate()
         .unwrap();
     let b = loader
         .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .symbols(pre_find.clone())
         .scope([&a])
-        .run()
+        .relocate()
         .unwrap();
     let c = loader
         .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .symbols(pre_find.clone())
         .scope([&a, &b])
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

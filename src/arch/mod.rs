@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
         ];
 
         impl crate::relocation::static_link::StaticReloc for DummyRelocator {
-            fn relocate<S: crate::format::SymbolLookup + ?Sized>(
+            fn relocate<S: crate::SymbolLookup + ?Sized>(
                 _core: &crate::CoreComponent,
                 _rel_type: &ElfRelType,
                 _pltgot: &mut crate::segment::shdr::PltGotSection,

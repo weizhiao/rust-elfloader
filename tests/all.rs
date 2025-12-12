@@ -15,22 +15,22 @@ fn relocate_dylib() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.relocator().pre_find(&pre_find).run().unwrap();
+    let a = liba.relocator().symbols(&pre_find).relocate().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let b = libb
         .relocator()
-        .pre_find(&pre_find)
+        .symbols(&pre_find)
         .scope([&a].into_iter())
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
     let c = libc
         .relocator()
-        .pre_find(&pre_find)
+        .symbols(&pre_find)
         .scope([&b].into_iter())
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { c.get::<fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
@@ -49,15 +49,15 @@ fn lazy_binding() {
     });
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
-    let a = liba.relocator().pre_find(&*pre_find).run().unwrap();
+    let a = liba.relocator().symbols(&*pre_find).relocate().unwrap();
     let pre_find_clone = pre_find.clone();
     let b = libb
         .relocator()
-        .pre_find(pre_find.clone())
+        .symbols(pre_find.clone())
         .scope([&a])
         .lazy(true)
-        .lazy_scope(Some(Arc::new(move |name| pre_find_clone(name))))
-        .run()
+        .lazy_scope(Some(Arc::new(move |name: &str| pre_find_clone(name))))
+        .relocate()
         .unwrap();
     let f = unsafe { b.get::<fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
@@ -69,7 +69,7 @@ fn load_from_memory() {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     let liba = load_dylib!("target/liba.so", &bytes).unwrap();
-    let a = liba.relocator().run().unwrap();
+    let a = liba.relocator().relocate().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
 }
@@ -90,7 +90,7 @@ fn type_mismatch() {
 fn load_elf() {
     let liba = load!("target/liba.so").unwrap();
     assert!(matches!(liba, Elf::Dylib(_)));
-    let a = liba.relocator().run().unwrap().into_dylib().unwrap();
+    let a = liba.relocator().relocate().unwrap().into_dylib().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
 }
@@ -100,7 +100,7 @@ fn missing_symbol_fails() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
         .relocator()
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { lib.get::<fn() -> i32>("b") };
     assert!(f.is_none());
@@ -120,7 +120,7 @@ fn test_id_struct() {
     let lib = load_dylib!("target/liba.so")
         .unwrap()
         .relocator()
-        .run()
+        .relocate()
         .unwrap();
     unsafe {
         let f = lib
@@ -161,24 +161,24 @@ fn load_relocatable() {
         .load_relocatable(object)
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
-        .run()
+        .symbols(pre_find.clone())
+        .relocate()
         .unwrap();
     let b = loader
         .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .symbols(pre_find.clone())
         .scope([&a])
-        .run()
+        .relocate()
         .unwrap();
     let c = loader
         .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .symbols(pre_find.clone())
         .scope([&a, &b])
-        .run()
+        .relocate()
         .unwrap();
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
@@ -211,8 +211,8 @@ fn test_relocatable() {
         .load_relocatable(object)
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
-        .run()
+        .symbols(pre_find.clone())
+        .relocate()
         .unwrap();
 
     unsafe {

@@ -1,13 +1,13 @@
 use crate::{
     CoreComponent, Error, Result,
-    arch::ElfSymbol,
+    arch::{ElfRelType, ElfSymbol},
     format::Relocated,
     relocate_error,
+    relocation::dynamic_link::LazyScope,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{boxed::Box, format, string::ToString, vec::Vec};
+use alloc::{format, string::ToString, vec::Vec};
 use core::{
-    any::Any,
     ops::{Add, Sub},
     ptr::null,
 };
@@ -17,8 +17,6 @@ use elf::abi::STT_GNU_IFUNC;
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
-
-use self::dynamic_link::{LazyScope, UnknownHandler};
 
 pub(crate) mod dynamic_link;
 pub(crate) mod static_link;
@@ -53,9 +51,50 @@ impl SymbolLookup for () {
     }
 }
 
-impl<S: SymbolLookup> SymbolLookup for Option<S> {
-    fn lookup(&self, name: &str) -> Option<*const ()> {
-        self.as_ref().and_then(|s| s.lookup(name))
+/// A trait for handling unknown relocations
+pub trait RelocationHandler {
+    /// Handle an unknown relocation
+    ///
+    /// Returns:
+    /// - `Some(Ok(None))`: Handled successfully
+    /// - `Some(Ok(Some(idx)))`: Handled successfully and the library at `scope[idx]` is used
+    /// - `Some(Err(e))`: Handled but failed
+    /// - `None`: Not handled (fallthrough)
+    fn handle(
+        &mut self,
+        rel: &ElfRelType,
+        lib: &CoreComponent,
+        scope: &[Relocated],
+    ) -> Option<core::result::Result<Option<usize>, Error>>;
+}
+
+impl<F> RelocationHandler for F
+where
+    F: FnMut(
+            &ElfRelType,
+            &CoreComponent,
+            &[Relocated],
+        ) -> Option<core::result::Result<Option<usize>, Error>>
+        + ?Sized,
+{
+    fn handle(
+        &mut self,
+        rel: &ElfRelType,
+        lib: &CoreComponent,
+        scope: &[Relocated],
+    ) -> Option<core::result::Result<Option<usize>, Error>> {
+        self(rel, lib, scope)
+    }
+}
+
+impl RelocationHandler for () {
+    fn handle(
+        &mut self,
+        _rel: &ElfRelType,
+        _lib: &CoreComponent,
+        _scope: &[Relocated],
+    ) -> Option<core::result::Result<Option<usize>, Error>> {
+        None
     }
 }
 
@@ -69,64 +108,90 @@ pub trait Relocatable: Sized {
     /// This method returns a `Relocator` that allows configuring the relocation
     /// process with fine-grained control, such as setting a custom unknown relocation
     /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
-    fn relocator(self) -> Relocator<'static, Self, ()> {
+    fn relocator(self) -> Relocator<'static, Self, (), (), ()> {
         Relocator::new(self)
     }
 
     /// Execute the relocation process
     #[doc(hidden)]
-    fn relocate<S: SymbolLookup>(
+    fn relocate<S, PreH, PostH>(
         self,
         scope: &[Relocated],
         pre_find: &S,
-        unknown_handler: Option<&mut UnknownHandler>,
+        pre_handler: PreH,
+        post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyScope>,
         use_scope_as_lazy: bool,
-    ) -> Result<Self::Output>;
+    ) -> Result<Self::Output>
+    where
+        S: SymbolLookup + ?Sized,
+        PreH: RelocationHandler,
+        PostH: RelocationHandler;
 }
 
 /// A builder for configuring and executing the relocation process
-pub struct Relocator<'find, T: Relocatable, S: SymbolLookup> {
+pub struct Relocator<'find, T, S, PreH, PostH>
+where
+    T: Relocatable,
+    S: SymbolLookup,
+    PreH: RelocationHandler,
+    PostH: RelocationHandler,
+{
     object: T,
     scope: Vec<Relocated>,
     pre_find: S,
-    unknown_handler: Option<&'find mut UnknownHandler>,
+    pre_handler: PreH,
+    post_handler: PostH,
     lazy: Option<bool>,
     lazy_scope: Option<LazyScope>,
     use_scope_as_lazy: bool,
+    _marker: core::marker::PhantomData<&'find ()>,
 }
 
-impl<'find, T: Relocatable> Relocator<'find, T, ()> {
+impl<'find, T: Relocatable> Relocator<'find, T, (), (), ()> {
     /// Create a new relocator builder
     pub fn new(object: T) -> Self {
         Self {
             object,
             scope: Vec::new(),
-            unknown_handler: None,
             pre_find: (),
+            pre_handler: (),
+            post_handler: (),
             lazy: None,
             lazy_scope: None,
             use_scope_as_lazy: false,
-        }
-    }
-
-    /// Set the symbol lookup function
-    pub fn pre_find<S: SymbolLookup>(self, pre_find: S) -> Relocator<'find, T, S> {
-        Relocator {
-            object: self.object,
-            scope: self.scope,
-            pre_find,
-            unknown_handler: self.unknown_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
+            _marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<'find, T: Relocatable, S: SymbolLookup> Relocator<'find, T, S> {
-    /// Set the scope of relocated libraries to use for symbol resolution
+impl<'find, T, S, PreH, PostH> Relocator<'find, T, S, PreH, PostH>
+where
+    T: Relocatable,
+    S: SymbolLookup,
+    PreH: RelocationHandler,
+    PostH: RelocationHandler,
+{
+    /// Set the preferred symbol lookup function
+    pub fn symbols<S2: SymbolLookup + 'find>(
+        self,
+        pre_find: S2,
+    ) -> Relocator<'find, T, S2, PreH, PostH> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// Set the scope of relocated libraries for symbol resolution
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -136,44 +201,84 @@ impl<'find, T: Relocatable, S: SymbolLookup> Relocator<'find, T, S> {
         self
     }
 
-    /// Set a custom handler for unknown or failed relocations
-    pub fn on_unknown(mut self, handler: &'find mut UnknownHandler) -> Self {
-        self.unknown_handler = Some(handler);
-        self
+    /// Set the pre-processing relocation handler (pre_handler)
+    pub fn pre_handler<NewPreH: RelocationHandler + 'find>(
+        self,
+        handler: NewPreH,
+    ) -> Relocator<'find, T, S, NewPreH, PostH> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            pre_handler: handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+            _marker: core::marker::PhantomData,
+        }
     }
 
-    /// Force enable or disable lazy binding
+    /// Set the post-processing relocation handler (post_handler)
+    pub fn post_handler<NewPostH: RelocationHandler + 'find>(
+        self,
+        handler: NewPostH,
+    ) -> Relocator<'find, T, S, PreH, NewPostH> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            pre_handler: self.pre_handler,
+            post_handler: handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// Enable or disable lazy binding
     pub fn lazy(mut self, lazy: bool) -> Self {
         self.lazy = Some(lazy);
         self
     }
 
-    /// Set a custom lazy scope for symbol resolution
-    pub fn lazy_scope(mut self, scope: Option<LazyScope>) -> Self {
-        self.lazy_scope = scope;
-        self
+    /// Set the lazy scope (symbol lookup for lazy binding)
+    pub fn lazy_scope(self, scope: Option<LazyScope>) -> Relocator<'find, T, S, PreH, PostH> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+            _marker: core::marker::PhantomData,
+        }
     }
 
-    /// Use the scope for lazy symbol resolution
-    ///
-    /// Note: This overrides any previously set lazy scope
-    pub fn use_scope_as_lazy_scope(mut self) -> Self {
+    /// Use scope as lazy scope (overrides any previously set lazy scope)
+    pub fn use_scope_as_lazy(mut self) -> Self {
         self.use_scope_as_lazy = true;
         self
     }
 
     /// Execute the relocation process
-    pub fn run(self) -> Result<T::Output> {
+    pub fn relocate(self) -> Result<T::Output> {
         self.object.relocate(
             &self.scope,
             &self.pre_find,
-            self.unknown_handler,
+            self.pre_handler,
+            self.post_handler,
             self.lazy,
             self.lazy_scope,
             self.use_scope_as_lazy,
         )
     }
 }
+
+/// A trait for handling unknown relocations
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -247,7 +352,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<i32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         i32::try_from(value.0 as isize)
             .map(RelocValue)
-            .map_err(|err| relocate_error(err.to_string(), Box::new(())))
+            .map_err(|err| relocate_error(err.to_string()))
     }
 }
 
@@ -258,7 +363,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         u32::try_from(value.0)
             .map(RelocValue)
-            .map_err(|err| relocate_error(err.to_string(), Box::new(())))
+            .map_err(|err| relocate_error(err.to_string()))
     }
 }
 
@@ -269,7 +374,6 @@ pub struct SymDef<'lib> {
 
 impl<'temp> SymDef<'temp> {
     // 获取符号的真实地址(base + st_value)
-    #[inline(always)]
     pub fn convert(self) -> *const () {
         if likely(self.sym.is_some()) {
             let base = self.lib.base();
@@ -289,31 +393,27 @@ impl<'temp> SymDef<'temp> {
 }
 
 #[cold]
-pub(crate) fn reloc_error(
+pub(crate) fn reloc_error<E: core::fmt::Display>(
     r_type: usize,
     r_sym: usize,
-    custom_err: Box<dyn Any + Send + Sync>,
+    err: E,
     lib: &CoreComponent,
 ) -> Error {
     if r_sym == 0 {
-        relocate_error(
-            format!(
-                "file: {}, relocation type: {}, no symbol",
-                lib.shortname(),
-                r_type,
-            ),
-            custom_err,
-        )
+        relocate_error(format!(
+            "file: {}, relocation type: {}, no symbol, error: {}",
+            lib.shortname(),
+            r_type,
+            err
+        ))
     } else {
-        relocate_error(
-            format!(
-                "file: {}, relocation type: {}, symbol name: {}",
-                lib.shortname(),
-                r_type,
-                lib.symtab().unwrap().symbol_idx(r_sym).1.name(),
-            ),
-            custom_err,
-        )
+        relocate_error(format!(
+            "file: {}, relocation type: {}, symbol name: {}, error: {}",
+            lib.shortname(),
+            r_type,
+            lib.symtab().unwrap().symbol_idx(r_sym).1.name(),
+            err
+        ))
     }
 }
 
@@ -332,11 +432,16 @@ fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<
     }
 }
 
+/// Find symbol definition in the given scope
+/// This function searches for the definition of a symbol
+/// identified by `r_sym` in the provided `libs` scope.
+/// It returns a tuple containing the symbol definition
+/// and an optional index of the library where it was found.
 pub fn find_symdef<'lib>(
     core: &'lib CoreComponent,
     libs: &'lib [Relocated],
     r_sym: usize,
-) -> Option<SymDef<'lib>> {
+) -> Option<(SymDef<'lib>, Option<usize>)> {
     let symbol = core.symtab().unwrap();
     let (sym, syminfo) = symbol.symbol_idx(r_sym);
     find_symdef_impl(core, libs, sym, &syminfo)
@@ -349,7 +454,7 @@ pub(crate) fn find_symbol_addr<S>(
     symtab: &SymbolTable,
     scope: &[Relocated],
     r_sym: usize,
-) -> Option<RelocValue<usize>>
+) -> Option<(RelocValue<usize>, Option<usize>)>
 where
     S: SymbolLookup + ?Sized,
 {
@@ -361,11 +466,10 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some(RelocValue::new(addr as usize));
+        return Some((RelocValue::new(addr as usize), None));
     }
     find_symdef_impl(core, scope, dynsym, &syminfo)
-        .map(|symdef| symdef.convert())
-        .map(|addr| RelocValue::new(addr as usize))
+        .map(|(symdef, idx)| (RelocValue::new(symdef.convert() as usize), idx))
 }
 
 fn find_symdef_impl<'lib>(
@@ -373,16 +477,20 @@ fn find_symdef_impl<'lib>(
     libs: &'lib [Relocated],
     sym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib>> {
+) -> Option<(SymDef<'lib>, Option<usize>)> {
     if unlikely(sym.is_local()) {
-        Some(SymDef {
-            sym: Some(sym),
-            lib: core,
-        })
+        Some((
+            SymDef {
+                sym: Some(sym),
+                lib: core,
+            },
+            None,
+        ))
     } else {
         let mut precompute = syminfo.precompute();
         libs.iter()
-            .find_map(|lib| {
+            .enumerate()
+            .find_map(|(i, lib)| {
                 lib.symtab()
                     .lookup_filter(syminfo, &mut precompute)
                     .map(|sym| {
@@ -393,13 +501,19 @@ fn find_symdef_impl<'lib>(
                             lib.name(),
                             syminfo.name()
                         );
-                        SymDef {
-                            sym: Some(sym),
-                            lib: &lib,
-                        }
+                        // 如果找到的库和当前 core 指向同一个 ELF（同一 allocation），
+                        // 不返回库索引，避免增加引用或产生生命周期循环导致内存泄漏。
+                        let same = Arc::as_ptr(&lib.core.inner) == Arc::as_ptr(&core.inner);
+                        (
+                            SymDef {
+                                sym: Some(sym),
+                                lib: &lib.core,
+                            },
+                            if same { None } else { Some(i) },
+                        )
                     })
             })
-            .or_else(|| find_weak(core, sym))
+            .or_else(|| find_weak(core, sym).map(|s| (s, None)))
     }
 }
 

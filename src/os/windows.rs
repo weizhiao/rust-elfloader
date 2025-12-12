@@ -101,8 +101,8 @@ impl Mmap for MmapImpl {
             };
             if ptr.Value.is_null() {
                 let err_code = unsafe { GetLastError() };
-                return Err(Error::MmapError {
-                    msg: format!("MapViewOfFile3 failed with error: {}", err_code),
+                return Err(Error::Mmap {
+                    msg: format!("MapViewOfFile3 failed with error: {}", err_code).into(),
                 });
             }
             ptr.Value

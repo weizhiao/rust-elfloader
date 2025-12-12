@@ -10,7 +10,7 @@ fn load_benchmark(c: &mut Criterion) {
             let liba = loader
                 .load_dylib(ElfFile::from_path(&path).unwrap())
                 .unwrap();
-            let _ = liba.relocator().run().unwrap();
+            let _ = liba.relocator().relocate().unwrap();
         });
     });
     c.bench_function("libloading:new", |b| {
@@ -26,7 +26,7 @@ fn get_symbol_benchmark(c: &mut Criterion) {
     let liba = loader
         .load_dylib(ElfFile::from_path(&path).unwrap())
         .unwrap();
-    let lib1 = liba.relocator().run().unwrap();
+    let lib1 = liba.relocator().relocate().unwrap();
     let lib2 = unsafe { Library::new(path).unwrap() };
     c.bench_function("elf_loader:get", |b| {
         b.iter(|| unsafe { lib1.get::<fn(i32, i32) -> i32>("a").unwrap() })

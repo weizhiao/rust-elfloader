@@ -3,7 +3,6 @@ use crate::{
     relocation::{RelocValue, find_symbol_addr, reloc_error, static_link::StaticReloc, SymbolLookup},
     segment::shdr::{GotEntry, PltEntry, PltGotSection},
 };
-use alloc::boxed::Box;
 use elf::abi::*;
 
 #[cfg(feature = "portable-atomic")]
@@ -82,8 +81,10 @@ impl StaticReloc for X86_64Relocator {
         let append = rel_type.r_addend(base);
         let offset = rel_type.r_offset();
         let p = base + rel_type.r_offset();
-        let find_symbol = |r_sym: usize| find_symbol_addr(pre_find, core, symtab, scope, r_sym);
-        let boxed_error = || reloc_error(r_type, r_sym, Box::new(()), core);
+        let find_symbol = |r_sym: usize| {
+            find_symbol_addr(pre_find, core, symtab, scope, r_sym).map(|(val, _)| val)
+        };
+        let boxed_error = || reloc_error(r_type, r_sym, "unknown symbol", core);
         match r_type as _ {
             R_X86_64_64 => {
                 let Some(sym) = find_symbol(r_sym) else {

@@ -6,7 +6,7 @@ use crate::{
 };
 use alloc::borrow::ToOwned;
 use alloc::ffi::CString;
-use alloc::string::ToString;
+// ToString import removed — not used
 use core::ffi::CStr;
 use core::str::FromStr;
 use core::{
@@ -162,7 +162,7 @@ impl Mmap for MmapImpl {
 
 /// Converts a raw syscall return value to a result.
 #[inline(always)]
-fn from_ret(value: usize, msg: &str) -> Result<usize> {
+fn from_ret(value: usize, msg: &'static str) -> Result<usize> {
     if value > -4096isize as usize {
         // Truncation of the error value is guaranteed to never occur due to
         // the above check. This is the same check that musl uses:
@@ -174,10 +174,8 @@ fn from_ret(value: usize, msg: &str) -> Result<usize> {
 
 #[cold]
 #[inline(never)]
-fn map_error(msg: &str) -> Error {
-    Error::MmapError {
-        msg: msg.to_string(),
-    }
+fn map_error(msg: &'static str) -> Error {
+    Error::Mmap { msg: msg.into() }
 }
 
 impl RawFile {
@@ -257,7 +255,7 @@ impl ElfObject for RawFile {
 }
 /// Converts a raw syscall return value to a result.
 #[inline(always)]
-fn from_io_ret(value: usize, msg: &str) -> Result<usize> {
+fn from_io_ret(value: usize, msg: &'static str) -> Result<usize> {
     if value > -4096isize as usize {
         // Truncation of the error value is guaranteed to never occur due to
         // the above check. This is the same check that musl uses:
