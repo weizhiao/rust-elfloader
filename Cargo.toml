@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os", "embedded"]
 description = "Load ELF files from memory/storage and efficient static/dynamic runtime linking."
-exclude = [".gitignore", "ci"]
+exclude = [".gitignore", "ci", "tests", "examples", "docs", "docker"]
 
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]
@@ -41,6 +41,9 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.171", default-features = false }
+
+[build-dependencies]
+cc = "1.0"
 
 [dependencies.syscalls]
 workspace = true
@@ -86,6 +89,7 @@ delegate = "0.13.3"
 criterion = "0.5.1"
 libloading = "0.8.5"
 env_logger = "0.11.6"
+rstest = "0.26.1"
 
 [[bench]]
 name = "benchmark"

@@ -319,7 +319,7 @@ where
         }
     }
 
-    /// Use scope as lazy scope (overrides any previously set lazy scope)
+    /// Use scope as lazy scope (merges with any previously set lazy scope)
     pub fn use_scope_as_lazy(mut self) -> Self {
         self.use_scope_as_lazy = true;
         self

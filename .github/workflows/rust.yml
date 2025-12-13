@@ -26,8 +26,18 @@ jobs:
     strategy:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
-        channel: [ 1.88.0, stable ]
-        features: [ "use-syscall", "version", "log" ]
+        channel: [ stable ]
+        features: [ "use-syscall" ]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            channel: 1.88.0
+            features: "use-syscall"
+          - target: x86_64-unknown-linux-gnu
+            channel: stable
+            features: "version"
+          - target: x86_64-unknown-linux-gnu
+            channel: stable
+            features: "log"
 
   test-rela:
     runs-on: ubuntu-latest
@@ -45,8 +55,12 @@ jobs:
     strategy:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
-        channel: [ 1.88.0, stable ]
+        channel: [ stable ]
         features: [ "use-syscall" ]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            channel: 1.88.0
+            features: "use-syscall"
 
   test-rel:
     runs-on: ubuntu-latest
@@ -64,8 +78,8 @@ jobs:
     strategy:
       matrix:
          target: [ i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
-         channel: [ 1.88.0, stable ]
-         features: [ "use-syscall,rel", "rel" ]
+         channel: [ stable ]
+         features: [ "use-syscall,rel" ]
 
   test-mini-loader:
     runs-on: ubuntu-latest

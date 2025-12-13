@@ -2,7 +2,7 @@
 use crate::{
     CoreComponentRef, RelocatedDylib, Result,
     arch::*,
-    format::{Relocated, relocated::RelocatedCommonPart},
+    format::{CoreComponentInner, Relocated, relocated::RelocatedCommonPart},
     relocation::{
         RelocHandleContext, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
         find_symbol_addr, likely, reloc_error, unlikely,
@@ -57,7 +57,7 @@ impl RelocatedCommonPart {
 
         let lazy_scope = if is_lazy && use_scope_as_lazy {
             let libs = scope.iter().map(|lib| lib.downgrade()).collect();
-            Some(create_lazy_scope(libs))
+            Some(create_lazy_scope(libs, lazy_scope))
         } else {
             lazy_scope
         };
@@ -111,20 +111,26 @@ where
     Ok(unsafe { Relocated::from_core_deps(elf.into_core(), deps) })
 }
 
-fn create_lazy_scope(libs: Vec<CoreComponentRef>) -> LazyScope {
+fn create_lazy_scope(libs: Vec<CoreComponentRef>, lazy_scope: Option<LazyScope>) -> LazyScope {
+    let libs = Arc::new(libs);
     let closure = move |name: &str| {
-        libs.iter().find_map(|lib| unsafe {
-            RelocatedDylib::from_core(lib.upgrade().unwrap())
-                .get::<()>(name)
-                .map(|sym| sym.into_raw())
-        })
+        lazy_scope
+            .as_ref()
+            .and_then(|lookup| lookup.lookup(name))
+            .or_else(|| {
+                libs.iter().find_map(|lib| unsafe {
+                    RelocatedDylib::from_core(lib.upgrade().unwrap())
+                        .get::<()>(name)
+                        .map(|sym| sym.into_raw())
+                })
+            })
     };
     Arc::new(closure)
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
 #[unsafe(no_mangle)]
-unsafe extern "C" fn dl_fixup(dylib: &crate::format::CoreComponentInner, rela_idx: usize) -> usize {
+unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
     // Get the relocation entry for this function call
     let rela = unsafe {
         &*dylib
@@ -272,7 +278,8 @@ impl RelocatedCommonPart {
             // Ensure lazy scope is available
             assert!(
                 reloc.pltrel.is_empty() || lazy_scope.is_some(),
-                "lazy scope is not set"
+                "{}: lazy scope is not set, please call `use_scope_as_lazy()` or provide a lazy scope",
+                core.name()
             );
 
             // Set the lazy scope if provided

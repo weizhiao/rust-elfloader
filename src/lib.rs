@@ -29,8 +29,9 @@
 //! let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
 //! // Load dynamic library liba.so
 //! let mut loader = Loader::new();
+//! let path = std::path::PathBuf::from(env!("TEST_ARTIFACTS")).join("liba.so");
 //! let liba = loader
-//!     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+//!     .load_dylib(ElfFile::from_path(path.to_str().unwrap()).unwrap())
 //!     .unwrap()
 //!     .relocator()
 //!     .symbols(&pre_find)
