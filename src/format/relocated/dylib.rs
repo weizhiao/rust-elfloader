@@ -6,7 +6,7 @@
 
 use super::RelocatedCommonPart;
 use crate::{
-    Loader, Result, UserData,
+    Hook, Loader, Result, UserData,
     format::Relocated,
     mmap::Mmap,
     object::ElfObject,
@@ -101,7 +101,7 @@ impl ElfDylib {
     }
 }
 
-impl<M: Mmap> Loader<M> {
+impl<M: Mmap, H: Hook> Loader<M, H> {
     /// Load a dynamic library into memory
     ///
     /// This method loads a dynamic library (shared object) file into memory

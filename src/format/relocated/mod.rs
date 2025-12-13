@@ -10,16 +10,15 @@ use crate::{
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
     format::{CoreComponentInner, DynamicComponent, ElfPhdrs, ElfType},
-    loader::{FnHandler, Hook},
+    loader::{FnHandler, Hook, HookContext},
     mmap::Mmap,
-    parse_phdr_error,
     relocation::dynamic_link::DynamicRelocation,
     segment::{ELFRelro, ElfSegments},
     symbol::SymbolTable,
 };
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
-use alloc::{boxed::Box, ffi::CString, format, vec::Vec};
+use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
     cell::Cell,
     ffi::{CStr, c_char},
@@ -545,9 +544,12 @@ impl RelocatedCommonPart {
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final RelocatedCommonPart object.
-pub(crate) struct RelocatedBuilder<'hook, M: Mmap> {
-    /// Optional hook function for processing program headers
-    hook: Option<&'hook Hook>,
+pub(crate) struct RelocatedBuilder<'hook, H, M: Mmap>
+where
+    H: Hook,
+{
+    /// Hook function for processing program headers (always present)
+    hook: &'hook H,
 
     /// Mapped program headers
     phdr_mmap: Option<&'static [ElfPhdr]>,
@@ -583,7 +585,10 @@ pub(crate) struct RelocatedBuilder<'hook, M: Mmap> {
     _marker: PhantomData<M>,
 }
 
-impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
+impl<'hook, H, M: Mmap> RelocatedBuilder<'hook, H, M>
+where
+    H: Hook,
+{
     /// Create a new RelocatedBuilder
     ///
     /// # Arguments
@@ -597,7 +602,7 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
     /// # Returns
     /// A new RelocatedBuilder instance
     pub(crate) const fn new(
-        hook: Option<&'hook Hook>,
+        hook: &'hook H,
         segments: ElfSegments,
         name: CString,
         ehdr: ElfHeader,
@@ -633,16 +638,8 @@ impl<'hook, M: Mmap> RelocatedBuilder<'hook, M> {
     /// * `Ok(())` - If parsing succeeds
     /// * `Err(Error)` - If parsing fails
     fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
-        // Execute hook function if provided
-        if let Some(hook) = self.hook {
-            hook(&self.name, phdr, &self.segments, &mut self.user_data).map_err(|err| {
-                parse_phdr_error(format!(
-                    "failed to execute the hook function on dylib: {}, error: {:?}",
-                    self.name.to_str().unwrap(),
-                    err
-                ))
-            })?;
-        }
+        let mut ctx = HookContext::new(&self.name, phdr, &self.segments, &mut self.user_data);
+        self.hook.call(&mut ctx)?;
 
         // Process different program header types
         match phdr.p_type {

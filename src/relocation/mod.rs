@@ -60,40 +60,101 @@ pub trait RelocationHandler {
     /// - `Some(Ok(Some(idx)))`: Handled successfully and the library at `scope[idx]` is used
     /// - `Some(Err(e))`: Handled but failed
     /// - `None`: Not handled (fallthrough)
-    fn handle(
-        &mut self,
-        rel: &ElfRelType,
-        lib: &CoreComponent,
-        scope: &[Relocated],
-    ) -> Option<core::result::Result<Option<usize>, Error>>;
+    fn handle(&mut self, ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>>;
+}
+
+/// Context for relocation operations
+struct RelocationContext<'a, 'find, S: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+    scope: &'a [Relocated],
+    pre_find: &'find S,
+    pre_handler: &'a mut PreH,
+    post_handler: &'a mut PostH,
+    dependency_flags: Vec<bool>,
+}
+
+impl<'a, 'find, S: ?Sized, PreH: ?Sized, PostH: ?Sized> RelocationContext<'a, 'find, S, PreH, PostH>
+where
+    PreH: RelocationHandler,
+    PostH: RelocationHandler,
+{
+    #[inline]
+    fn handle_pre(&mut self, hctx: &RelocHandleContext<'_>) -> Result<bool> {
+        let opt = self.pre_handler.handle(hctx);
+        if let Some(r) = opt {
+            if let Some(idx) = r? {
+                self.dependency_flags[idx] = true;
+            }
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    #[inline]
+    fn handle_post(&mut self, hctx: &RelocHandleContext<'_>) -> Result<bool> {
+        let opt = self.post_handler.handle(hctx);
+        if let Some(r) = opt {
+            if let Some(idx) = r? {
+                self.dependency_flags[idx] = true;
+            }
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
+/// Context passed to `RelocationHandler::handle` containing the relocation
+/// entry, the library where the relocation appears and the current scope.
+pub struct RelocHandleContext<'a> {
+    rel: &'a ElfRelType,
+    lib: &'a CoreComponent,
+    scope: &'a [Relocated],
+}
+
+impl<'a> RelocHandleContext<'a> {
+    /// Construct a new `RelocHandleContext`.
+    #[inline]
+    fn new(rel: &'a ElfRelType, lib: &'a CoreComponent, scope: &'a [Relocated]) -> Self {
+        Self { rel, lib, scope }
+    }
+
+    /// Access the relocation entry.
+    #[inline]
+    pub fn rel(&self) -> &ElfRelType {
+        self.rel
+    }
+
+    /// Access the core component where the relocation appears.
+    #[inline]
+    pub fn lib(&self) -> &CoreComponent {
+        self.lib
+    }
+
+    /// Access the current resolution scope.
+    #[inline]
+    pub fn scope(&self) -> &[Relocated] {
+        self.scope
+    }
+
+    /// Find symbol definition in the current scope
+    #[inline]
+    pub fn find_symdef(&self, r_sym: usize) -> Option<(SymDef<'a>, Option<usize>)> {
+        let symbol = self.lib.symtab().unwrap();
+        let (sym, syminfo) = symbol.symbol_idx(r_sym);
+        find_symdef_impl(self.lib, self.scope, sym, &syminfo)
+    }
 }
 
 impl<F> RelocationHandler for F
 where
-    F: FnMut(
-            &ElfRelType,
-            &CoreComponent,
-            &[Relocated],
-        ) -> Option<core::result::Result<Option<usize>, Error>>
-        + ?Sized,
+    F: FnMut(&RelocHandleContext<'_>) -> Option<Result<Option<usize>>> + ?Sized,
 {
-    fn handle(
-        &mut self,
-        rel: &ElfRelType,
-        lib: &CoreComponent,
-        scope: &[Relocated],
-    ) -> Option<core::result::Result<Option<usize>, Error>> {
-        self(rel, lib, scope)
+    fn handle(&mut self, ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>> {
+        self(ctx)
     }
 }
 
 impl RelocationHandler for () {
-    fn handle(
-        &mut self,
-        _rel: &ElfRelType,
-        _lib: &CoreComponent,
-        _scope: &[Relocated],
-    ) -> Option<core::result::Result<Option<usize>, Error>> {
+    fn handle(&mut self, _ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>> {
         None
     }
 }
@@ -378,11 +439,12 @@ impl<'temp> SymDef<'temp> {
         if likely(self.sym.is_some()) {
             let base = self.lib.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
+            let addr = base + sym.st_value();
             if likely(sym.st_type() != STT_GNU_IFUNC) {
-                (base + sym.st_value()) as _
+                addr as _
             } else {
                 // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(base + sym.st_value()) };
+                let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr) };
                 ifunc() as _
             }
         } else {
@@ -432,21 +494,6 @@ fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<
     }
 }
 
-/// Find symbol definition in the given scope
-/// This function searches for the definition of a symbol
-/// identified by `r_sym` in the provided `libs` scope.
-/// It returns a tuple containing the symbol definition
-/// and an optional index of the library where it was found.
-pub fn find_symdef<'lib>(
-    core: &'lib CoreComponent,
-    libs: &'lib [Relocated],
-    r_sym: usize,
-) -> Option<(SymDef<'lib>, Option<usize>)> {
-    let symbol = core.symtab().unwrap();
-    let (sym, syminfo) = symbol.symbol_idx(r_sym);
-    find_symdef_impl(core, libs, sym, &syminfo)
-}
-
 #[inline]
 pub(crate) fn find_symbol_addr<S>(
     pre_find: &S,
@@ -474,7 +521,7 @@ where
 
 fn find_symdef_impl<'lib>(
     core: &'lib CoreComponent,
-    libs: &'lib [Relocated],
+    scope: &'lib [Relocated],
     sym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
 ) -> Option<(SymDef<'lib>, Option<usize>)> {
@@ -488,7 +535,8 @@ fn find_symdef_impl<'lib>(
         ))
     } else {
         let mut precompute = syminfo.precompute();
-        libs.iter()
+        scope
+            .iter()
             .enumerate()
             .find_map(|(i, lib)| {
                 lib.symtab()

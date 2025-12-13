@@ -15,7 +15,7 @@ use core::{
 };
 use syscalls::Sysno;
 /// An implementation of Mmap trait
-pub struct MmapImpl;
+pub struct DefaultMmap;
 
 pub(crate) struct RawFile {
     name: CString,
@@ -94,7 +94,7 @@ fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
     Ok(())
 }
 
-impl Mmap for MmapImpl {
+impl Mmap for DefaultMmap {
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

@@ -4,7 +4,7 @@
 //! required by the ELF loader. It abstracts platform-specific memory management
 //! operations to provide a unified interface.
 
-pub use crate::os::MmapImpl;
+pub use crate::os::DefaultMmap;
 
 use crate::Result;
 use bitflags::bitflags;

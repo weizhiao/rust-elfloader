@@ -6,7 +6,7 @@
 
 use super::RelocatedCommonPart;
 use crate::{
-    CoreComponent, Loader, Result,
+    CoreComponent, Hook, Loader, Result,
     format::Relocated,
     mmap::Mmap,
     object::ElfObject,
@@ -85,7 +85,7 @@ impl Debug for ElfExec {
     }
 }
 
-impl<M: Mmap> Loader<M> {
+impl<M: Mmap, H: Hook> Loader<M, H> {
     /// Load an executable file into memory
     ///
     /// This method loads an executable ELF file into memory and prepares it

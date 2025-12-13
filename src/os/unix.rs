@@ -12,14 +12,14 @@ use core::{
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
-pub struct MmapImpl;
+pub struct DefaultMmap;
 
 pub(crate) struct RawFile {
     name: CString,
     fd: isize,
 }
 
-impl Mmap for MmapImpl {
+impl Mmap for DefaultMmap {
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

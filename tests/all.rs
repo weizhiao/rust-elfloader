@@ -1,6 +1,4 @@
-use elf_loader::{
-    Elf, Loader, Relocatable, load, load_dylib, load_exec, mmap::MmapImpl, object::ElfFile,
-};
+use elf_loader::{Elf, Loader, Relocatable, load, load_dylib, load_exec, object::ElfFile};
 use std::{collections::HashMap, fs::File, io::Read, sync::Arc};
 
 #[test]
@@ -155,7 +153,7 @@ fn load_relocatable() {
     let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
         map.get(name).copied().map(|p| p as *const ())
     });
-    let mut loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
         .load_relocatable(object)
@@ -205,7 +203,7 @@ fn test_relocatable() {
         map.get(name).copied().map(|p| p as *const ())
     });
 
-    let mut loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::new();
     let object = ElfFile::from_path("target/x86_64.o").unwrap();
     let lib = loader
         .load_relocatable(object)

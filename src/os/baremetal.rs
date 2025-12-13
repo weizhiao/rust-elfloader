@@ -8,9 +8,9 @@ use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ptr::NonNull, slice::from_raw_parts_mut};
 
 /// An implementation of Mmap trait
-pub struct MmapImpl;
+pub struct DefaultMmap;
 
-impl Mmap for MmapImpl {
+impl Mmap for DefaultMmap {
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

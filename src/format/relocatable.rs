@@ -7,7 +7,7 @@
 use core::{fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
 
 use crate::{
-    CoreComponent, Loader, Result, UserData,
+    CoreComponent, Hook, Loader, Result, UserData,
     arch::{ElfRelType, ElfShdr, ElfSymbol},
     format::{CoreComponentInner, ElfType, Relocated},
     loader::FnHandler,
@@ -28,7 +28,7 @@ use elf::abi::{SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-impl<M: Mmap> Loader<M> {
+impl<M: Mmap, H: Hook> Loader<M, H> {
     /// Load a relocatable ELF file into memory
     ///
     /// This method loads a relocatable ELF file (typically a .o file) into memory

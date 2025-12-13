@@ -17,7 +17,7 @@
 //!
 //! ## Example
 //! ```rust
-//! use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile, Relocatable};
+//! use elf_loader::{Loader, object::ElfFile, Relocatable};
 //! use std::collections::HashMap;
 //!
 //! fn print(s: &str) {
@@ -28,7 +28,7 @@
 //! map.insert("print", print as _);
 //! let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
 //! // Load dynamic library liba.so
-//! let mut loader = Loader::<MmapImpl>::new();
+//! let mut loader = Loader::new();
 //! let liba = loader
 //!     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
 //!     .unwrap()
@@ -100,8 +100,8 @@ pub use elf::abi;
 pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol, UserData};
-pub use loader::Loader;
-pub use relocation::{Relocatable, RelocationHandler, SymbolLookup, find_symdef};
+pub use loader::{Hook, Loader};
+pub use relocation::{Relocatable, RelocationHandler, SymbolLookup};
 
 /// Error types used throughout the elf_loader library
 ///
@@ -261,21 +261,6 @@ fn parse_dynamic_error(msg: impl Into<Cow<'static, str>>) -> Error {
 #[inline(never)]
 fn parse_ehdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
     Error::ParseEhdr { msg: msg.into() }
-}
-
-/// Creates a program header parsing error with the specified message
-///
-/// This is a convenience function for creating ParsePhdrError variants.
-///
-/// # Arguments
-/// * `msg` - The error message
-///
-/// # Returns
-/// An Error::ParsePhdr variant with the specified message
-#[cold]
-#[inline(never)]
-fn parse_phdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::ParsePhdr { msg: msg.into() }
 }
 
 /// Creates a custom error with the specified message

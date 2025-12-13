@@ -6,7 +6,7 @@
 
 use self::relocatable::ElfRelocatable;
 use crate::{
-    Loader, Result,
+    Hook, Loader, Result,
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec},
@@ -441,8 +441,8 @@ impl Relocated {
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader, Relocatable};
-    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # use elf_loader::{object::ElfBinary, Symbol, Loader, Relocatable};
+    /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
     /// #        .unwrap().relocator().symbols(&| _: &str| None).scope([].iter()).relocate().unwrap();
@@ -455,8 +455,8 @@ impl Relocated {
     ///
     /// A static variable may also be loaded and inspected:
     /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, mmap::MmapImpl, Loader, Relocatable};
-    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # use elf_loader::{object::ElfBinary, Symbol, Loader, Relocatable};
+    /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
     /// #        .unwrap().relocator().symbols(&| _: &str| None).scope([].iter()).relocate().unwrap();
@@ -496,8 +496,8 @@ impl Relocated {
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{object::ElfFile, Symbol, mmap::MmapImpl, Loader};
-    /// # let mut loader = Loader::<MmapImpl>::new();
+    /// # use elf_loader::{object::ElfFile, Symbol, mmap::DefaultMmap, Loader};
+    /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
     /// #        .unwrap().relocate([].iter(), &| _: &str| None).unwrap();;
@@ -873,7 +873,7 @@ impl Debug for CoreComponent {
     }
 }
 
-impl<M: Mmap> Loader<M> {
+impl<M: Mmap, H: Hook> Loader<M, H> {
     /// Load an ELF file into memory
     ///
     /// # Arguments

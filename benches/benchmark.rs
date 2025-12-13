@@ -1,12 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use elf_loader::{Loader, Relocatable, mmap::MmapImpl, object::ElfFile};
+use elf_loader::{Loader, Relocatable, object::ElfFile};
 use libloading::Library;
 
 fn load_benchmark(c: &mut Criterion) {
     let path = "target/liba.so";
     c.bench_function("elf_loader:new", |b| {
         b.iter(|| {
-            let mut loader = Loader::<MmapImpl>::new();
+            let mut loader = Loader::new();
             let liba = loader
                 .load_dylib(ElfFile::from_path(&path).unwrap())
                 .unwrap();
@@ -22,7 +22,7 @@ fn load_benchmark(c: &mut Criterion) {
 
 fn get_symbol_benchmark(c: &mut Criterion) {
     let path = "target/liba.so";
-    let mut loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::new();
     let liba = loader
         .load_dylib(ElfFile::from_path(&path).unwrap())
         .unwrap();

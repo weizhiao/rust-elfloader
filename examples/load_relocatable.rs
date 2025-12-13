@@ -1,6 +1,6 @@
 use core::str;
 use elf_loader::Relocatable;
-use elf_loader::{Loader, mmap::MmapImpl, object::ElfFile};
+use elf_loader::{Loader, object::ElfFile};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ fn main() {
     let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
         map.get(name).copied().map(|p| p as *const ())
     });
-    let mut loader = Loader::<MmapImpl>::new();
+    let mut loader = Loader::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
         .load_relocatable(object)

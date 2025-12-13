@@ -4,11 +4,10 @@ use crate::{
     arch::*,
     format::{Relocated, relocated::RelocatedCommonPart},
     relocation::{
-        RelocValue, RelocationHandler, SymbolLookup, find_symbol_addr, find_symdef, likely,
-        reloc_error, unlikely,
+        RelocHandleContext, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
+        find_symbol_addr, likely, reloc_error, unlikely,
     },
 };
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::{num::NonZeroUsize, ptr::null_mut};
 
@@ -27,15 +26,6 @@ pub(crate) type LazyScope = Arc<dyn SymbolLookup + Send + Sync>;
 unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
     let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.0) };
     RelocValue::new(ifunc())
-}
-
-/// Context for relocation operations
-struct RelocationContext<'a, 'find, S: ?Sized, PreH: ?Sized, PostH: ?Sized> {
-    scope: &'a [Relocated],
-    pre_find: &'find S,
-    pre_handler: &'a mut PreH,
-    post_handler: &'a mut PostH,
-    dependency_flags: Vec<bool>,
 }
 
 impl RelocatedCommonPart {
@@ -78,6 +68,7 @@ impl RelocatedCommonPart {
             pre_find,
             &mut pre_handler,
             &mut post_handler,
+            is_lazy,
             lazy_scope,
         )?;
 
@@ -92,6 +83,7 @@ fn relocate_impl<'find, S, PreH, PostH>(
     pre_find: &'find S,
     pre_handler: &mut PreH,
     post_handler: &mut PostH,
+    is_lazy: bool,
     lazy_scope: Option<LazyScope>,
 ) -> Result<Relocated>
 where
@@ -108,7 +100,7 @@ where
     };
     elf.relocate_relative()
         .relocate_dynrel(&mut ctx)?
-        .relocate_pltrel(lazy_scope, &mut ctx)?
+        .relocate_pltrel(is_lazy, lazy_scope, &mut ctx)?
         .finish();
     let deps = ctx
         .dependency_flags
@@ -202,7 +194,8 @@ impl RelocatedCommonPart {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<S, PreH, PostH>(
         &self,
-        local_lazy_scope: Option<LazyScope>,
+        is_lazy: bool,
+        lazy_scope: Option<LazyScope>,
         ctx: &mut RelocationContext<'_, '_, S, PreH, PostH>,
     ) -> Result<&Self>
     where
@@ -212,31 +205,25 @@ impl RelocatedCommonPart {
     {
         let scope = ctx.scope;
         let pre_find = ctx.pre_find;
-        let pre_handler = &mut *ctx.pre_handler;
-        let post_handler = &mut *ctx.post_handler;
         let core = self.core_ref();
         let base = core.base();
         let segments = core.segments();
         let reloc = self.relocation();
         let symtab = self.symtab().unwrap();
-        let is_lazy = self.is_lazy();
 
-        if is_lazy {
-            // With lazy binding, skip full PLT relocations but do minimal setup
-            for rel in reloc.pltrel {
-                if let Some(res) = pre_handler.handle(rel, core, scope) {
-                    let idx = res
-                        .map_err(|err| reloc_error(rel.r_type() as _, rel.r_symbol(), err, core))?;
-                    if let Some(idx) = idx {
-                        ctx.dependency_flags[idx] = true;
-                    }
-                    continue;
-                }
-                let r_type = rel.r_type() as u32;
-                let r_addend = rel.r_addend(base);
+        // Process PLT relocations
+        for rel in reloc.pltrel {
+            let hctx = RelocHandleContext::new(rel, core, scope);
+            if !ctx.handle_pre(&hctx)? {
+                continue;
+            }
+            let r_type = rel.r_type() as u32;
+            let r_sym = rel.r_symbol();
+            let r_addend = rel.r_addend(base);
 
-                // Handle jump slot relocations
-                if likely(r_type == REL_JUMP_SLOT) {
+            // Handle jump slot relocations
+            if likely(r_type == REL_JUMP_SLOT) {
+                if is_lazy {
                     let addr = RelocValue::new(base) + rel.r_offset();
                     let ptr = addr.as_mut_ptr::<usize>();
                     // Even with lazy binding, basic relocation is needed for PLT to work
@@ -245,23 +232,35 @@ impl RelocatedCommonPart {
                         let new_val = origin_val + base;
                         ptr.write(new_val);
                     }
-                } else if unlikely(r_type == REL_IRELATIVE) {
-                    // Handle indirect function relocations
-                    let addr = RelocValue::new(base) + r_addend;
-                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 } else {
-                    if let Some(res) = post_handler.handle(rel, core, scope) {
-                        let idx =
-                            res.map_err(|err| reloc_error(r_type as _, rel.r_symbol(), err, core))?;
+                    if let Some((symbol, idx)) =
+                        find_symbol_addr(pre_find, core, symtab, scope, r_sym)
+                    {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
-                    } else {
-                        unreachable!()
+                        segments.write(rel.r_offset(), symbol);
                     }
                 }
+                continue;
+            } else if unlikely(r_type == REL_IRELATIVE) {
+                // Handle indirect function relocations
+                let addr = RelocValue::new(base) + r_addend;
+                segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                continue;
             }
+            // Handle unknown relocations with the provided handler
+            if ctx.handle_post(&hctx)? {
+                return Err(reloc_error(
+                    r_type as _,
+                    r_sym,
+                    "Unhandled relocation",
+                    core,
+                ));
+            }
+        }
 
+        if is_lazy {
             // Prepare for lazy binding if we have PLT relocations
             if !reloc.pltrel.is_empty() {
                 prepare_lazy_bind(
@@ -272,63 +271,15 @@ impl RelocatedCommonPart {
 
             // Ensure lazy scope is available
             assert!(
-                reloc.pltrel.is_empty() || local_lazy_scope.is_some(),
-                "local lazy scope is not set"
+                reloc.pltrel.is_empty() || lazy_scope.is_some(),
+                "lazy scope is not set"
             );
 
             // Set the lazy scope if provided
-            if let Some(lazy_scope) = local_lazy_scope {
+            if let Some(lazy_scope) = lazy_scope {
                 core.set_lazy_scope(lazy_scope);
             }
         } else {
-            // Without lazy binding, resolve all PLT relocations immediately
-            for rel in reloc.pltrel {
-                if let Some(res) = pre_handler.handle(rel, core, scope) {
-                    let idx = res
-                        .map_err(|err| reloc_error(rel.r_type() as _, rel.r_symbol(), err, core))?;
-                    if let Some(idx) = idx {
-                        ctx.dependency_flags[idx] = true;
-                    }
-                    continue;
-                }
-                let r_type = rel.r_type() as u32;
-                let r_sym = rel.r_symbol();
-                let r_addend = rel.r_addend(base);
-
-                // Handle jump slot relocations
-                if likely(r_type == REL_JUMP_SLOT) {
-                    if let Some((symbol, idx)) =
-                        find_symbol_addr(pre_find, core, symtab, scope, r_sym)
-                    {
-                        if let Some(idx) = idx {
-                            ctx.dependency_flags[idx] = true;
-                        }
-                        segments.write(rel.r_offset(), symbol);
-                        continue;
-                    }
-                } else if unlikely(r_type == REL_IRELATIVE) {
-                    // Handle indirect function relocations
-                    let addr = RelocValue::new(base) + r_addend;
-                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
-                    continue;
-                }
-
-                // Handle unknown relocations with the provided handler
-                if let Some(res) = post_handler.handle(rel, core, scope) {
-                    let idx = res.map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;
-                    if let Some(idx) = idx {
-                        ctx.dependency_flags[idx] = true;
-                    }
-                } else {
-                    return Err(reloc_error(
-                        r_type as _,
-                        r_sym,
-                        Box::new("Unhandled relocation"),
-                        core,
-                    ));
-                }
-            }
-
             // Apply RELRO (RELocation Read-Only) protection if available
             if let Some(relro) = self.relro() {
                 relro.relro()?;
@@ -399,8 +350,6 @@ impl RelocatedCommonPart {
     {
         let scope = ctx.scope;
         let pre_find = ctx.pre_find;
-        let pre_handler = &mut *ctx.pre_handler;
-        let post_handler = &mut *ctx.post_handler;
         /*
             Relocation formula components:
             A = Addend used to compute the value of the relocatable field
@@ -416,12 +365,8 @@ impl RelocatedCommonPart {
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
-            if let Some(res) = pre_handler.handle(rel, core, scope) {
-                let idx =
-                    res.map_err(|err| reloc_error(rel.r_type() as _, rel.r_symbol(), err, core))?;
-                if let Some(idx) = idx {
-                    ctx.dependency_flags[idx] = true;
-                }
+            let hctx = RelocHandleContext::new(rel, core, scope);
+            if !ctx.handle_pre(&hctx)? {
                 continue;
             }
             let r_type = rel.r_type() as _;
@@ -443,7 +388,7 @@ impl RelocatedCommonPart {
                 }
                 // Handle TLS (Thread Local Storage) offset relocations
                 REL_DTPOFF => {
-                    if let Some((symdef, idx)) = find_symdef(core, scope, r_sym) {
+                    if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
@@ -456,7 +401,7 @@ impl RelocatedCommonPart {
                 }
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
-                    if let Some((symdef, idx)) = find_symdef(core, scope, r_sym) {
+                    if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
@@ -476,12 +421,7 @@ impl RelocatedCommonPart {
             }
 
             // Handle unknown relocations with the provided handler
-            if let Some(res) = post_handler.handle(rel, core, scope) {
-                let idx = res.map_err(|err| reloc_error(r_type as _, r_sym, err, core))?;
-                if let Some(idx) = idx {
-                    ctx.dependency_flags[idx] = true;
-                }
-            } else {
+            if ctx.handle_post(&hctx)? {
                 return Err(reloc_error(
                     r_type as _,
                     r_sym,

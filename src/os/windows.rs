@@ -28,7 +28,7 @@ use windows_sys::Win32::{
     System::Threading::GetCurrentProcess,
 };
 
-pub struct MmapImpl;
+pub struct DefaultMmap;
 
 pub(crate) struct RawFile {
     name: CString,
@@ -70,7 +70,7 @@ fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FL
     }
 }
 
-impl Mmap for MmapImpl {
+impl Mmap for DefaultMmap {
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

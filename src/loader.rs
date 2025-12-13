@@ -7,10 +7,11 @@ use crate::{
         relocated::{RelocatedBuilder, RelocatedCommonPart},
     },
     mmap::Mmap,
+    os::DefaultMmap,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
-use core::{any::Any, ffi::CStr, marker::PhantomData};
+use core::{ffi::CStr, marker::PhantomData};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
@@ -72,37 +73,89 @@ impl ElfBuf {
     }
 }
 
-pub(crate) type Hook = Box<
-    dyn Fn(
-        &CStr,
-        &ElfPhdr,
-        &ElfSegments,
-        &mut UserData,
-    ) -> core::result::Result<(), Box<dyn Any + Send + Sync>>,
->;
+/// Context provided to hook functions during ELF loading.
+/// Contains information about the current program header being processed.
+pub struct HookContext<'a> {
+    name: &'a CStr,
+    phdr: &'a ElfPhdr,
+    segments: &'a ElfSegments,
+    user_data: &'a mut UserData,
+}
+
+impl<'a> HookContext<'a> {
+    /// Create a new HookContext.
+    pub(crate) fn new(
+        name: &'a CStr,
+        phdr: &'a ElfPhdr,
+        segments: &'a ElfSegments,
+        user_data: &'a mut UserData,
+    ) -> Self {
+        Self {
+            name,
+            phdr,
+            segments,
+            user_data,
+        }
+    }
+
+    /// Get the name associated with this hook context.
+    pub fn name(&self) -> &'a CStr {
+        self.name
+    }
+
+    /// Get the program header for the current segment.
+    pub fn phdr(&self) -> &'a ElfPhdr {
+        self.phdr
+    }
+
+    /// Get the ELF segments.
+    pub fn segments(&self) -> &'a ElfSegments {
+        self.segments
+    }
+
+    /// Get mutable access to user data for customization.
+    pub fn user_data_mut(&mut self) -> &mut UserData {
+        self.user_data
+    }
+}
+
+/// Hook trait used for processing program headers during load.
+pub trait Hook {
+    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a>) -> Result<()>;
+}
+
+impl<F> Hook for F
+where
+    F: for<'a> Fn(&'a mut HookContext<'a>) -> Result<()>,
+{
+    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a>) -> Result<()> {
+        (self)(ctx)
+    }
+}
+
+impl Hook for () {
+    fn call<'a>(&'a self, _ctx: &'a mut HookContext<'a>) -> Result<()> {
+        Ok(())
+    }
+}
 
 pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 
 /// The elf object loader
-pub struct Loader<M>
+pub struct Loader<M, H>
 where
     M: Mmap,
+    H: Hook,
 {
     pub(crate) buf: ElfBuf,
     init_fn: FnHandler,
     fini_fn: FnHandler,
-    hook: Option<Hook>,
+    hook: H,
     _marker: PhantomData<M>,
 }
 
-impl<M: Mmap> Default for Loader<M> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<M: Mmap> Loader<M> {
-    /// Create a new loader
+impl Loader<DefaultMmap, ()> {
+    /// Create a new loader with default DefaultMmap and no hook
     pub fn new() -> Self {
         let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
             func.iter()
@@ -110,14 +163,16 @@ impl<M: Mmap> Loader<M> {
                 .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
         });
         Self {
-            hook: None,
+            hook: (),
             init_fn: c_abi.clone(),
             fini_fn: c_abi,
             buf: ElfBuf::new(),
             _marker: PhantomData,
         }
     }
+}
 
+impl<M: Mmap, H: Hook> Loader<M, H> {
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
     pub fn set_init(&mut self, init_fn: FnHandler) -> &mut Self {
         self.init_fn = init_fn;
@@ -130,10 +185,26 @@ impl<M: Mmap> Loader<M> {
         self
     }
 
-    /// `hook` functions are called first when a program header is processed
-    pub fn set_hook(&mut self, hook: Hook) -> &mut Self {
-        self.hook = Some(hook);
-        self
+    /// Consume self and return一个新的Loader，允许替换为新的Hook类型
+    pub fn with_hook<NewHook: Hook>(self, hook: NewHook) -> Loader<M, NewHook> {
+        Loader {
+            buf: self.buf,
+            init_fn: self.init_fn,
+            fini_fn: self.fini_fn,
+            hook,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Consume self并返回一个新的Loader，允许替换为用户自定义的Mmap类型
+    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H> {
+        Loader {
+            buf: self.buf,
+            init_fn: self.init_fn,
+            fini_fn: self.fini_fn,
+            hook: self.hook,
+            _marker: PhantomData,
+        }
     }
 
     /// Read the elf header
@@ -162,8 +233,8 @@ impl<M: Mmap> Loader<M> {
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let builder: RelocatedBuilder<'_, M> = RelocatedBuilder::new(
-            self.hook.as_ref(),
+        let builder: RelocatedBuilder<'_, H, M> = RelocatedBuilder::new(
+            &self.hook,
             segments,
             object.file_name().to_owned(),
             ehdr,

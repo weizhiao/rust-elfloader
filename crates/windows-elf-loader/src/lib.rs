@@ -1,4 +1,4 @@
-use elf_loader::{ElfDylib, Loader, mmap::MmapImpl as WindowsMmap, object::ElfBinary};
+use elf_loader::{ElfDylib, Loader, mmap::DefaultMmap as WindowsMmap, object::ElfBinary};
 use std::sync::Arc;
 
 /// elf loader
