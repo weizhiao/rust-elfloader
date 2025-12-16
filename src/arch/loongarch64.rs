@@ -44,7 +44,7 @@ pub extern "C" fn dl_runtime_resolve() {
 
         move    $a0, $t0
         srli.d  $a1, $t1, 3
-        bl    dl_fixup
+        bl    {0}
 
         move    $t0, $a0
 
@@ -61,6 +61,21 @@ pub extern "C" fn dl_runtime_resolve() {
         addi.d  $sp, $sp, 9*8
 
         jr      $t0
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map loongarch64 relocation types to human readable names
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_LARCH_64 => "R_LARCH_64",
+        R_LARCH_RELATIVE => "R_LARCH_RELATIVE",
+        R_LARCH_COPY => "R_LARCH_COPY",
+        R_LARCH_JUMP_SLOT => "R_LARCH_JUMP_SLOT",
+        R_LARCH_TLS_DTPMOD64 => "R_LARCH_TLS_DTPMOD64",
+        R_LARCH_TLS_DTPREL64 => "R_LARCH_TLS_DTPREL64",
+        R_LARCH_IRELATIVE => "R_LARCH_IRELATIVE",
+        _ => "R_LARCH_UNKNOWN",
+    }
 }

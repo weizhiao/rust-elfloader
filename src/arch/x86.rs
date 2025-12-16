@@ -25,11 +25,25 @@ pub extern "C" fn dl_runtime_resolve() {
 	shr ecx, 3
 	mov [esp + 4], ecx
 // 与glibc不同,这里仍使用栈进行传参
-	call dl_fixup
+	call {0}
 // 将函数的真正地址写回栈顶
 	mov [esp], eax
 // 清除plt代码压入栈中的东西,当执行完这条指令后栈顶保存的是plt代码对应的返回地址
 	ret 4
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map x86 relocation type to human readable name
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_X86_64_NONE => "R_X86_64_NONE",
+        R_X86_64_64 => "R_X86_64_64",
+        R_X86_64_PC32 => "R_X86_64_PC32",
+        R_X86_64_GLOB_DAT => "R_X86_64_GLOB_DAT",
+        R_X86_64_JUMP_SLOT => "R_X86_64_JUMP_SLOT",
+        R_X86_64_RELATIVE => "R_X86_64_RELATIVE",
+        _ => "R_X86_64_UNKNOWN",
+    }
 }

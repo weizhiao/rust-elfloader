@@ -100,7 +100,7 @@ use object::*;
 pub use elf::abi;
 pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
-pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol, UserData};
+pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol};
 pub use loader::{Hook, Loader};
 pub use relocation::{Relocatable, RelocationHandler, SymbolLookup};
 

@@ -32,7 +32,7 @@ pub extern "C" fn dl_runtime_resolve() {
     sub x1,x1,x16
     sub x1,x1,8
     lsr x1,x1,3
-    bl	dl_fixup
+    bl	{0}
     mov x16,x0
 // 恢复参数寄存器
     ldp x0,x1,[sp,16*0]
@@ -43,6 +43,21 @@ pub extern "C" fn dl_runtime_resolve() {
 // 这里要将plt代码压入栈中的东西也弹出去
     add sp,sp,8*10
     br x16
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map aarch64 relocation type to human readable name
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_AARCH64_NONE => "R_AARCH64_NONE",
+        R_AARCH64_ABS64 => "R_AARCH64_ABS64",
+        R_AARCH64_GLOB_DAT => "R_AARCH64_GLOB_DAT",
+        R_AARCH64_RELATIVE => "R_AARCH64_RELATIVE",
+        R_AARCH64_JUMP_SLOT => "R_AARCH64_JUMP_SLOT",
+        R_AARCH64_IRELATIVE => "R_AARCH64_IRELATIVE",
+        R_AARCH64_COPY => "R_AARCH64_COPY",
+        _ => "R_AARCH64_UNKNOWN",
+    }
 }

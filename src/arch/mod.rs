@@ -381,3 +381,30 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
 pub type ElfRelType = ElfRela;
 #[cfg(feature = "rel")]
 pub type ElfRelType = ElfRel;
+
+impl ElfRelType {
+    /// Return a human readable relocation type name for the current arch
+    #[inline]
+    pub fn r_type_str(&self) -> &'static str {
+        let r_type = self.r_type();
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                x86_64::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "aarch64")] {
+                aarch64::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "arm")] {
+                arm::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "x86")] {
+                x86::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "riscv64")] {
+                riscv64::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "riscv32")] {
+                riscv32::rel_type_to_str(r_type)
+            } else if #[cfg(target_arch = "loongarch64")] {
+                loongarch64::rel_type_to_str(r_type)
+            } else {
+                "UNKNOWN_RELOC"
+            }
+        }
+    }
+}

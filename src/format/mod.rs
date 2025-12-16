@@ -13,13 +13,12 @@ use crate::{
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
-    relocation::{Relocatable, RelocationHandler, SymDef, SymbolLookup, dynamic_link::LazyScope},
+    relocation::{Relocatable, RelocationHandler, SymDef, SymbolLookup},
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
-    any::Any,
     ffi::CStr,
     fmt::Debug,
     marker::PhantomData,
@@ -36,83 +35,8 @@ use portable_atomic_util::{Arc, Weak};
 pub(crate) mod relocatable;
 pub(crate) mod relocated;
 
-/// Internal data item for user-defined data storage
-struct DataItem {
-    /// Key identifier for the data item
-    key: u8,
-
-    /// Optional boxed value stored with this key
-    value: Option<Box<dyn Any>>,
-}
-
-/// User-defined data associated with the loaded ELF file
-///
-/// This structure allows users to associate custom data with loaded ELF files.
-/// It provides a simple key-value store where keys are bytes and values are
-/// boxed any-type objects.
-pub struct UserData {
-    /// Vector of data items stored as key-value pairs
-    data: Vec<DataItem>,
-}
-
-impl UserData {
-    /// Creates an empty UserData instance
-    ///
-    /// # Returns
-    /// A new, empty UserData instance
-    #[inline]
-    pub const fn empty() -> Self {
-        Self { data: Vec::new() }
-    }
-
-    /// Inserts a key-value pair into the user data
-    ///
-    /// If a value with the same key already exists, it is replaced with the new value.
-    ///
-    /// # Arguments
-    /// * `key` - The key to associate with the value
-    /// * `value` - The boxed value to store
-    ///
-    /// # Returns
-    /// * `Some(old_value)` - If a value with this key already existed
-    /// * `None` - If this is a new key
-    #[inline]
-    pub fn insert(&mut self, key: u8, value: Box<dyn Any>) -> Option<Box<dyn Any>> {
-        for item in &mut self.data {
-            if item.key == key {
-                let old = core::mem::take(&mut item.value);
-                item.value = Some(value);
-                return old;
-            }
-        }
-        self.data.push(DataItem {
-            key,
-            value: Some(value),
-        });
-        None
-    }
-
-    /// Retrieves a value by key from the user data
-    ///
-    /// # Arguments
-    /// * `key` - The key of the value to retrieve
-    ///
-    /// # Returns
-    /// * `Some(value)` - A reference to the boxed value if found
-    /// * `None` - If no value with this key exists
-    #[inline]
-    pub fn get(&self, key: u8) -> Option<&Box<dyn Any>> {
-        self.data.iter().find_map(|item| {
-            if item.key == key {
-                return item.value.as_ref();
-            }
-            None
-        })
-    }
-}
-
-impl Deref for Relocated {
-    type Target = CoreComponent;
+impl<D> Deref for Relocated<D> {
+    type Target = CoreComponent<D>;
 
     /// Dereferences to the underlying CoreComponent
     ///
@@ -128,12 +52,15 @@ impl Deref for Relocated {
 /// has not yet undergone relocation. It can be either a dynamic library
 /// or an executable.
 #[derive(Debug)]
-pub enum Elf {
+pub enum Elf<D>
+where
+    D: 'static,
+{
     /// A dynamic library (shared object)
-    Dylib(ElfDylib),
+    Dylib(ElfDylib<D>),
 
     /// An executable file
-    Exec(ElfExec),
+    Exec(ElfExec<D>),
 
     /// A relocatable file (object file)
     Relocatable(ElfRelocatable),
@@ -145,25 +72,25 @@ pub enum Elf {
 /// It maintains lifetime information to prevent premature deallocation
 /// of dependencies.
 #[derive(Debug, Clone)]
-pub enum RelocatedElf {
+pub enum RelocatedElf<D> {
     /// A relocated dynamic library
-    Dylib(RelocatedDylib),
+    Dylib(RelocatedDylib<D>),
 
     /// A relocated executable
-    Exec(RelocatedExec),
+    Exec(RelocatedExec<D>),
 
-    /// A relocated relocatable file
-    Relocatable(Relocated),
+    /// A relocated relocatable file (always uses () for user_data)
+    Relocatable(Relocated<()>),
 }
 
-impl RelocatedElf {
+impl<D> RelocatedElf<D> {
     /// Converts this RelocatedElf into a RelocatedDylib if it is one
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn into_dylib(self) -> Option<RelocatedDylib> {
+    pub fn into_dylib(self) -> Option<RelocatedDylib<D>> {
         match self {
             RelocatedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -176,7 +103,7 @@ impl RelocatedElf {
     /// * `Some(exec)` - If this is an Exec variant
     /// * `None` - If this is a Dylib variant
     #[inline]
-    pub fn into_exec(self) -> Option<RelocatedExec> {
+    pub fn into_exec(self) -> Option<RelocatedExec<D>> {
         match self {
             RelocatedElf::Exec(exec) => Some(exec),
             _ => None,
@@ -189,7 +116,7 @@ impl RelocatedElf {
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn as_dylib(&self) -> Option<&RelocatedDylib> {
+    pub fn as_dylib(&self) -> Option<&RelocatedDylib<D>> {
         match self {
             RelocatedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -197,36 +124,41 @@ impl RelocatedElf {
     }
 }
 
-impl Deref for Elf {
-    type Target = CoreComponent;
+impl<D> Deref for Elf<D> {
+    type Target = CoreComponent<D>;
 
     /// Dereferences to the underlying CoreComponent
     ///
     /// This allows direct access to common fields shared by all ELF file types.
+    ///
+    /// # Panics
+    /// Panics if called on a Relocatable variant, as relocatable files always use `CoreComponent<()>`.
     fn deref(&self) -> &Self::Target {
         match self {
             Elf::Dylib(elf_dylib) => elf_dylib.core_ref(),
             Elf::Exec(elf_exec) => elf_exec.core_ref(),
-            Elf::Relocatable(elf_relocatable) => &elf_relocatable.core,
+            Elf::Relocatable(_) => panic!("Deref not supported for Relocatable variant"),
         }
     }
 }
 
-impl Relocatable for Elf {
-    type Output = RelocatedElf;
+impl<D: 'static> Relocatable<D> for Elf<D> {
+    type Output = RelocatedElf<D>;
 
-    fn relocate<S, PreH, PostH>(
+    fn relocate<S, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
+        scope: &[Relocated<D>],
         pre_find: &S,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
-        lazy_scope: Option<LazyScope>,
+        lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
+        D: 'static,
         S: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
@@ -260,12 +192,12 @@ impl Relocatable for Elf {
             Elf::Relocatable(relocatable) => {
                 let relocated = Relocatable::relocate(
                     relocatable,
-                    scope,
+                    &[],
                     pre_find,
                     pre_handler,
                     post_handler,
                     lazy,
-                    lazy_scope,
+                    None::<()>, // ElfRelocatable always uses LazyScope<(), ()>, so pass None
                     use_scope_as_lazy,
                 )?;
                 Ok(RelocatedElf::Relocatable(relocated))
@@ -323,15 +255,24 @@ unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 /// This structure represents an ELF file that has been loaded and relocated
 /// in memory. It maintains references to its dependencies to prevent
 /// premature deallocation.
-#[derive(Debug, Clone)]
-pub struct Relocated {
+#[derive(Debug)]
+pub struct Relocated<D> {
     /// The core component containing the actual ELF data
-    pub(crate) core: CoreComponent,
+    pub(crate) core: CoreComponent<D>,
     /// The dependencies of the ELF object
-    pub(crate) deps: Arc<[Relocated]>,
+    pub(crate) deps: Arc<[Relocated<D>]>,
 }
 
-impl Relocated {
+impl<D> Clone for Relocated<D> {
+    fn clone(&self) -> Self {
+        Relocated {
+            core: self.core.clone(),
+            deps: Arc::clone(&self.deps),
+        }
+    }
+}
+
+impl<D> Relocated<D> {
     /// Creates a Relocated instance from a CoreComponent
     ///
     /// # Safety
@@ -345,7 +286,7 @@ impl Relocated {
     /// # Returns
     /// A new Relocated instance
     #[inline]
-    pub unsafe fn from_core(core: CoreComponent) -> Self {
+    pub unsafe fn from_core(core: CoreComponent<D>) -> Self {
         Relocated {
             core,
             deps: Arc::from([]),
@@ -353,7 +294,7 @@ impl Relocated {
     }
 
     /// Gets the dependencies of the ELF object (short name `deps`)
-    pub fn deps(&self) -> &[Relocated] {
+    pub fn deps(&self) -> &[Relocated<D>] {
         &self.deps
     }
 
@@ -371,7 +312,7 @@ impl Relocated {
     /// # Returns
     /// A new Relocated instance
     #[inline]
-    pub unsafe fn from_core_deps(core: CoreComponent, deps: Vec<Relocated>) -> Self {
+    pub unsafe fn from_core_deps(core: CoreComponent<D>, deps: Vec<Relocated<D>>) -> Self {
         Relocated {
             core,
             deps: Arc::from(deps),
@@ -387,7 +328,7 @@ impl Relocated {
     /// # Returns
     /// A reference to the CoreComponent
     #[inline]
-    pub unsafe fn core_ref(&self) -> &CoreComponent {
+    pub unsafe fn core_ref(&self) -> &CoreComponent<D> {
         &self.core
     }
 
@@ -414,7 +355,7 @@ impl Relocated {
         dynamic: ElfDynamic,
         phdrs: &'static [ElfPhdr],
         segments: ElfSegments,
-        user_data: UserData,
+        user_data: D,
     ) -> Self {
         Self {
             core: CoreComponent::from_raw(name, base, dynamic, phdrs, segments, user_data),
@@ -573,14 +514,17 @@ impl ElfPhdrs {
 
 pub(crate) struct DynamicComponent {
     pub(crate) dynamic: NonNull<Dyn>,
+    #[allow(dead_code)]
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     pub(crate) phdrs: ElfPhdrs,
     pub(crate) needed_libs: Box<[&'static str]>,
-    pub(crate) lazy_scope: Option<LazyScope>,
+    /// Lazy binding scope for symbol resolution during lazy binding
+    /// Stored as trait object for type erasure of different SymbolLookup implementations
+    pub(crate) lazy_scope: Option<Arc<dyn SymbolLookup>>,
 }
 
 /// Inner structure for CoreComponent
-pub(crate) struct CoreComponentInner {
+pub(crate) struct CoreComponentInner<D = ()> {
     /// Indicates whether the component has been initialized
     is_init: AtomicBool,
 
@@ -603,7 +547,7 @@ pub(crate) struct CoreComponentInner {
     fini_handler: FnHandler,
 
     /// User-defined data
-    user_data: UserData,
+    user_data: D,
 
     /// Memory segments
     pub(crate) segments: ElfSegments,
@@ -612,7 +556,7 @@ pub(crate) struct CoreComponentInner {
     pub(crate) elf_type: ElfType,
 }
 
-impl Drop for CoreComponentInner {
+impl<D> Drop for CoreComponentInner<D> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
@@ -623,18 +567,18 @@ impl Drop for CoreComponentInner {
 
 /// `CoreComponentRef` is a version of `CoreComponent` that holds a non-owning reference to the managed allocation.
 #[derive(Clone)]
-pub struct CoreComponentRef {
+pub struct CoreComponentRef<D = ()> {
     /// Weak reference to the CoreComponentInner
-    inner: Weak<CoreComponentInner>,
+    inner: Weak<CoreComponentInner<D>>,
 }
 
-impl CoreComponentRef {
+impl<D> CoreComponentRef<D> {
     /// Attempts to upgrade the Weak pointer to an Arc
     ///
     /// # Returns
     /// * `Some(CoreComponent)` - If the upgrade is successful
     /// * `None` - If the CoreComponent has been dropped
-    pub fn upgrade(&self) -> Option<CoreComponent> {
+    pub fn upgrade(&self) -> Option<CoreComponent<D>> {
         self.inner.upgrade().map(|inner| CoreComponent { inner })
     }
 }
@@ -643,30 +587,42 @@ impl CoreComponentRef {
 ///
 /// This structure represents the core data of an ELF object, including
 /// its metadata, symbols, segments, and other essential information.
-#[derive(Clone)]
-pub struct CoreComponent {
+pub struct CoreComponent<D = ()> {
     /// Shared reference to the inner component data
-    pub(crate) inner: Arc<CoreComponentInner>,
+    pub(crate) inner: Arc<CoreComponentInner<D>>,
+}
+
+impl<D> Clone for CoreComponent<D> {
+    fn clone(&self) -> Self {
+        CoreComponent {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 // Safety: CoreComponentInner can be shared between threads
-unsafe impl Sync for CoreComponentInner {}
-
+unsafe impl<D> Sync for CoreComponentInner<D> {}
 // Safety: CoreComponentInner can be sent between threads
-unsafe impl Send for CoreComponentInner {}
+unsafe impl<D> Send for CoreComponentInner<D> {}
 
-impl CoreComponent {
+impl<D> CoreComponent<D> {
     /// Sets the lazy scope for this component
     ///
     /// # Arguments
     /// * `lazy_scope` - The lazy scope to set
     #[inline]
-    pub(crate) fn set_lazy_scope(&self, lazy_scope: LazyScope) {
+    pub(crate) fn set_lazy_scope<LazyS>(&self, lazy_scope: LazyS)
+    where
+        D: 'static,
+        LazyS: SymbolLookup + Send + Sync + 'static,
+    {
         // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+        // LazyScope 会被长期存储用于延迟绑定符号查询，因此需要 Send + Sync + 'static 约束
+        // 注意：D 的生命周期由 CoreComponentInner<D> 保证
         unsafe {
-            let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner);
+            let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut CoreComponentInner<D>);
             // 在relocate接口处保证了lazy_scope的声明周期，因此这里直接转换
-            ptr.dynamic_info.as_mut().unwrap().lazy_scope = Some(lazy_scope);
+            ptr.dynamic_info.as_mut().unwrap().lazy_scope = Some(Arc::new(lazy_scope));
         };
     }
 
@@ -681,7 +637,7 @@ impl CoreComponent {
     /// # Returns
     /// A CoreComponentRef that holds a weak reference to this component
     #[inline]
-    pub fn downgrade(&self) -> CoreComponentRef {
+    pub fn downgrade(&self) -> CoreComponentRef<D> {
         CoreComponentRef {
             inner: Arc::downgrade(&self.inner),
         }
@@ -692,7 +648,7 @@ impl CoreComponent {
     /// # Returns
     /// A reference to the user data
     #[inline]
-    pub fn user_data(&self) -> &UserData {
+    pub fn user_data(&self) -> &D {
         &self.inner.user_data
     }
 
@@ -838,7 +794,7 @@ impl CoreComponent {
         dynamic: ElfDynamic,
         phdrs: &'static [ElfPhdr],
         mut segments: ElfSegments,
-        user_data: UserData,
+        user_data: D,
     ) -> Self {
         segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
         Self {
@@ -864,7 +820,7 @@ impl CoreComponent {
     }
 }
 
-impl Debug for CoreComponent {
+impl<D> Debug for CoreComponent<D> {
     /// Formats the CoreComponent for debugging purposes
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Dylib")
@@ -873,7 +829,7 @@ impl Debug for CoreComponent {
     }
 }
 
-impl<M: Mmap, H: Hook> Loader<M, H> {
+impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
     /// Load an ELF file into memory
     ///
     /// # Arguments
@@ -882,13 +838,14 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     /// # Returns
     /// * `Ok(Elf)` - The loaded ELF file
     /// * `Err(Error)` - If loading fails
-    pub fn load(&mut self, mut object: impl ElfObject) -> Result<Elf> {
+    pub fn load(&mut self, mut object: impl ElfObject) -> Result<Elf<D>> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let is_dylib = ehdr.is_dylib();
         if is_dylib {
             Ok(Elf::Dylib(self.load_dylib(object)?))
         } else if ehdr.e_type == elf::abi::ET_REL {
-            Ok(Elf::Relocatable(self.load_relocatable(object)?))
+            // Relocatable files don't use user_data, so we call load_rel directly
+            Ok(Elf::Relocatable(self.load_rel(ehdr, object)?))
         } else {
             Ok(Elf::Exec(self.load_exec(object)?))
         }

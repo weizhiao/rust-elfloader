@@ -1,6 +1,8 @@
 use crate::{
     arch::ElfRelType,
-    relocation::{RelocValue, find_symbol_addr, reloc_error, static_link::StaticReloc, SymbolLookup},
+    relocation::{
+        RelocValue, SymbolLookup, find_symbol_addr, reloc_error, static_link::StaticReloc,
+    },
     segment::shdr::{GotEntry, PltEntry, PltGotSection},
 };
 use elf::abi::*;
@@ -47,7 +49,7 @@ pub extern "C" fn dl_runtime_resolve() {
     mov rdi,[rsp+8*7]
     mov rsi,[rsp+8*8]
 // 调用重定位函数
-    call dl_fixup
+    call {0}
 // 恢复参数寄存器
     mov rdi,[rsp+8*0]
     mov rsi,[rsp+8*1]
@@ -59,20 +61,44 @@ pub extern "C" fn dl_runtime_resolve() {
     add rsp,7*8+2*8
 // 执行真正的函数
     jmp rax
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
 }
 
 pub(crate) struct X86_64Relocator;
 
+/// Map x86_64 relocation type value to human readable name.
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_X86_64_NONE => "R_X86_64_NONE",
+        R_X86_64_64 => "R_X86_64_64",
+        R_X86_64_PC32 => "R_X86_64_PC32",
+        R_X86_64_GOT32 => "R_X86_64_GOT32",
+        R_X86_64_PLT32 => "R_X86_64_PLT32",
+        R_X86_64_COPY => "R_X86_64_COPY",
+        R_X86_64_GLOB_DAT => "R_X86_64_GLOB_DAT",
+        R_X86_64_JUMP_SLOT => "R_X86_64_JUMP_SLOT",
+        R_X86_64_RELATIVE => "R_X86_64_RELATIVE",
+        R_X86_64_GOTPCREL => "R_X86_64_GOTPCREL",
+        R_X86_64_32 => "R_X86_64_32",
+        R_X86_64_32S => "R_X86_64_32S",
+        R_X86_64_IRELATIVE => "R_X86_64_IRELATIVE",
+        _ => "R_X86_64_UNKNOWN",
+    }
+}
+
 impl StaticReloc for X86_64Relocator {
-    fn relocate<S: SymbolLookup + ?Sized>(
-        core: &crate::CoreComponent,
+    fn relocate<S>(
+        core: &crate::CoreComponent<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[crate::format::Relocated],
+        scope: &[crate::format::Relocated<()>],
         pre_find: &S,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<()>
+    where
+        S: SymbolLookup + ?Sized,
+    {
         let symtab = core.symtab().unwrap();
         let r_sym = rel_type.r_symbol();
         let r_type = rel_type.r_type();
@@ -84,7 +110,7 @@ impl StaticReloc for X86_64Relocator {
         let find_symbol = |r_sym: usize| {
             find_symbol_addr(pre_find, core, symtab, scope, r_sym).map(|(val, _)| val)
         };
-        let boxed_error = || reloc_error(r_type, r_sym, "unknown symbol", core);
+        let boxed_error = || reloc_error(rel_type, "unknown symbol", core);
         match r_type as _ {
             R_X86_64_64 => {
                 let Some(sym) = find_symbol(r_sym) else {
@@ -96,7 +122,13 @@ impl StaticReloc for X86_64Relocator {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val: RelocValue<i32> = (sym + append - p).try_into().unwrap();
+                let val: RelocValue<i32> = (sym + append - p).try_into().map_err(|_| {
+                    reloc_error(
+                        rel_type,
+                        "out of range integral type conversion attempted",
+                        core,
+                    )
+                })?;
                 segments.write(offset, val);
             }
             R_X86_64_PLT32 => {
@@ -141,14 +173,26 @@ impl StaticReloc for X86_64Relocator {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val: RelocValue<u32> = (sym + append).try_into().unwrap();
+                let val: RelocValue<u32> = (sym + append).try_into().map_err(|_| {
+                    reloc_error(
+                        rel_type,
+                        "out of range integral type conversion attempted",
+                        core,
+                    )
+                })?;
                 segments.write(offset, val);
             }
             R_X86_64_32S => {
                 let Some(sym) = find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val: RelocValue<i32> = (sym + append).try_into().unwrap();
+                let val: RelocValue<i32> = (sym + append).try_into().map_err(|_| {
+                    reloc_error(
+                        rel_type,
+                        "out of range integral type conversion attempted",
+                        core,
+                    )
+                })?;
                 segments.write(offset, val);
             }
             _ => {

@@ -37,9 +37,8 @@ pub extern "C" fn dl_runtime_resolve() {
 // 这两个是plt代码设置的
     mv a0,t0
     srli a1,t1,3
-    la a2,dl_fixup
 // 调用重定位函数
-    jalr a2
+    call {0}
 // 恢复参数寄存器
     mv t1,a0
     lw ra,8*0(sp)
@@ -54,6 +53,20 @@ pub extern "C" fn dl_runtime_resolve() {
     addi sp,sp,8*9
 // 执行真正的函数
     jr t1
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map riscv32 relocation types to human readable names
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_RISCV_NONE => "R_RISCV_NONE",
+        R_RISCV_32 => "R_RISCV_32",
+        R_RISCV_RELATIVE => "R_RISCV_RELATIVE",
+        R_RISCV_COPY => "R_RISCV_COPY",
+        R_RISCV_JUMP_SLOT => "R_RISCV_JUMP_SLOT",
+        R_RISCV_IRELATIVE => "R_RISCV_IRELATIVE",
+        _ => "R_RISCV_UNKNOWN",
+    }
 }

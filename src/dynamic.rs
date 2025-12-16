@@ -145,6 +145,19 @@ impl ElfDynamic {
         } else if let Some(off) = elf_hash_off {
             ElfDynamicHashTab::Elf(off)
         } else {
+            // If no hash table is present, we can't perform symbol lookup.
+            // However, for some simple cases (like our test generator), we might not strictly need it
+            // if we don't do symbol lookup via hash.
+            // But the loader architecture seems to rely on it.
+            // Let's return a dummy or error.
+            // The error "dynamic section does not have DT_GNU_HASH nor DT_HASH" comes from here.
+            // We added DT_HASH to the generator, but maybe it's 0 and treated as None?
+            // DT_HASH value is the offset. If we set it to 0, it might be valid if the hash table is at offset 0 (unlikely).
+            // In the generator we set it to 0.
+            // Let's check if 0 is considered valid.
+            // In the loop: DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
+            // So 0 is Some(0).
+
             return Err(parse_dynamic_error(
                 "dynamic section does not have DT_GNU_HASH nor DT_HASH",
             ));

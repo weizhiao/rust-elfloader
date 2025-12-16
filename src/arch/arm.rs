@@ -25,10 +25,25 @@ pub extern "C" fn dl_runtime_resolve() {
     add r1, lr, #4 
 	sub r1, ip, r1
     lsr r1, r1, 2
-    bl dl_fixup
+    bl {0}
     mov	ip, r0
     pop	{{r0, r1, r2, r3, r4, lr}}
     bx ip
-	"
+	",
+        sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map arm relocation type to human readable name
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_ARM_NONE => "R_ARM_NONE",
+        R_ARM_ABS32 => "R_ARM_ABS32",
+        R_ARM_GLOB_DAT => "R_ARM_GLOB_DAT",
+        R_ARM_JUMP_SLOT => "R_ARM_JUMP_SLOT",
+        R_ARM_RELATIVE => "R_ARM_RELATIVE",
+        R_ARM_IRELATIVE => "R_ARM_IRELATIVE",
+        R_ARM_COPY => "R_ARM_COPY",
+        _ => "R_ARM_UNKNOWN",
+    }
 }

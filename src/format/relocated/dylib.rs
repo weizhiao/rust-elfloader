@@ -6,12 +6,12 @@
 
 use super::RelocatedCommonPart;
 use crate::{
-    Hook, Loader, Result, UserData,
+    Hook, Loader, Result,
     format::Relocated,
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, SymbolLookup, dynamic_link::LazyScope},
+    relocation::{Relocatable, RelocationHandler, SymbolLookup},
 };
 use core::{fmt::Debug, ops::Deref};
 
@@ -21,13 +21,16 @@ use core::{fmt::Debug, ops::Deref};
 /// loaded into memory but has not yet undergone relocation. It contains all
 /// the necessary information to perform relocation and prepare the library
 /// for execution.
-pub struct ElfDylib {
+pub struct ElfDylib<D>
+where
+    D: 'static,
+{
     /// The common part containing basic ELF object information
-    inner: RelocatedCommonPart,
+    inner: RelocatedCommonPart<D>,
 }
 
-impl Deref for ElfDylib {
-    type Target = RelocatedCommonPart;
+impl<D> Deref for ElfDylib<D> {
+    type Target = RelocatedCommonPart<D>;
 
     /// Dereferences to the underlying RelocatedCommonPart
     ///
@@ -38,7 +41,7 @@ impl Deref for ElfDylib {
     }
 }
 
-impl Debug for ElfDylib {
+impl<D> Debug for ElfDylib<D> {
     /// Formats the ElfDylib for debugging purposes
     ///
     /// This implementation provides a debug representation that includes
@@ -55,21 +58,22 @@ impl Debug for ElfDylib {
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-impl Relocatable for ElfDylib {
-    type Output = RelocatedDylib;
+impl<D> Relocatable<D> for ElfDylib<D> {
+    type Output = Relocated<D>;
 
-    fn relocate<S, PreH, PostH>(
+    fn relocate<S, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
+        scope: &[Relocated<D>],
         pre_find: &S,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
-        lazy_scope: Option<LazyScope>,
+        lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         S: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
@@ -86,7 +90,7 @@ impl Relocatable for ElfDylib {
     }
 }
 
-impl ElfDylib {
+impl<D> ElfDylib<D> {
     /// Gets mutable user data from the ELF object
     ///
     /// This method provides access to the user-defined data associated
@@ -96,12 +100,12 @@ impl ElfDylib {
     /// * `Some(user_data)` - A mutable reference to the user data if available
     /// * `None` - If the user data is not available (e.g., already borrowed)
     #[inline]
-    pub fn user_data_mut(&mut self) -> Option<&mut UserData> {
+    pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.inner.user_data_mut()
     }
 }
 
-impl<M: Mmap, H: Hook> Loader<M, H> {
+impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
     /// Load a dynamic library into memory
     ///
     /// This method loads a dynamic library (shared object) file into memory
@@ -114,7 +118,7 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     /// # Returns
     /// * `Ok(ElfDylib)` - The loaded dynamic library
     /// * `Err(Error)` - If loading fails
-    pub fn load_dylib(&mut self, mut object: impl ElfObject) -> Result<ElfDylib> {
+    pub fn load_dylib(&mut self, mut object: impl ElfObject) -> Result<ElfDylib<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -135,4 +139,4 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
 ///
 /// This type represents a dynamic library that has been loaded and relocated
 /// in memory, making it ready for symbol resolution and execution.
-pub type RelocatedDylib = Relocated;
+pub type RelocatedDylib<D> = Relocated<D>;
