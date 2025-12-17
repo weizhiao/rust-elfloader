@@ -1,26 +1,19 @@
 use object::write::{RelocationFlags, SectionId, SymbolId};
 
 /// Represents a relocation entry with flexible symbol reference
+/// Both offset and addend are automatically calculated by gen_relocs based on relocation type
 pub struct RelocEntry {
-    pub offset: u64,
     /// Symbol name that this relocation references
     pub symbol_name: String,
-    pub addend: i64,
     pub flags: RelocationFlags,
 }
 
 impl RelocEntry {
     /// Create a new relocation entry
-    pub fn new(
-        offset: u64,
-        symbol_name: impl Into<String>,
-        addend: i64,
-        flags: RelocationFlags,
-    ) -> Self {
+    /// Offset and addend will be auto-calculated based on relocation type and sequence
+    pub fn new(symbol_name: impl Into<String>, flags: RelocationFlags) -> Self {
         Self {
-            offset,
             symbol_name: symbol_name.into(),
-            addend,
             flags,
         }
     }

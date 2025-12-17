@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-mod arch;
-mod common;
+pub mod arch;
+pub mod common;
 pub mod writer;
 
 pub use common::RelocEntry;
@@ -131,7 +131,7 @@ pub fn gen_static_elf(out_path: &Path, arch: Arch) -> Result<()> {
     symbol_map.insert(EXTERNAL_FUNC_NAME.to_string(), external_func);
     symbol_map.insert(EXTERNAL_VAR_NAME.to_string(), external_var);
     symbol_map.insert(EXTERNAL_TLS_NAME.to_string(), external_tls);
-    symbol_map.insert("".to_string(), data_section_sym);  // Empty string for section-relative relocations
+    symbol_map.insert("".to_string(), data_section_sym); // Empty string for section-relative relocations
 
     let fixtures = RelocFixtures {
         data_id,
@@ -150,14 +150,32 @@ pub fn gen_static_elf(out_path: &Path, arch: Arch) -> Result<()> {
         _ => Vec::new(),
     };
 
-    for reloc in &relocs {
-        let symbol_id = symbol_map.get(&reloc.symbol_name).copied().unwrap_or(data_section_sym);
+    for (idx, reloc) in relocs.iter().enumerate() {
+        let symbol_id = symbol_map
+            .get(&reloc.symbol_name)
+            .copied()
+            .unwrap_or(data_section_sym);
+        // Auto-calculate offset based on relocation sequence
+        // Each relocation is 8 bytes apart starting from offset 0x10
+        let offset = 0x10 + (idx as u64 * 8);
+        // Auto-calculate addend based on relocation type
+        let r_type = match reloc.flags {
+            object::write::RelocationFlags::Elf { r_type } => r_type as u64,
+            _ => 0,
+        };
+        let addend = match r_type {
+            0x01 => 0x10,   // First relocation has addend 0x10
+            0x06 => 0,      // GLOB_DAT has addend 0
+            0x07 => 0,      // JUMP_SLOT has addend 0
+            0x08 => 0x2000, // RELATIVE has addend 0x2000
+            _ => offset as i64,
+        };
         obj.add_relocation(
             fixtures.data_id,
             Relocation {
-                offset: reloc.offset,
+                offset,
                 symbol: symbol_id,
-                addend: reloc.addend,
+                addend,
                 flags: reloc.flags,
             },
         )?;

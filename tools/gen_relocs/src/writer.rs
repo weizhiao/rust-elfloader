@@ -100,6 +100,9 @@ impl ElfWriterConfig {
     }
 }
 
+/// Analysis result of relocation types for GOT and PLT allocation
+pub use crate::arch::RelocationTypeInfo;
+
 /// Relocation metadata for testing and verification
 #[derive(Clone, Debug)]
 pub struct RelocationInfo {
@@ -109,6 +112,8 @@ pub struct RelocationInfo {
     pub r_type: u64,
     /// Symbol index
     pub sym_idx: u64,
+    /// Addend value for relocation calculation
+    pub addend: i64,
 }
 
 /// Output of ELF generation containing the file data and relocation metadata
@@ -152,6 +157,8 @@ const DYN_SIZE_64: u64 = 16;
 const DYN_SIZE_32: u64 = 8;
 const HASH_SIZE: u64 = 4;
 const NUM_PROGRAM_HEADERS: u64 = 3;
+/// GOT table offset in data segment (0x100 = 256 bytes, after initial data)
+const GOT_OFFSET: u64 = 0x100;
 
 struct ElfLayout {
     base_addr: u64,
@@ -283,6 +290,11 @@ impl ElfWriter {
         relocs: &[RelocEntry],
         symbols: &[SymbolDesc],
     ) -> Result<ElfWriteOutput> {
+        // First: Analyze relocation types to determine GOT and PLT requirements
+        let reloc_info = crate::arch::analyze_relocation_types(self.arch, relocs);
+
+        // Second: Generate PLT code with proper GOT allocation
+        let (plt_blob, plt_entries) = self.build_plt_blob(relocs, &reloc_info);
         let text_blob = self.build_text_blob();
         let mut data_blob = vec![0u8; self.config.initial_data_size as usize];
 
@@ -290,12 +302,24 @@ impl ElfWriter {
         self.init_data_segment(&mut data_blob, symbols);
 
         // Calculate layout and segment positions
-        let (layout, text_vaddr, _text_off, _text_size, _data_off, _data_size, data_vaddr) =
-            self.calculate_layout(&text_blob, &data_blob);
+        let (
+            layout,
+            plt_vaddr,
+            text_vaddr,
+            _text_off,
+            _text_size,
+            _data_off,
+            _data_size,
+            data_vaddr,
+        ) = self.calculate_layout(&plt_blob, &text_blob, &data_blob);
 
-        // Build dynamic sections
+        // Build dynamic sections (including PLT and IFUNC symbols)
         let (_names, dynstr_blob, dynsym_blob, hash_blob, sym_name_to_idx) =
-            self.build_dyn_tables(symbols)?;
+            self.build_dyn_tables(symbols, &plt_entries, plt_vaddr, text_vaddr)?;
+
+        // Build static symbol table with PLT and IFUNC symbols
+        let (symtab_blob, strtab_blob) =
+            self.build_static_symtab(symbols, &plt_entries, plt_vaddr, text_vaddr)?;
 
         // Build relocations and collect metadata
         let (rela_dyn_blob, rela_plt_blob, relative_count, reloc_infos) = self
@@ -317,6 +341,8 @@ impl ElfWriter {
             &hash_blob,
             &rela_dyn_blob,
             &rela_plt_blob,
+            &symtab_blob,
+            &strtab_blob,
             &shstr,
         );
 
@@ -334,6 +360,7 @@ impl ElfWriter {
         // Write ELF file
         let data = self.write_elf_file(
             layout,
+            &plt_blob,
             &text_blob,
             &data_blob,
             &dynstr_blob,
@@ -342,6 +369,8 @@ impl ElfWriter {
             &rela_dyn_blob,
             &rela_plt_blob,
             &dynamic_blob,
+            &symtab_blob,
+            &strtab_blob,
             &shstr,
         )?;
 
@@ -370,12 +399,12 @@ impl ElfWriter {
             }
         }
 
-        // Initialize GOT table at offset 0x100 (arbitrary location in data segment)
+        // Initialize GOT table at offset GOT_OFFSET in data segment
         // GOT[0] = address of _DYNAMIC (will be filled by loader)
         // GOT[1] = link_map pointer (will be filled by loader)
         // GOT[2] = _dl_runtime_resolve address (will be filled by loader)
         // GOT[3+] = PLT function entries (initially point to PLT stub)
-        let got_offset = 0x100usize;
+        let got_offset = GOT_OFFSET as usize;
         let num_got_entries = 8; // 3 reserved + 5 for PLT functions
         if got_offset + num_got_entries * 8 <= data_blob.len() {
             // Reserve space for GOT entries
@@ -392,9 +421,10 @@ impl ElfWriter {
 
     fn calculate_layout(
         &self,
+        plt_blob: &[u8],
         text_blob: &[u8],
         data_blob: &[u8],
-    ) -> (ElfLayout, u64, u64, u64, u64, u64, u64) {
+    ) -> (ElfLayout, u64, u64, u64, u64, u64, u64, u64) {
         let ehdr_size = if self.is_64 {
             EHDR_SIZE_64
         } else {
@@ -415,6 +445,9 @@ impl ElfWriter {
         );
         layout.add_header(ehdr_size, ph_size);
 
+        let plt_size = plt_blob.len() as u64;
+        let (plt_off, plt_vaddr) = layout.add_segment(plt_size);
+
         let text_size = text_blob.len() as u64;
         let (text_off, text_vaddr) = layout.add_segment(text_size);
 
@@ -422,13 +455,14 @@ impl ElfWriter {
         let (data_off, data_vaddr) = layout.add_segment(data_size);
 
         (
-            layout, text_vaddr, text_off, text_size, data_off, data_size, data_vaddr,
+            layout, plt_vaddr, text_vaddr, text_off, text_size, data_off, data_size, data_vaddr,
         )
     }
 
     fn build_section_string_table(&self) -> Vec<u8> {
         let mut shstr = vec![0u8];
         let sect_names = [
+            ".plt",
             ".text",
             ".data",
             ".dynstr",
@@ -445,6 +479,8 @@ impl ElfWriter {
             },
             ".dynamic",
             ".hash",
+            ".symtab",
+            ".strtab",
             ".shstrtab",
         ];
         for n in &sect_names {
@@ -462,6 +498,8 @@ impl ElfWriter {
         hash_blob: &[u8],
         rela_dyn_blob: &[u8],
         rela_plt_blob: &[u8],
+        symtab_blob: &[u8],
+        strtab_blob: &[u8],
         shstr: &[u8],
     ) -> ElfLayout {
         let align = layout.section_align;
@@ -471,6 +509,8 @@ impl ElfWriter {
         layout.add_section(rela_dyn_blob.len() as u64);
         layout.add_section(rela_plt_blob.len() as u64);
         layout.add_section(0); // dynamic
+        layout.add_section(symtab_blob.len() as u64);
+        layout.add_section(strtab_blob.len() as u64);
         layout.file_off = layout.align_up(layout.file_off + shstr.len() as u64, align);
         layout
     }
@@ -504,8 +544,8 @@ impl ElfWriter {
 
         let rela_plt_vaddr = vaddr_offset;
 
-        // GOT table is at offset 0x100 in data segment
-        let got_vaddr = data_vaddr + 0x100;
+        // GOT table is at offset GOT_OFFSET in data segment
+        let got_vaddr = data_vaddr + GOT_OFFSET;
 
         self.build_dynamic_blob(
             dynstr_vaddr,
@@ -525,6 +565,7 @@ impl ElfWriter {
     fn write_elf_file(
         &self,
         layout: ElfLayout,
+        plt_blob: &[u8],
         text_blob: &[u8],
         data_blob: &[u8],
         dynstr_blob: &[u8],
@@ -533,6 +574,8 @@ impl ElfWriter {
         rela_dyn_blob: &[u8],
         rela_plt_blob: &[u8],
         dynamic_blob: &[u8],
+        symtab_blob: &[u8],
+        strtab_blob: &[u8],
         shstr: &[u8],
     ) -> Result<Vec<u8>> {
         let mut out_bytes = vec![];
@@ -557,6 +600,12 @@ impl ElfWriter {
         let mut sec_layout = ElfLayout::new(self.config.base_addr, self.config.page_size, align);
         let ehdr_ph_size = ehdr_size + phentsize * NUM_PROGRAM_HEADERS;
         sec_layout.file_off = sec_layout.align_up(ehdr_ph_size, self.config.page_size);
+
+        let plt_off = sec_layout.file_off;
+        sec_layout.file_off = sec_layout.align_up(
+            sec_layout.file_off + plt_blob.len() as u64,
+            self.config.page_size,
+        );
 
         let text_off = sec_layout.file_off;
         sec_layout.file_off = sec_layout.align_up(
@@ -594,11 +643,20 @@ impl ElfWriter {
         sec_layout.file_off =
             sec_layout.align_up(sec_layout.file_off + dynamic_blob.len() as u64, align);
 
+        let symtab_off = sec_layout.file_off;
+        sec_layout.file_off =
+            sec_layout.align_up(sec_layout.file_off + symtab_blob.len() as u64, align);
+
+        let strtab_off = sec_layout.file_off;
+        sec_layout.file_off =
+            sec_layout.align_up(sec_layout.file_off + strtab_blob.len() as u64, align);
+
         let shstr_off = sec_layout.file_off;
         sec_layout.file_off = sec_layout.align_up(sec_layout.file_off + shstr.len() as u64, align);
         let shoff = sec_layout.file_off;
 
         let sect_names = [
+            ".plt",
             ".text",
             ".data",
             ".dynstr",
@@ -615,6 +673,8 @@ impl ElfWriter {
             },
             ".dynamic",
             ".hash",
+            ".symtab",
+            ".strtab",
             ".shstrtab",
         ];
 
@@ -651,24 +711,26 @@ impl ElfWriter {
         self.write_struct(&mut out_bytes, ehdr)?;
 
         // Write Program Headers
+        let plt_vaddr = self.config.base_addr + plt_off;
         let text_vaddr = self.config.base_addr + text_off;
         let data_vaddr = self.config.base_addr + data_off;
         let dynamic_vaddr = self.config.base_addr + dynamic_off;
         let dynamic_size = dynamic_blob.len() as u64;
 
-        // Text segment (RX)
+        // PLT+Text segment (RX) - combine PLT and text for executable segment
+        let code_segment_size = (text_off + text_blob.len() as u64) - plt_off;
         self.write_phdr(
             &mut out_bytes,
             PT_LOAD,
             PF_R | PF_X,
-            text_off,
-            text_vaddr,
-            text_blob.len() as u64,
+            plt_off,
+            plt_vaddr,
+            code_segment_size,
             self.config.page_size,
         )?;
 
-        // Data segment (RW) - includes everything up to end of dynamic
-        let data_segment_size = (dynamic_off + dynamic_size) - data_off;
+        // Data segment (RW) - includes everything up to end of strtab
+        let data_segment_size = (strtab_off + strtab_blob.len() as u64) - data_off;
         self.write_phdr(
             &mut out_bytes,
             PT_LOAD,
@@ -691,6 +753,7 @@ impl ElfWriter {
         )?;
 
         // Write sections
+        self.write_at(&mut out_bytes, plt_off, plt_blob);
         self.write_at(&mut out_bytes, text_off, text_blob);
         self.write_at(&mut out_bytes, data_off, data_blob);
         self.write_at(&mut out_bytes, dynstr_off, dynstr_blob);
@@ -699,6 +762,8 @@ impl ElfWriter {
         self.write_at(&mut out_bytes, rela_plt_off, rela_plt_blob);
         self.write_at(&mut out_bytes, hash_off, hash_blob);
         self.write_at(&mut out_bytes, dynamic_off, dynamic_blob);
+        self.write_at(&mut out_bytes, symtab_off, symtab_blob);
+        self.write_at(&mut out_bytes, strtab_off, strtab_blob);
         self.write_at(&mut out_bytes, shstr_off, shstr);
 
         // Write Section Headers
@@ -717,9 +782,10 @@ impl ElfWriter {
                 .unwrap_or(0) as u32;
 
             let shtype = match *name {
-                ".text" | ".data" => SHT_PROGBITS,
-                ".dynstr" | ".shstrtab" => SHT_STRTAB,
+                ".plt" | ".text" | ".data" => SHT_PROGBITS,
+                ".dynstr" | ".strtab" | ".shstrtab" => SHT_STRTAB,
                 ".dynsym" => SHT_DYNSYM,
+                ".symtab" => SHT_SYMTAB,
                 ".rela.dyn" | ".rela.plt" => SHT_RELA,
                 ".rel.dyn" | ".rel.plt" => SHT_REL,
                 ".dynamic" => SHT_DYNAMIC,
@@ -728,14 +794,16 @@ impl ElfWriter {
             };
 
             let flags = match *name {
-                ".text" => SHF_ALLOC | SHF_EXECINSTR,
+                ".plt" | ".text" => SHF_ALLOC | SHF_EXECINSTR,
                 ".data" => SHF_ALLOC | SHF_WRITE,
                 ".dynstr" | ".dynsym" | ".rela.dyn" | ".rela.plt" | ".rel.dyn" | ".rel.plt"
                 | ".dynamic" | ".hash" => SHF_ALLOC,
+                // .symtab, .strtab, .shstrtab are for debugging only, no SHF_ALLOC
                 _ => 0,
             };
 
             let (off, sz) = match *name {
+                ".plt" => (plt_off, plt_blob.len() as u64),
                 ".text" => (text_off, text_blob.len() as u64),
                 ".data" => (data_off, data_blob.len() as u64),
                 ".dynstr" => (dynstr_off, dynstr_blob.len() as u64),
@@ -743,13 +811,15 @@ impl ElfWriter {
                 ".rela.dyn" | ".rel.dyn" => (rela_dyn_off, rela_dyn_blob.len() as u64),
                 ".rela.plt" | ".rel.plt" => (rela_plt_off, rela_plt_blob.len() as u64),
                 ".dynamic" => (dynamic_off, dynamic_blob.len() as u64),
-                ".shstrtab" => (shstr_off, shstr.len() as u64),
                 ".hash" => (hash_off, hash_blob.len() as u64),
+                ".symtab" => (symtab_off, symtab_blob.len() as u64),
+                ".strtab" => (strtab_off, strtab_blob.len() as u64),
+                ".shstrtab" => (shstr_off, shstr.len() as u64),
                 _ => (0, 0),
             };
 
             let entsize = match shtype {
-                SHT_DYNSYM => {
+                SHT_DYNSYM | SHT_SYMTAB => {
                     if self.is_64 {
                         SYM_SIZE_64
                     } else {
@@ -782,11 +852,12 @@ impl ElfWriter {
             };
 
             let (link, info) = match *name {
-                ".dynsym" => (3, 1),
-                ".rela.dyn" | ".rel.dyn" => (4, 0),
-                ".rela.plt" | ".rel.plt" => (4, 0),
-                ".dynamic" => (3, 0),
-                ".hash" => (4, 0),
+                ".dynsym" => (4, 1),  // link to .dynstr, info = first non-local symbol
+                ".symtab" => (11, 1), // link to .strtab, info = first non-local symbol
+                ".rela.dyn" | ".rel.dyn" => (5, 0), // link to .dynsym
+                ".rela.plt" | ".rel.plt" => (5, 0), // link to .dynsym
+                ".dynamic" => (4, 0), // link to .dynstr
+                ".hash" => (5, 0),    // link to .dynsym
                 _ => (0, 0),
             };
 
@@ -912,32 +983,6 @@ impl ElfWriter {
             Arch::Riscv64 => EM_RISCV,
             Arch::Riscv32 => EM_RISCV,
             Arch::Arm => EM_ARM,
-        }
-    }
-
-    fn is_plt_reloc(&self, r_type: u64) -> bool {
-        match self.arch {
-            Arch::X86_64 => {
-                r_type == R_X86_64_PLT32 as u64
-                    || r_type == R_X86_64_JUMP_SLOT as u64
-                    || r_type == R_X86_64_IRELATIVE as u64
-            }
-            Arch::Aarch64 => {
-                r_type == R_AARCH64_JUMP_SLOT as u64 || r_type == R_AARCH64_IRELATIVE as u64
-            }
-            Arch::Riscv64 | Arch::Riscv32 => {
-                r_type == R_RISCV_JUMP_SLOT as u64 || r_type == R_RISCV_IRELATIVE as u64
-            }
-            Arch::Arm => r_type == R_ARM_JUMP_SLOT as u64 || r_type == R_ARM_IRELATIVE as u64,
-        }
-    }
-
-    fn is_relative_reloc(&self, r_type: u64) -> bool {
-        match self.arch {
-            Arch::X86_64 => r_type == R_X86_64_RELATIVE as u64,
-            Arch::Aarch64 => r_type == R_AARCH64_RELATIVE as u64,
-            Arch::Riscv64 | Arch::Riscv32 => r_type == R_RISCV_RELATIVE as u64,
-            Arch::Arm => r_type == R_ARM_RELATIVE as u64,
         }
     }
 }
@@ -1266,48 +1311,63 @@ impl ElfWriter {
         self.write_struct(buf, shdr)
     }
 
-    // Build a small resolver in .text used for IFUNC tests
+    // Build PLT blob with PLT entries
+    fn build_plt_blob(
+        &self,
+        relocs: &[RelocEntry],
+        reloc_info: &RelocationTypeInfo,
+    ) -> (Vec<u8>, HashMap<String, u64>) {
+        crate::arch::generate_plt_for_arch(
+            self.arch,
+            self.config.base_addr,
+            relocs,
+            GOT_OFFSET,
+            reloc_info.next_got_index,
+        )
+    }
+
+    // Build .text section with IFUNC resolver and other code
     fn build_text_blob(&self) -> Vec<u8> {
         let mut text_data = vec![];
 
-        // Build PLT (Procedure Linkage Table) for lazy binding support
-        if self.arch == Arch::X86_64 {
-            // PLT[0]: Special entry for dynamic linker
-            // push qword [GOT+8]   ; push link_map
-            // jmp qword [GOT+16]   ; jump to _dl_runtime_resolve
-            text_data.extend_from_slice(&[
-                0xff, 0x35, 0x00, 0x00, 0x00,
-                0x00, // push qword [rip+offset] - will need reloc
-                0xff, 0x25, 0x00, 0x00, 0x00,
-                0x00, // jmp qword [rip+offset] - will need reloc
-            ]);
-            // Padding to 16 bytes
-            text_data.resize(16, 0x90);
+        // Pad to offset 0x20 for IFUNC resolver
+        text_data.resize(0x20, 0x90); // NOP padding
 
-            // PLT[1]: Entry for external_func
-            // jmp qword [GOT+n]
-            // push index
-            // jmp PLT[0]
-            text_data.extend_from_slice(&[
-                0xff, 0x25, 0x00, 0x00, 0x00, 0x00, // jmp qword [rip+offset] - GOT entry
-                0x68, 0x00, 0x00, 0x00, 0x00, // push 0 (relocation index)
-                0xe9, 0x00, 0x00, 0x00, 0x00, // jmp PLT[0]
-            ]);
-
-            // Additional function stub
-            text_data.extend_from_slice(&[0x48, 0xb8]);
-            text_data.extend_from_slice(&0x1000u64.to_le_bytes());
-            text_data.push(0xc3);
-        } else {
-            // Fallback: fill with NOPs and a RET
-            text_data.extend_from_slice(&vec![0x90u8; 64]);
-            text_data.push(0xc3);
-        }
+        // IFUNC resolver function at offset 0x20
+        // This resolver just returns address to PLT[0] (a safe stub)
+        // movabs rax, 0x401000  ; Return to PLT[0]
+        // ret
+        let resolver_return_addr = 0x1000u64; // Offset of PLT[0] from base
+        text_data.extend_from_slice(&[0x48, 0xb8]); // movabs rax, imm64
+        text_data.extend_from_slice(&resolver_return_addr.to_le_bytes());
+        text_data.extend_from_slice(&[0xc3]); // ret
 
         // Ensure minimum size
         if text_data.len() < 64 {
-            text_data.resize(64, 0x90);
+            text_data.resize(64, 0x90); // Pad with NOPs
         }
+
+        text_data
+    }
+
+    // Build a small resolver in .text used for IFUNC tests (OLD VERSION - DEPRECATED)
+    fn _build_text_blob_old(
+        &self,
+        relocs: &[RelocEntry],
+        reloc_info: &RelocationTypeInfo,
+    ) -> Vec<u8> {
+        // Generate PLT dynamically based on relocs for the target architecture
+        // GOT table is at offset GOT_OFFSET in data segment, with layout:
+        // GOT[0-2]: reserved for dynamic linking
+        // GOT[3 to 3+non_plt_got]: non-PLT GOT relocations
+        // GOT[3+non_plt_got to next]: PLT entries
+        let (text_data, _plt_entries) = crate::arch::generate_plt_for_arch(
+            self.arch,
+            self.config.base_addr, // Use actual base address from config
+            relocs,
+            GOT_OFFSET,
+            reloc_info.next_got_index, // Pass next available GOT index
+        );
         text_data
     }
 
@@ -1315,15 +1375,33 @@ impl ElfWriter {
     fn build_names_and_dynstr(
         &self,
         symbols: &[SymbolDesc],
+        plt_entries: &HashMap<String, u64>,
     ) -> (Vec<String>, Vec<u8>, HashMap<String, u32>) {
         let mut dynstr = vec![0u8]; // null
         let names: Vec<String> = symbols.iter().map(|s| s.name.clone()).collect();
         let mut name_index = HashMap::new();
+
+        // Add original symbols
         for name in &names {
             name_index.insert(name.clone(), dynstr.len() as u32);
             dynstr.extend_from_slice(name.as_bytes());
             dynstr.push(0);
         }
+
+        // Add IFUNC resolver symbol
+        let ifunc_name = "ifunc_resolver".to_string();
+        name_index.insert(ifunc_name.clone(), dynstr.len() as u32);
+        dynstr.extend_from_slice(ifunc_name.as_bytes());
+        dynstr.push(0);
+
+        // Add PLT symbols
+        for func_name in plt_entries.keys() {
+            let plt_sym_name = format!("{}@plt", func_name);
+            name_index.insert(plt_sym_name.clone(), dynstr.len() as u32);
+            dynstr.extend_from_slice(plt_sym_name.as_bytes());
+            dynstr.push(0);
+        }
+
         (names, dynstr, name_index)
     }
 
@@ -1332,9 +1410,12 @@ impl ElfWriter {
     fn build_dyn_tables(
         &self,
         symbols: &[SymbolDesc],
+        plt_entries: &HashMap<String, u64>,
+        plt_vaddr: u64,
+        text_vaddr: u64,
     ) -> Result<(Vec<String>, Vec<u8>, Vec<u8>, Vec<u8>, HashMap<String, u64>)> {
         // Reuse helper to build dynstr and name index
-        let (names, dynstr, name_index) = self.build_names_and_dynstr(symbols);
+        let (names, dynstr, name_index) = self.build_names_and_dynstr(symbols, plt_entries);
 
         // dynsym: start with NULL symbol
         let mut dynsym = vec![];
@@ -1346,11 +1427,15 @@ impl ElfWriter {
         dynsym.extend_from_slice(&vec![0u8; sym_entry_size]); // Null symbol
 
         // Append other symbols (skip local var symbol) and get symbol index mapping
-        let (extra, sym_name_to_idx) = self.build_dynsym(symbols, &name_index)?;
+        let (extra, sym_name_to_idx) =
+            self.build_dynsym(symbols, &name_index, plt_entries, plt_vaddr, text_vaddr)?;
         dynsym.extend_from_slice(&extra);
 
         // Simple SYSV hash: nbucket=1, nchain=num_syms
-        let num_syms = (names.len() + 1) as u32; // +1 for null
+        // Calculate total symbols: original + IFUNC + PLT entries
+        let num_original_syms = names.len();
+        let num_plt_syms = plt_entries.len();
+        let num_syms = (num_original_syms + 1 + num_plt_syms + 1) as u32; // +1 for null, +1 for IFUNC
         let mut hash_blob = vec![];
         hash_blob.write_u32::<LittleEndian>(1)?; // nbucket
         hash_blob.write_u32::<LittleEndian>(num_syms)?; // nchain
@@ -1379,6 +1464,9 @@ impl ElfWriter {
         &self,
         symbols: &[SymbolDesc],
         name_index: &HashMap<String, u32>,
+        plt_entries: &HashMap<String, u64>,
+        plt_vaddr: u64,
+        text_vaddr: u64,
     ) -> Result<(Vec<u8>, HashMap<String, u64>)> {
         let mut dynsym = vec![];
         let mut sym_name_to_idx = HashMap::new();
@@ -1408,6 +1496,43 @@ impl ElfWriter {
             };
             self.write_struct(&mut dynsym, sym)?;
         }
+
+        // Add IFUNC resolver symbol to dynsym
+        let ifunc_name = "ifunc_resolver".to_string();
+        if let Some(&name_idx) = name_index.get(&ifunc_name) {
+            sym_name_to_idx.insert(ifunc_name.clone(), current_idx);
+            current_idx += 1;
+
+            let ifunc_sym = Symbol {
+                name: name_idx,
+                info: (STB_GLOBAL << 4) | STT_FUNC,
+                other: 0,
+                shndx: 2, // .text section
+                value: text_vaddr + 0x20,
+                size: 11,
+            };
+            self.write_struct(&mut dynsym, ifunc_sym)?;
+        }
+
+        // Add PLT symbols to dynsym
+        for (func_name, offset) in plt_entries {
+            let plt_sym_name = format!("{}@plt", func_name);
+            if let Some(&name_idx) = name_index.get(&plt_sym_name) {
+                sym_name_to_idx.insert(plt_sym_name.clone(), current_idx);
+                current_idx += 1;
+
+                let plt_sym = Symbol {
+                    name: name_idx,
+                    info: (STB_GLOBAL << 4) | STT_FUNC,
+                    other: 0,
+                    shndx: 1, // .plt section
+                    value: plt_vaddr + offset,
+                    size: 16,
+                };
+                self.write_struct(&mut dynsym, plt_sym)?;
+            }
+        }
+
         Ok((dynsym, sym_name_to_idx))
     }
 
@@ -1423,35 +1548,35 @@ impl ElfWriter {
         let mut rela_plt = vec![];
         let mut reloc_infos = vec![];
 
-        let mut sorted_relocs: Vec<&RelocEntry> = vec![];
-        for r in relocs {
+        let mut sorted_relocs: Vec<(usize, &RelocEntry)> = vec![];
+        for (idx, r) in relocs.iter().enumerate() {
             let r_type = match r.flags {
                 object::write::RelocationFlags::Elf { r_type } => r_type as u64,
                 _ => unreachable!(),
             };
-            if self.is_relative_reloc(r_type) {
-                sorted_relocs.push(r);
+            if crate::arch::is_relative_reloc_by_type(self.arch, r_type) {
+                sorted_relocs.push((idx, r));
             }
         }
         let relative_count = sorted_relocs.len() as u64;
 
-        for r in relocs {
+        for (idx, r) in relocs.iter().enumerate() {
             let r_type = match r.flags {
                 object::write::RelocationFlags::Elf { r_type } => r_type as u64,
                 _ => 0u64,
             };
-            if !self.is_relative_reloc(r_type) {
-                sorted_relocs.push(r);
+            if !crate::arch::is_relative_reloc_by_type(self.arch, r_type) {
+                sorted_relocs.push((idx, r));
             }
         }
 
-        for r in sorted_relocs {
+        for (idx, r) in sorted_relocs {
             let r_type = match r.flags {
                 object::write::RelocationFlags::Elf { r_type } => r_type as u64,
                 _ => 0u64,
             };
 
-            let sym_idx = if self.is_relative_reloc(r_type) {
+            let sym_idx = if crate::arch::is_relative_reloc_by_type(self.arch, r_type) {
                 0
             } else {
                 // Look up symbol index from the mapping built during dynsym generation
@@ -1464,17 +1589,23 @@ impl ElfWriter {
                 *sym_name_to_idx.get(sym_name).unwrap_or(&0)
             };
 
-            let r_offset = data_vaddr + r.offset;
+            // Auto-calculate offset based on relocation sequence
+            // Each relocation is 8 bytes apart starting from offset 0x10
+            let reloc_offset = 0x10u64 + (idx as u64 * 8);
+            let r_offset = data_vaddr + reloc_offset;
+
+            // Auto-calculate addend based on relocation type
+            let addend = crate::arch::calculate_addend(self.arch, r_type, reloc_offset);
 
             // If not RELA, write addend into section data (data_blob)
             if !self.is_rela {
-                let offset = r.offset as usize;
+                let offset = reloc_offset as usize;
                 if offset + 8 <= data_blob.len() {
                     let mut cursor = &mut data_blob[offset..];
                     if self.is_64 {
-                        cursor.write_u64::<LittleEndian>(r.addend as u64)?;
+                        cursor.write_u64::<LittleEndian>(addend as u64)?;
                     } else {
-                        cursor.write_u32::<LittleEndian>(r.addend as u32)?;
+                        cursor.write_u32::<LittleEndian>(addend as u32)?;
                     }
                 }
             }
@@ -1490,19 +1621,20 @@ impl ElfWriter {
                 vaddr: r_offset,
                 r_type,
                 sym_idx,
+                addend,
             });
 
             let rel = RelocationEntry {
                 offset: r_offset,
                 info: r_info,
-                addend: r.addend,
+                addend,
                 is_rela: self.is_rela,
             };
 
             let mut ent = vec![];
             self.write_struct(&mut ent, rel)?;
 
-            if self.is_plt_reloc(r_type) {
+            if crate::arch::needs_plt_processing(self.arch, r_type) {
                 rela_plt.extend_from_slice(&ent);
             } else {
                 rela_dyn.extend_from_slice(&ent);
@@ -1510,5 +1642,80 @@ impl ElfWriter {
         }
 
         Ok((rela_dyn, rela_plt, relative_count, reloc_infos))
+    }
+
+    // Build static symbol table (.symtab) with PLT and IFUNC symbols
+    fn build_static_symtab(
+        &self,
+        symbols: &[SymbolDesc],
+        plt_entries: &HashMap<String, u64>,
+        plt_vaddr: u64,
+        text_vaddr: u64,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        let mut symtab = vec![];
+        let mut strtab = vec![0u8]; // Start with null byte
+
+        // Add null symbol
+        let sym_entry_size = if self.is_64 {
+            SYM_SIZE_64 as usize
+        } else {
+            SYM_SIZE_32 as usize
+        };
+        symtab.extend_from_slice(&vec![0u8; sym_entry_size]);
+
+        // Add IFUNC resolver symbol (GLOBAL so it shows in disassembly)
+        let ifunc_name = "ifunc_resolver";
+        let ifunc_name_idx = strtab.len() as u32;
+        strtab.extend_from_slice(ifunc_name.as_bytes());
+        strtab.push(0);
+
+        let ifunc_sym = Symbol {
+            name: ifunc_name_idx,
+            info: (STB_GLOBAL << 4) | STT_FUNC,
+            other: 0,
+            shndx: 2,                 // .text section index
+            value: text_vaddr + 0x20, // IFUNC resolver at offset 0x20 in .text
+            size: 11,                 // Size of IFUNC resolver code
+        };
+        self.write_struct(&mut symtab, ifunc_sym)?;
+
+        // Add PLT entry symbols (GLOBAL so they show in disassembly)
+        for (func_name, offset) in plt_entries {
+            let plt_sym_name = format!("{}@plt", func_name);
+            let name_idx = strtab.len() as u32;
+            strtab.extend_from_slice(plt_sym_name.as_bytes());
+            strtab.push(0);
+
+            let plt_sym = Symbol {
+                name: name_idx,
+                info: (STB_GLOBAL << 4) | STT_FUNC,
+                other: 0,
+                shndx: 1, // .plt section index
+                value: plt_vaddr + offset,
+                size: 16, // Each PLT entry is 16 bytes
+            };
+            self.write_struct(&mut symtab, plt_sym)?;
+        }
+
+        // Add local variable symbol if present
+        for s in symbols {
+            if s.name == crate::LOCAL_VAR_NAME {
+                let name_idx = strtab.len() as u32;
+                strtab.extend_from_slice(s.name.as_bytes());
+                strtab.push(0);
+
+                let sym = Symbol {
+                    name: name_idx,
+                    info: s.st_info,
+                    other: 0,
+                    shndx: s.shndx,
+                    value: s.value,
+                    size: 8,
+                };
+                self.write_struct(&mut symtab, sym)?;
+            }
+        }
+
+        Ok((symtab, strtab))
     }
 }
