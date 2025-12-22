@@ -7,5 +7,4 @@ object = { version = "0.38", features = ["write_core"] }
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 elf = { version = "0.8", default-features = false }
-goblin = "0.7"
 byteorder = "1.4"

@@ -13,10 +13,7 @@ use crate::{
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
-    relocation::{
-        Relocatable, RelocationHandler, SymbolLookup,
-        static_link::StaticRelocation,
-    },
+    relocation::{Relocatable, RelocationHandler, SymbolLookup, static_link::StaticRelocation},
     segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
@@ -24,7 +21,7 @@ use crate::{
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use elf::abi::{SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
+use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
@@ -132,7 +129,7 @@ impl RelocatableBuilder {
                     let symbols: &mut [ElfSymbol] = shdr.content_mut();
                     // Update symbol values with section base offsets
                     for symbol in symbols.iter_mut() {
-                        if symbol.st_type() == STT_FILE {
+                        if symbol.st_type() == STT_FILE || symbol.st_shndx() == SHN_UNDEF as usize {
                             continue;
                         }
                         let section_base = shdrs[symbol.st_shndx()].sh_addr as usize - base;

@@ -408,7 +408,7 @@ impl<D> RelocatedCommonPart<D> {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
-                        segments.write(rel.r_offset(), symbol);
+                        segments.write(rel.r_offset(), symbol + r_addend);
                         continue;
                     }
                 }

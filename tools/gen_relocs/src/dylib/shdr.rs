@@ -1,0 +1,564 @@
+use std::collections::HashMap;
+
+use crate::common::ShdrType;
+use crate::dylib::{
+    layout::ElfLayout, StringTable, DYN_SIZE_32, DYN_SIZE_64, HASH_SIZE, RELA_SIZE_32,
+    RELA_SIZE_64, REL_SIZE_32, REL_SIZE_64, SYM_SIZE_32, SYM_SIZE_64,
+};
+use anyhow::Result;
+use byteorder::{LittleEndian, WriteBytesExt};
+use elf::abi::*;
+
+#[derive(Clone, Copy)]
+pub(crate) struct SectionHeader {
+    pub(crate) name_off: u32,
+    pub(crate) shtype: ShdrType,
+    pub(crate) addr: u64,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+    pub(crate) addralign: u64,
+}
+
+impl ShdrType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ShdrType::Null => ".null",
+            ShdrType::DynStr => ".dynstr",
+            ShdrType::DynSym => ".dynsym",
+            ShdrType::RelaDyn => ".rela.dyn",
+            ShdrType::RelaPlt => ".rela.plt",
+            ShdrType::RelDyn => ".rel.dyn",
+            ShdrType::RelPlt => ".rel.plt",
+            ShdrType::Dynamic => ".dynamic",
+            ShdrType::Hash => ".hash",
+            ShdrType::ShStrTab => ".shstrtab",
+            ShdrType::Plt => ".plt",
+            ShdrType::Text => ".text",
+            ShdrType::Data => ".data",
+            ShdrType::Got => ".got",
+        }
+    }
+
+    fn shtype(&self) -> u32 {
+        match self {
+            ShdrType::Null => SHT_NULL,
+            ShdrType::DynStr | ShdrType::ShStrTab => SHT_STRTAB,
+            ShdrType::DynSym => SHT_DYNSYM,
+            ShdrType::RelaDyn | ShdrType::RelaPlt => SHT_RELA,
+            ShdrType::RelDyn | ShdrType::RelPlt => SHT_REL,
+            ShdrType::Dynamic => SHT_DYNAMIC,
+            ShdrType::Hash => SHT_HASH,
+            ShdrType::Plt | ShdrType::Text | ShdrType::Data => SHT_PROGBITS,
+            ShdrType::Got => SHT_PROGBITS,
+        }
+    }
+
+    fn flags(&self) -> u64 {
+        match self {
+            ShdrType::Plt | ShdrType::Text => (SHF_ALLOC | SHF_EXECINSTR) as u64,
+            ShdrType::Data | ShdrType::Got => (SHF_ALLOC | SHF_WRITE) as u64,
+            ShdrType::DynStr
+            | ShdrType::DynSym
+            | ShdrType::RelaDyn
+            | ShdrType::RelaPlt
+            | ShdrType::RelDyn
+            | ShdrType::RelPlt
+            | ShdrType::Dynamic
+            | ShdrType::Hash => SHF_ALLOC as u64,
+            _ => 0,
+        }
+    }
+
+    fn entsize(&self, is_64: bool) -> u64 {
+        match self {
+            ShdrType::DynSym => {
+                if is_64 {
+                    SYM_SIZE_64
+                } else {
+                    SYM_SIZE_32
+                }
+            }
+            ShdrType::RelaDyn | ShdrType::RelaPlt => {
+                if is_64 {
+                    RELA_SIZE_64
+                } else {
+                    RELA_SIZE_32
+                }
+            }
+            ShdrType::RelDyn | ShdrType::RelPlt => {
+                if is_64 {
+                    REL_SIZE_64
+                } else {
+                    REL_SIZE_32
+                }
+            }
+            ShdrType::Dynamic => {
+                if is_64 {
+                    DYN_SIZE_64
+                } else {
+                    DYN_SIZE_32
+                }
+            }
+            ShdrType::Hash => HASH_SIZE,
+            ShdrType::Got => {
+                if is_64 {
+                    8
+                } else {
+                    4
+                }
+            }
+            ShdrType::Null => 0,
+            _ => 0,
+        }
+    }
+
+    fn info(&self, map: &HashMap<ShdrType, usize>) -> u32 {
+        match self {
+            ShdrType::DynSym => 1, // First non-local symbol
+            ShdrType::RelaPlt | ShdrType::RelPlt => *map.get(&ShdrType::Plt).unwrap_or(&0) as u32,
+            ShdrType::Null => 0,
+            _ => 0,
+        }
+    }
+
+    fn link(&self, map: &HashMap<ShdrType, usize>) -> u32 {
+        match self {
+            ShdrType::DynSym => *map.get(&ShdrType::DynStr).unwrap() as u32,
+            ShdrType::RelaDyn | ShdrType::RelDyn => *map.get(&ShdrType::DynSym).unwrap() as u32,
+            ShdrType::RelaPlt | ShdrType::RelPlt => *map.get(&ShdrType::DynSym).unwrap() as u32,
+            ShdrType::Dynamic => *map.get(&ShdrType::DynStr).unwrap() as u32,
+            ShdrType::Hash => *map.get(&ShdrType::DynSym).unwrap() as u32,
+            ShdrType::Null => 0,
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SectionId(usize);
+
+pub(crate) struct SectionAllocator {
+    data: Vec<Vec<u8>>,
+}
+
+impl SectionAllocator {
+    pub(crate) fn new() -> Self {
+        Self { data: vec![] }
+    }
+
+    pub(crate) fn allocate(&mut self, size: usize) -> SectionId {
+        let id = self.data.len();
+        self.data.push(vec![0u8; size]);
+        SectionId(id)
+    }
+
+    pub(crate) fn allocate_with_data(&mut self, content: Vec<u8>) -> SectionId {
+        let id = self.data.len();
+        self.data.push(content);
+        SectionId(id)
+    }
+
+    pub(crate) fn get_mut(&mut self, id: &SectionId) -> &mut Vec<u8> {
+        &mut self.data[id.0]
+    }
+
+    pub(crate) fn get(&self, id: &SectionId) -> &Vec<u8> {
+        &self.data[id.0]
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Section {
+    pub header: SectionHeader,
+    pub data: SectionId,
+}
+
+pub(crate) struct ShdrManager {
+    shdrs: Vec<Section>,
+    rx_secs: Option<Vec<Section>>,
+    r_secs: Option<Vec<Section>>,
+    rw_secs: Option<Vec<Section>>,
+}
+
+impl ShdrManager {
+    pub(crate) fn new() -> Self {
+        Self {
+            shdrs: vec![],
+            rx_secs: None,
+            r_secs: None,
+            rw_secs: None,
+        }
+    }
+
+    pub(crate) fn add_section(&mut self, header: SectionHeader, data: SectionId) {
+        self.shdrs.push(Section { header, data });
+    }
+
+    pub(crate) fn layout(&mut self, layout: &mut ElfLayout) {
+        // 1. Sort sections by flags to group them into segments
+        // Order: RX (Code) -> R (Read-only) -> RW (Read-write) -> Non-Alloc (Metadata)
+        self.shdrs.sort_by_key(|s| {
+            let flags = s.header.shtype.flags();
+            if flags & (SHF_ALLOC as u64) != 0 {
+                if flags & (SHF_EXECINSTR as u64) != 0 {
+                    0 // RX: .text, .plt
+                } else if flags & (SHF_WRITE as u64) == 0 {
+                    1 // R: .hash, .dynsym, .dynstr, .rela.dyn
+                } else {
+                    2 // RW: .dynamic, .got, .data
+                }
+            } else {
+                3 // Non-Alloc: .symtab, .strtab, .shstrtab
+            }
+        });
+
+        // 2. Assign offsets and virtual addresses
+        let mut last_group = None;
+        for sec in &mut self.shdrs {
+            let flags = sec.header.shtype.flags();
+            let current_group = if flags & (SHF_ALLOC as u64) != 0 {
+                if flags & (SHF_EXECINSTR as u64) != 0 {
+                    Some(0)
+                } else if flags & (SHF_WRITE as u64) == 0 {
+                    Some(1)
+                } else {
+                    Some(2)
+                }
+            } else {
+                None
+            };
+
+            // If we enter a new allocatable group, align to page boundary
+            if current_group != last_group && current_group.is_some() {
+                layout.align_to_page();
+            }
+            last_group = current_group;
+
+            let (off, vaddr) = layout.add_section(sec.header.size, sec.header.addralign);
+            sec.header.offset = off;
+            if flags & (SHF_ALLOC as u64) != 0 {
+                sec.header.addr = vaddr;
+            } else {
+                sec.header.addr = 0;
+            }
+        }
+
+        // 3. Group sections into segments for later use
+        let mut rx = vec![];
+        let mut r = vec![];
+        let mut rw = vec![];
+
+        for sec in &self.shdrs {
+            let flags = sec.header.shtype.flags();
+            if flags & (SHF_ALLOC as u64) != 0 {
+                if flags & (SHF_EXECINSTR as u64) != 0 {
+                    rx.push(sec.clone());
+                } else if flags & (SHF_WRITE as u64) == 0 {
+                    r.push(sec.clone());
+                } else {
+                    rw.push(sec.clone());
+                }
+            }
+        }
+
+        self.rx_secs = Some(rx);
+        self.r_secs = Some(r);
+        self.rw_secs = Some(rw);
+    }
+
+    pub(crate) fn create_shstrtab_section(&mut self, allocator: &mut SectionAllocator) {
+        let mut shstrtab = StringTable::new();
+        let mut name_to_off = HashMap::new();
+
+        for sec in &mut self.shdrs {
+            let name = sec.header.shtype.as_str();
+            if let Some(&off) = name_to_off.get(name) {
+                sec.header.name_off = off;
+            } else {
+                let off = shstrtab.add(name);
+                name_to_off.insert(name, off);
+                sec.header.name_off = off;
+            }
+        }
+
+        // Add .shstrtab itself
+        let shstrtab_name = ShdrType::ShStrTab.as_str();
+        let shstrtab_off = shstrtab.add(shstrtab_name);
+
+        let shstrtab_data = shstrtab.data();
+        let shstrtab_id = allocator.allocate(shstrtab_data.len());
+        allocator
+            .get_mut(&shstrtab_id)
+            .copy_from_slice(shstrtab_data);
+
+        self.add_section(
+            SectionHeader {
+                name_off: shstrtab_off,
+                shtype: ShdrType::ShStrTab,
+                addr: 0,
+                offset: 0,
+                size: shstrtab_data.len() as u64,
+                addralign: 1,
+            },
+            shstrtab_id,
+        );
+    }
+
+    pub(crate) fn get_shdr_map(&self) -> HashMap<ShdrType, usize> {
+        let mut map = HashMap::new();
+        for (i, sec) in self.shdrs.iter().enumerate() {
+            map.insert(sec.header.shtype, i + 1);
+        }
+        map
+    }
+
+    pub(crate) fn get_vaddr(&self, shtype: ShdrType) -> u64 {
+        self.shdrs
+            .iter()
+            .find(|s| s.header.shtype == shtype)
+            .map(|s| s.header.addr)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn get_data_id(&self, shtype: ShdrType) -> SectionId {
+        self.shdrs
+            .iter()
+            .find(|s| s.header.shtype == shtype)
+            .map(|s| s.data.clone())
+            .unwrap()
+    }
+
+    pub(crate) fn get_shdr_count(&self) -> usize {
+        self.shdrs.len()
+    }
+
+    pub(crate) fn get_sections(&self) -> &[Section] {
+        &self.shdrs
+    }
+
+    pub(crate) fn get_phnum(&self) -> u16 {
+        let mut count = 0;
+        if let Some(rx) = &self.rx_secs {
+            if !rx.is_empty() {
+                count += 1;
+            }
+        }
+        if let Some(r) = &self.r_secs {
+            if !r.is_empty() {
+                count += 1;
+            }
+        }
+        if let Some(rw) = &self.rw_secs {
+            if !rw.is_empty() {
+                count += 1;
+            }
+        }
+
+        if self
+            .shdrs
+            .iter()
+            .any(|s| s.header.shtype == ShdrType::Dynamic)
+        {
+            count += 1;
+        }
+        count
+    }
+
+    pub(crate) fn write_shdrs<W: std::io::Write>(&self, mut writer: W, is_64: bool) -> Result<()> {
+        let mut map = HashMap::new();
+        for (i, sec) in self.shdrs.iter().enumerate() {
+            map.insert(sec.header.shtype, i + 1);
+        }
+
+        // Null section
+        if is_64 {
+            for _ in 0..64 {
+                writer.write_u8(0)?;
+            }
+        } else {
+            for _ in 0..40 {
+                writer.write_u8(0)?;
+            }
+        }
+
+        for sec in &self.shdrs {
+            let h = &sec.header;
+            if is_64 {
+                writer.write_u32::<LittleEndian>(h.name_off)?;
+                writer.write_u32::<LittleEndian>(h.shtype.shtype())?;
+                writer.write_u64::<LittleEndian>(h.shtype.flags())?;
+                writer.write_u64::<LittleEndian>(h.addr)?;
+                writer.write_u64::<LittleEndian>(h.offset)?;
+                writer.write_u64::<LittleEndian>(h.size)?;
+                writer.write_u32::<LittleEndian>(h.shtype.link(&map))?;
+                writer.write_u32::<LittleEndian>(h.shtype.info(&map))?;
+                writer.write_u64::<LittleEndian>(h.addralign)?;
+                writer.write_u64::<LittleEndian>(h.shtype.entsize(is_64))?;
+            } else {
+                writer.write_u32::<LittleEndian>(h.name_off)?;
+                writer.write_u32::<LittleEndian>(h.shtype.shtype())?;
+                writer.write_u32::<LittleEndian>(h.shtype.flags() as u32)?;
+                writer.write_u32::<LittleEndian>(h.addr as u32)?;
+                writer.write_u32::<LittleEndian>(h.offset as u32)?;
+                writer.write_u32::<LittleEndian>(h.size as u32)?;
+                writer.write_u32::<LittleEndian>(h.shtype.link(&map))?;
+                writer.write_u32::<LittleEndian>(h.shtype.info(&map))?;
+                writer.write_u32::<LittleEndian>(h.addralign as u32)?;
+                writer.write_u32::<LittleEndian>(h.shtype.entsize(is_64) as u32)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_phdrs<W: std::io::Write>(
+        &self,
+        mut writer: W,
+        is_64: bool,
+        page_size: u64,
+    ) -> Result<()> {
+        let rx_secs = self
+            .rx_secs
+            .as_ref()
+            .expect("layout must be called before write_phdrs");
+        let r_secs = self
+            .r_secs
+            .as_ref()
+            .expect("layout must be called before write_phdrs");
+        let rw_secs = self
+            .rw_secs
+            .as_ref()
+            .expect("layout must be called before write_phdrs");
+
+        let mut first_segment = true;
+
+        // 1. RX Segment
+        if let (Some(first), Some(last)) = (rx_secs.first(), rx_secs.last()) {
+            let p_offset = 0;
+            let p_vaddr = first.header.addr - first.header.offset;
+            let p_filesz = (last.header.offset + last.header.size) - p_offset;
+            first_segment = false;
+
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_LOAD,
+                PF_R | PF_X,
+                p_offset,
+                p_vaddr,
+                p_filesz,
+                p_filesz,
+                page_size,
+            )?;
+        }
+
+        // 2. R Segment
+        if let (Some(first), Some(last)) = (r_secs.first(), r_secs.last()) {
+            let p_offset = if first_segment {
+                0
+            } else {
+                first.header.offset
+            };
+            let p_vaddr = if first_segment {
+                first.header.addr - first.header.offset
+            } else {
+                first.header.addr
+            };
+            let p_filesz = (last.header.offset + last.header.size) - p_offset;
+            first_segment = false;
+
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_LOAD,
+                PF_R,
+                p_offset,
+                p_vaddr,
+                p_filesz,
+                p_filesz,
+                page_size,
+            )?;
+        }
+
+        // 3. RW Segment
+        if let (Some(first), Some(last)) = (rw_secs.first(), rw_secs.last()) {
+            let p_offset = if first_segment {
+                0
+            } else {
+                first.header.offset
+            };
+            let p_vaddr = if first_segment {
+                first.header.addr - first.header.offset
+            } else {
+                first.header.addr
+            };
+            let p_filesz = (last.header.offset + last.header.size) - p_offset;
+
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_LOAD,
+                PF_R | PF_W,
+                p_offset,
+                p_vaddr,
+                p_filesz,
+                p_filesz,
+                page_size,
+            )?;
+        }
+
+        // 4. PT_DYNAMIC
+        if let Some(dyn_sec) = self
+            .shdrs
+            .iter()
+            .find(|s| s.header.shtype == ShdrType::Dynamic)
+        {
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_DYNAMIC,
+                PF_R | PF_W,
+                dyn_sec.header.offset,
+                dyn_sec.header.addr,
+                dyn_sec.header.size,
+                dyn_sec.header.size,
+                if is_64 { 8 } else { 4 },
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn write_phdr<W: std::io::Write>(
+        &self,
+        mut writer: W,
+        is_64: bool,
+        p_type: u32,
+        p_flags: u32,
+        p_offset: u64,
+        p_vaddr: u64,
+        p_filesz: u64,
+        p_memsz: u64,
+        p_align: u64,
+    ) -> Result<()> {
+        if is_64 {
+            writer.write_u32::<LittleEndian>(p_type)?;
+            writer.write_u32::<LittleEndian>(p_flags)?;
+            writer.write_u64::<LittleEndian>(p_offset)?;
+            writer.write_u64::<LittleEndian>(p_vaddr)?;
+            writer.write_u64::<LittleEndian>(p_vaddr)?; // p_paddr
+            writer.write_u64::<LittleEndian>(p_filesz)?;
+            writer.write_u64::<LittleEndian>(p_memsz)?;
+            writer.write_u64::<LittleEndian>(p_align)?;
+        } else {
+            writer.write_u32::<LittleEndian>(p_type)?;
+            writer.write_u32::<LittleEndian>(p_offset as u32)?;
+            writer.write_u32::<LittleEndian>(p_vaddr as u32)?;
+            writer.write_u32::<LittleEndian>(p_vaddr as u32)?; // p_paddr
+            writer.write_u32::<LittleEndian>(p_filesz as u32)?;
+            writer.write_u32::<LittleEndian>(p_memsz as u32)?;
+            writer.write_u32::<LittleEndian>(p_flags)?;
+            writer.write_u32::<LittleEndian>(p_align as u32)?;
+        }
+        Ok(())
+    }
+}

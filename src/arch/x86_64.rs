@@ -203,7 +203,7 @@ impl StaticReloc for X86_64Relocator {
     }
 
     fn needs_got(rel_type: u32) -> bool {
-        rel_type == R_X86_64_GOTPCREL
+        matches!(rel_type, R_X86_64_GOTPCREL | R_X86_64_PLT32)
     }
 
     fn needs_plt(rel_type: u32) -> bool {
