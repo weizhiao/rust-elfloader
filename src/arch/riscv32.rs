@@ -6,8 +6,7 @@ TLS block.  */
 pub const TLS_DTV_OFFSET: usize = 0x800;
 
 pub const REL_RELATIVE: u32 = R_RISCV_RELATIVE;
-// RISCV does not have this
-pub const REL_GOT: u32 = u32::MAX;
+pub const REL_GOT: u32 = R_RISCV_32;
 pub const REL_DTPMOD: u32 = R_RISCV_TLS_DTPMOD64;
 pub const REL_SYMBOLIC: u32 = R_RISCV_32;
 pub const REL_JUMP_SLOT: u32 = R_RISCV_JUMP_SLOT;
@@ -67,6 +66,6 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
         R_RISCV_COPY => "R_RISCV_COPY",
         R_RISCV_JUMP_SLOT => "R_RISCV_JUMP_SLOT",
         R_RISCV_IRELATIVE => "R_RISCV_IRELATIVE",
-        _ => "R_RISCV_UNKNOWN",
+        _ => "UNKNOWN",
     }
 }

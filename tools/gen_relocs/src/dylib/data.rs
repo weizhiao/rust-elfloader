@@ -7,53 +7,38 @@ use crate::dylib::{
 
 pub(crate) struct DataMetaData {
     data_id: SectionId,
-    got_id: SectionId,
+    data_size: u64,
 }
 
 impl DataMetaData {
     pub(crate) fn new(
         reloc: &RelocMetaData,
         symtab: &SymTabMetadata,
-        is_64: bool,
         allocator: &mut SectionAllocator,
     ) -> Self {
-        let got_size = reloc.got_slot_count() * if is_64 { 8 } else { 4 };
-        let data_content = symtab.get_data_content();
+        let mut data_content = symtab.get_data_content();
+        // Allocate extra space for COPY relocations in .data section
+        let copy_size = reloc.total_copy_size();
+        if copy_size > 0 {
+            data_content.resize(data_content.len() + copy_size as usize, 0);
+        }
+        let data_size = data_content.len() as u64;
         let data_id = allocator.allocate_with_data(data_content);
-        let got_id = allocator.allocate(got_size);
-        Self { data_id, got_id }
+        Self { data_id, data_size }
     }
 
-    pub(crate) fn create_sections(
-        &self,
-        allocator: &SectionAllocator,
-        sections: &mut Vec<Section>,
-    ) {
-        let data_size = allocator.get(&self.data_id).len();
-        let got_size = allocator.get(&self.got_id).len();
+    pub(crate) fn create_sections(&self, sections: &mut Vec<Section>) {
         let data = SectionHeader {
             name_off: 0,
             shtype: ShdrType::Data,
             addr: 0,
             offset: 0,
-            size: data_size as u64,
-            addralign: 8,
-        };
-        let got = SectionHeader {
-            name_off: 0,
-            shtype: ShdrType::Got,
-            addr: 0,
-            offset: 0,
-            size: got_size as u64,
+            size: self.data_size,
             addralign: 8,
         };
         sections.push(Section {
             header: data,
             data: self.data_id.clone(),
-        });
-        sections.push(Section {
-            header: got,
-            data: self.got_id.clone(),
         });
     }
 }

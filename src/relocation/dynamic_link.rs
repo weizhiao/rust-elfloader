@@ -428,12 +428,13 @@ impl<D> RelocatedCommonPart<D> {
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
                     if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
+                        let len = hctx.lib.symtab().unwrap().symbol_idx(r_sym).0.st_size();
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
-                        let len = symdef.sym.unwrap().st_size();
                         let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
-                        let src = core
+                        let src = symdef
+                            .lib
                             .segments()
                             .get_slice(symdef.sym.unwrap().st_value(), len);
                         dest.copy_from_slice(src);

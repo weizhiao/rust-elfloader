@@ -34,6 +34,7 @@ pub fn gen_static_elf(
                     ShdrType::Text => (".text", SectionKind::Text),
                     ShdrType::Data => (".data", SectionKind::Data),
                     ShdrType::Plt => (".plt", SectionKind::Text),
+                    ShdrType::Tls => (".tdata", SectionKind::Tls),
                     _ => (".data", SectionKind::Data),
                 };
                 obj.add_section(vec![], name.as_bytes().to_vec(), kind)
@@ -48,6 +49,7 @@ pub fn gen_static_elf(
                 kind: match sym_desc.sym_type {
                     SymbolType::Func => SymbolKind::Text,
                     SymbolType::Object => SymbolKind::Data,
+                    SymbolType::Tls => SymbolKind::Tls,
                 },
                 scope: match sym_desc.scope {
                     CommonSymbolScope::Global => SymbolScope::Dynamic,
@@ -72,6 +74,7 @@ pub fn gen_static_elf(
                 kind: match sym_desc.sym_type {
                     SymbolType::Func => SymbolKind::Text,
                     SymbolType::Object => SymbolKind::Data,
+                    SymbolType::Tls => SymbolKind::Tls,
                 },
                 scope: SymbolScope::Dynamic,
                 weak: sym_desc.scope == CommonSymbolScope::Weak,
@@ -94,6 +97,7 @@ pub fn gen_static_elf(
         .copied();
 
     if let Some(section_id) = target_section_id {
+        let word_size = if arch.is_64() { 8 } else { 4 };
         for (idx, reloc) in relocs.iter().enumerate() {
             let symbol_id = if reloc.symbol_name.is_empty() {
                 // Section-relative relocation
@@ -105,8 +109,8 @@ pub fn gen_static_elf(
             };
 
             // Auto-calculate offset based on relocation sequence
-            // Each relocation is 8 bytes apart starting from offset 0x10
-            let offset = 0x10 + (idx as u64 * 8);
+            // Each relocation is word_size bytes apart starting from offset 0x10
+            let offset = 0x10 + (idx as u64 * word_size);
             reloc_offsets.push(offset);
 
             let flags = object::write::RelocationFlags::Elf {

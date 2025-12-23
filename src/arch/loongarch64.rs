@@ -22,7 +22,7 @@ pub const REL_DTPOFF: u32 = R_LARCH_TLS_DTPREL64;
 pub const REL_IRELATIVE: u32 = R_LARCH_IRELATIVE;
 pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
 
-pub const REL_GOT: u32 = u32::MAX;
+pub const REL_GOT: u32 = R_LARCH_64;
 
 pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
@@ -76,6 +76,6 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
         R_LARCH_TLS_DTPMOD64 => "R_LARCH_TLS_DTPMOD64",
         R_LARCH_TLS_DTPREL64 => "R_LARCH_TLS_DTPREL64",
         R_LARCH_IRELATIVE => "R_LARCH_IRELATIVE",
-        _ => "R_LARCH_UNKNOWN",
+        _ => "UNKNOWN",
     }
 }

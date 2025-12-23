@@ -44,6 +44,6 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
         R_ARM_RELATIVE => "R_ARM_RELATIVE",
         R_ARM_IRELATIVE => "R_ARM_IRELATIVE",
         R_ARM_COPY => "R_ARM_COPY",
-        _ => "R_ARM_UNKNOWN",
+        _ => "UNKNOWN",
     }
 }

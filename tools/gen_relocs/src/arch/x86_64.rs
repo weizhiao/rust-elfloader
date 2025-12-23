@@ -15,7 +15,7 @@ pub(crate) fn generate_plt0_code() -> Vec<u8> {
     plt_data
 }
 
-pub(crate) fn refill_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64, got_vaddr: u64) {
+pub(crate) fn patch_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64, got_vaddr: u64) {
     // GOT[1]
     let target_got1 = got_vaddr + 8;
     let rip1 = plt0_vaddr + 6;
@@ -29,11 +29,7 @@ pub(crate) fn refill_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64,
     plt_data[plt0_off + 8..plt0_off + 12].copy_from_slice(&off2.to_le_bytes());
 }
 
-pub(crate) fn generate_plt_entry_code(
-    _got_idx: u64,
-    reloc_idx: u32,
-    plt_entry_offset: u64,
-) -> Vec<u8> {
+pub(crate) fn generate_plt_entry_code(reloc_idx: u32, plt_entry_offset: u64) -> Vec<u8> {
     let mut plt_data = vec![];
     let plt0_offset = -((plt_entry_offset as i32) + 16);
 
@@ -53,7 +49,7 @@ pub(crate) fn generate_plt_entry_code(
     plt_data
 }
 
-pub(crate) fn refill_plt_entry(
+pub(crate) fn patch_plt_entry(
     plt_data: &mut [u8],
     plt_entry_off: usize,
     plt_entry_vaddr: u64,
@@ -65,37 +61,44 @@ pub(crate) fn refill_plt_entry(
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // For x86_64: E9 00 00 00 00 (5 bytes)
+    // For x86_64: E8 00 00 00 00 (call rel32, 5 bytes)
+    // C3 (ret, 1 byte)
     // We use 8 bytes for alignment
-    vec![0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]
+    vec![0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3, 0x90, 0x90]
 }
 
-pub(crate) fn refill_helper(
+pub(crate) fn patch_helper(
     text_data: &mut [u8],
     helper_text_off: usize,
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // Update jmp rel32
-    // E9 <offset>
+    // Update call rel32
+    // E8 <offset>
     // offset = target - (current_rip)
     // current_rip = helper_vaddr + 5
     let rel_off = (target_plt_vaddr as i64 - (helper_vaddr + 5) as i64) as i32;
-    text_data[helper_text_off] = 0xE9;
+    text_data[helper_text_off] = 0xE8;
     text_data[helper_text_off + 1..helper_text_off + 5].copy_from_slice(&rel_off.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {
-    // IFUNC resolver
-    // movabs rax, 0x1000 (placeholder for PLT[0])
+    // lea rax, [rip + offset]
     // ret
     let mut code = vec![0x90; 16];
-    code[0..2].copy_from_slice(&[0x48, 0xb8]);
-    code[10] = 0xc3;
+    code[0..3].copy_from_slice(&[0x48, 0x8d, 0x05]);
+    code[7] = 0xc3;
     code
 }
 
-pub(crate) fn refill_ifunc_resolver(text_data: &mut [u8], offset: usize, plt_vaddr: u64) {
-    // Update IFUNC resolver to return PLT[0] address
-    text_data[offset + 2..offset + 10].copy_from_slice(&plt_vaddr.to_le_bytes());
+pub(crate) fn patch_ifunc_resolver(
+    text_data: &mut [u8],
+    offset: usize,
+    resolver_vaddr: u64,
+    target_vaddr: u64,
+) {
+    // rax = rip + offset
+    // rip = resolver_vaddr + 7
+    let rel_off = (target_vaddr as i64 - (resolver_vaddr + 7) as i64) as i32;
+    text_data[offset + 3..offset + 7].copy_from_slice(&rel_off.to_le_bytes());
 }

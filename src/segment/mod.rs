@@ -582,7 +582,7 @@ impl ElfSegments {
     /// Write a value into the mapped memory
     #[inline]
     pub(crate) fn write<T>(&self, r_offset: usize, val: RelocValue<T>) {
-        unsafe { self.get_mut_ptr::<T>(r_offset).write_unaligned(val.0) };
+        unsafe { self.get_mut_ptr::<T>(r_offset).write(val.0) };
     }
 
     /// Get the base address of the mapped memory

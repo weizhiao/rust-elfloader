@@ -1,11 +1,13 @@
 use anyhow::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
-use elf::abi::*;
+use object::elf::*;
 
+use crate::Arch;
 use crate::common::ShdrType;
-use crate::dylib::shdr::{Section, SectionAllocator, SectionHeader};
+use crate::dylib::reloc::RelocMetaData;
+use crate::dylib::shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager};
 use crate::dylib::{
-    RELA_SIZE_32, RELA_SIZE_64, REL_SIZE_32, REL_SIZE_64, SYM_SIZE_32, SYM_SIZE_64,
+    REL_SIZE_32, REL_SIZE_64, RELA_SIZE_32, RELA_SIZE_64, SYM_SIZE_32, SYM_SIZE_64,
 };
 
 #[derive(Debug, Clone)]
@@ -15,26 +17,25 @@ struct DynamicEntry {
 }
 
 pub(crate) struct DynamicMetadata {
+    arch: Arch,
     dyn_entries: Vec<DynamicEntry>,
+    dynamic_id: SectionId,
 }
 
 impl DynamicMetadata {
-    pub(crate) fn new() -> Self {
-        Self {
+    pub(crate) fn new(arch: Arch, sections: &[Section], allocator: &mut SectionAllocator) -> Self {
+        let dynamic_id = allocator.allocate(0);
+        let mut instance = Self {
+            arch,
             dyn_entries: vec![],
-        }
+            dynamic_id,
+        };
+        instance.init_from_sections(sections);
+        instance
     }
 
-    pub(crate) fn create_section(
-        &mut self,
-        sections: &mut Vec<Section>,
-        is_64: bool,
-        is_rela: bool,
-        allocator: &mut SectionAllocator,
-    ) {
-        self.init_from_sections(sections, is_64, is_rela);
-        let dyn_size = self.size(is_64);
-        let dyn_id = allocator.allocate(dyn_size as usize);
+    pub(crate) fn create_section(&self, sections: &mut Vec<Section>) {
+        let dyn_size = self.size();
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
@@ -44,11 +45,13 @@ impl DynamicMetadata {
                 size: dyn_size,
                 addralign: 8,
             },
-            data: dyn_id,
+            data: self.dynamic_id,
         });
     }
 
-    fn init_from_sections(&mut self, sections: &[Section], is_64: bool, is_rela: bool) {
+    fn init_from_sections(&mut self, sections: &[Section]) {
+        let is_64 = self.arch.is_64();
+        let is_rela = self.arch.is_rela();
         for sec in sections {
             let vaddr = sec.header.addr;
             let size = sec.header.size;
@@ -127,8 +130,50 @@ impl DynamicMetadata {
         }
     }
 
-    pub(crate) fn size(&self, is_64: bool) -> u64 {
-        let entry_size = if is_64 { 16 } else { 8 };
+    pub(crate) fn patch_dynamic(
+        &mut self,
+        shdr_manager: &ShdrManager,
+        reloc: &RelocMetaData,
+        allocator: &mut SectionAllocator,
+
+        got_plt_vaddr: u64,
+    ) -> Result<()> {
+        let is_64 = self.arch.is_64();
+        let is_rela = self.arch.is_rela();
+        self.update_entry(DT_STRTAB as i64, shdr_manager.get_vaddr(ShdrType::DynStr));
+        self.update_entry(DT_SYMTAB as i64, shdr_manager.get_vaddr(ShdrType::DynSym));
+        self.update_entry(DT_HASH as i64, shdr_manager.get_vaddr(ShdrType::Hash));
+        self.update_entry(DT_PLTGOT as i64, got_plt_vaddr);
+        if is_rela {
+            let rela_dyn_vaddr = shdr_manager.get_vaddr(ShdrType::RelaDyn);
+            let rela_dyn_size = shdr_manager.get_size(ShdrType::RelaDyn);
+            self.update_entry(DT_RELA as i64, rela_dyn_vaddr);
+            self.update_entry(DT_RELASZ as i64, rela_dyn_size);
+
+            let rela_plt_vaddr = shdr_manager.get_vaddr(ShdrType::RelaPlt);
+            let rela_plt_size = shdr_manager.get_size(ShdrType::RelaPlt);
+            self.update_entry(DT_JMPREL as i64, rela_plt_vaddr);
+            self.update_entry(DT_PLTRELSZ as i64, rela_plt_size);
+            self.update_entry(DT_RELACOUNT as i64, reloc.relative_count() as u64);
+        } else {
+            let rel_dyn_vaddr = shdr_manager.get_vaddr(ShdrType::RelDyn);
+            let rel_dyn_size = shdr_manager.get_size(ShdrType::RelDyn);
+            self.update_entry(DT_REL as i64, rel_dyn_vaddr);
+            self.update_entry(DT_RELSZ as i64, rel_dyn_size);
+
+            let rel_plt_vaddr = shdr_manager.get_vaddr(ShdrType::RelPlt);
+            let rel_plt_size = shdr_manager.get_size(ShdrType::RelPlt);
+            self.update_entry(DT_JMPREL as i64, rel_plt_vaddr);
+            self.update_entry(DT_PLTRELSZ as i64, rel_plt_size);
+            self.update_entry(DT_RELCOUNT as i64, reloc.relative_count() as u64);
+        }
+        let dyn_id = shdr_manager.get_data_id(ShdrType::Dynamic);
+        self.write_to_vec(allocator.get_mut(&dyn_id), is_64)?;
+        Ok(())
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        let entry_size = if self.arch.is_64() { 16 } else { 8 };
         (self.dyn_entries.len() as u64) * entry_size
     }
 

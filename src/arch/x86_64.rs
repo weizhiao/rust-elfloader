@@ -37,31 +37,68 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 pub extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
-// 保存参数寄存器,这里多使用了8字节栈是为了栈的16字节对齐
-    sub rsp,8*7
-    mov [rsp+8*0],rdi
-    mov [rsp+8*1],rsi
-    mov [rsp+8*2],rdx
-    mov [rsp+8*3],rcx
-    mov [rsp+8*4],r8
-    mov [rsp+8*5],r9
-// 这两个是plt代码压入栈的
-    mov rdi,[rsp+8*7]
-    mov rsi,[rsp+8*8]
-// 调用重定位函数
+    // Save caller-saved registers
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    push r9
+    push r10
+    push r11
+
+    // Save xmm registers (arguments can be passed in xmm0-xmm7)
+    sub rsp, 128
+    movdqu [rsp + 0], xmm0
+    movdqu [rsp + 16], xmm1
+    movdqu [rsp + 32], xmm2
+    movdqu [rsp + 48], xmm3
+    movdqu [rsp + 64], xmm4
+    movdqu [rsp + 80], xmm5
+    movdqu [rsp + 96], xmm6
+    movdqu [rsp + 112], xmm7
+
+    // Arguments for dl_fixup(link_map, reloc_idx)
+    // link_map was pushed by PLT0, reloc_idx was pushed by PLT entry
+    // Stack layout now:
+    // [rsp + 0..128]  : xmm0-xmm7
+    // [rsp + 128..192]: r11, r10, r9, r8, rcx, rdx, rsi, rdi (8 * 8 = 64)
+    // [rsp + 192]     : link_map
+    // [rsp + 200]     : reloc_idx
+    // [rsp + 208]     : return address to caller
+    mov rdi, [rsp + 192]
+    mov rsi, [rsp + 200]
+
+    // Call the resolver
     call {0}
-// 恢复参数寄存器
-    mov rdi,[rsp+8*0]
-    mov rsi,[rsp+8*1]
-    mov rdx,[rsp+8*2]
-    mov rcx,[rsp+8*3]
-    mov r8,[rsp+8*4]
-    mov r9,[rsp+8*5]
-// 需要把plt代码压入栈中的东西也弹出去
-    add rsp,7*8+2*8
-// 执行真正的函数
+
+    // Restore xmm registers
+    movdqu xmm0, [rsp + 0]
+    movdqu xmm1, [rsp + 16]
+    movdqu xmm2, [rsp + 32]
+    movdqu xmm3, [rsp + 48]
+    movdqu xmm4, [rsp + 64]
+    movdqu xmm5, [rsp + 80]
+    movdqu xmm6, [rsp + 96]
+    movdqu xmm7, [rsp + 112]
+    add rsp, 128
+
+    // Restore caller-saved registers
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+
+    // Clean up link_map and reloc_idx from stack
+    add rsp, 16
+
+    // Jump to the resolved function
     jmp rax
-	",
+    ",
         sym crate::relocation::dynamic_link::dl_fixup,
     )
 }
@@ -84,7 +121,7 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
         R_X86_64_32 => "R_X86_64_32",
         R_X86_64_32S => "R_X86_64_32S",
         R_X86_64_IRELATIVE => "R_X86_64_IRELATIVE",
-        _ => "R_X86_64_UNKNOWN",
+        _ => "UNKNOWN",
     }
 }
 

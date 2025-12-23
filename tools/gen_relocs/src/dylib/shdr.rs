@@ -1,13 +1,12 @@
-use std::collections::HashMap;
-
 use crate::common::ShdrType;
 use crate::dylib::{
-    layout::ElfLayout, StringTable, DYN_SIZE_32, DYN_SIZE_64, HASH_SIZE, RELA_SIZE_32,
-    RELA_SIZE_64, REL_SIZE_32, REL_SIZE_64, SYM_SIZE_32, SYM_SIZE_64,
+    DYN_SIZE_32, DYN_SIZE_64, HASH_SIZE, REL_SIZE_32, REL_SIZE_64, RELA_SIZE_32, RELA_SIZE_64,
+    SYM_SIZE_32, SYM_SIZE_64, StringTable, layout::ElfLayout,
 };
 use anyhow::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
-use elf::abi::*;
+use object::elf::*;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SectionHeader {
@@ -36,6 +35,8 @@ impl ShdrType {
             ShdrType::Text => ".text",
             ShdrType::Data => ".data",
             ShdrType::Got => ".got",
+            ShdrType::GotPlt => ".got.plt",
+            ShdrType::Tls => ".tdata",
         }
     }
 
@@ -49,21 +50,23 @@ impl ShdrType {
             ShdrType::Dynamic => SHT_DYNAMIC,
             ShdrType::Hash => SHT_HASH,
             ShdrType::Plt | ShdrType::Text | ShdrType::Data => SHT_PROGBITS,
-            ShdrType::Got => SHT_PROGBITS,
+            ShdrType::Got | ShdrType::GotPlt => SHT_PROGBITS,
+            ShdrType::Tls => SHT_PROGBITS,
         }
     }
 
     fn flags(&self) -> u64 {
         match self {
             ShdrType::Plt | ShdrType::Text => (SHF_ALLOC | SHF_EXECINSTR) as u64,
-            ShdrType::Data | ShdrType::Got => (SHF_ALLOC | SHF_WRITE) as u64,
+            ShdrType::Data | ShdrType::Got | ShdrType::GotPlt => (SHF_ALLOC | SHF_WRITE) as u64,
+            ShdrType::Tls => (SHF_ALLOC | SHF_WRITE | SHF_TLS) as u64,
+            ShdrType::Dynamic => (SHF_ALLOC | SHF_WRITE) as u64,
             ShdrType::DynStr
             | ShdrType::DynSym
             | ShdrType::RelaDyn
             | ShdrType::RelaPlt
             | ShdrType::RelDyn
             | ShdrType::RelPlt
-            | ShdrType::Dynamic
             | ShdrType::Hash => SHF_ALLOC as u64,
             _ => 0,
         }
@@ -196,14 +199,14 @@ impl ShdrManager {
 
     pub(crate) fn layout(&mut self, layout: &mut ElfLayout) {
         // 1. Sort sections by flags to group them into segments
-        // Order: RX (Code) -> R (Read-only) -> RW (Read-write) -> Non-Alloc (Metadata)
+        // Order: R (Read-only) -> RX (Code) -> RW (Read-write) -> Non-Alloc (Metadata)
         self.shdrs.sort_by_key(|s| {
             let flags = s.header.shtype.flags();
             if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_EXECINSTR as u64) != 0 {
-                    0 // RX: .text, .plt
-                } else if flags & (SHF_WRITE as u64) == 0 {
-                    1 // R: .hash, .dynsym, .dynstr, .rela.dyn
+                if flags & (SHF_WRITE as u64) == 0 && flags & (SHF_EXECINSTR as u64) == 0 {
+                    0 // R: .hash, .dynsym, .dynstr, .rela.dyn
+                } else if flags & (SHF_EXECINSTR as u64) != 0 {
+                    1 // RX: .text, .plt
                 } else {
                     2 // RW: .dynamic, .got, .data
                 }
@@ -217,9 +220,9 @@ impl ShdrManager {
         for sec in &mut self.shdrs {
             let flags = sec.header.shtype.flags();
             let current_group = if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_EXECINSTR as u64) != 0 {
+                if flags & (SHF_WRITE as u64) == 0 && flags & (SHF_EXECINSTR as u64) == 0 {
                     Some(0)
-                } else if flags & (SHF_WRITE as u64) == 0 {
+                } else if flags & (SHF_EXECINSTR as u64) != 0 {
                     Some(1)
                 } else {
                     Some(2)
@@ -320,6 +323,14 @@ impl ShdrManager {
             .unwrap_or(0)
     }
 
+    pub(crate) fn get_size(&self, shtype: ShdrType) -> u64 {
+        self.shdrs
+            .iter()
+            .find(|s| s.header.shtype == shtype)
+            .map(|s| s.header.size)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn get_data_id(&self, shtype: ShdrType) -> SectionId {
         self.shdrs
             .iter()
@@ -337,28 +348,45 @@ impl ShdrManager {
     }
 
     pub(crate) fn get_phnum(&self) -> u16 {
-        let mut count = 0;
-        if let Some(rx) = &self.rx_secs {
-            if !rx.is_empty() {
-                count += 1;
+        let mut count = 1; // PT_PHDR
+        let mut has_rx = false;
+        let mut has_r = false;
+        let mut has_rw = false;
+        let mut has_dynamic = false;
+        let mut has_tls = false;
+
+        for sec in &self.shdrs {
+            let flags = sec.header.shtype.flags();
+            if flags & (SHF_ALLOC as u64) != 0 {
+                if flags & (SHF_EXECINSTR as u64) != 0 {
+                    has_rx = true;
+                } else if flags & (SHF_WRITE as u64) == 0 {
+                    has_r = true;
+                } else {
+                    has_rw = true;
+                }
             }
-        }
-        if let Some(r) = &self.r_secs {
-            if !r.is_empty() {
-                count += 1;
+            if sec.header.shtype == ShdrType::Dynamic {
+                has_dynamic = true;
             }
-        }
-        if let Some(rw) = &self.rw_secs {
-            if !rw.is_empty() {
-                count += 1;
+            if sec.header.shtype == ShdrType::Tls {
+                has_tls = true;
             }
         }
 
-        if self
-            .shdrs
-            .iter()
-            .any(|s| s.header.shtype == ShdrType::Dynamic)
-        {
+        if has_rx {
+            count += 1;
+        }
+        if has_r {
+            count += 1;
+        }
+        if has_rw {
+            count += 1;
+        }
+        if has_dynamic {
+            count += 1;
+        }
+        if has_tls {
             count += 1;
         }
         count
@@ -429,42 +457,26 @@ impl ShdrManager {
             .as_ref()
             .expect("layout must be called before write_phdrs");
 
-        let mut first_segment = true;
+        // 0. PT_PHDR
+        let ph_size = (if is_64 { 56 } else { 32 }) * self.get_phnum() as u64;
+        self.write_phdr(
+            &mut writer,
+            is_64,
+            PT_PHDR,
+            PF_R,
+            if is_64 { 64 } else { 52 },
+            if is_64 { 64 } else { 52 },
+            ph_size,
+            ph_size,
+            8,
+        )?;
 
-        // 1. RX Segment
-        if let (Some(first), Some(last)) = (rx_secs.first(), rx_secs.last()) {
+        // 1. R Segment
+        if let (Some(first), Some(last)) = (r_secs.first(), r_secs.last()) {
+            // Ensure R segment starts from 0 to cover EHDR and PHDRs
             let p_offset = 0;
             let p_vaddr = first.header.addr - first.header.offset;
             let p_filesz = (last.header.offset + last.header.size) - p_offset;
-            first_segment = false;
-
-            self.write_phdr(
-                &mut writer,
-                is_64,
-                PT_LOAD,
-                PF_R | PF_X,
-                p_offset,
-                p_vaddr,
-                p_filesz,
-                p_filesz,
-                page_size,
-            )?;
-        }
-
-        // 2. R Segment
-        if let (Some(first), Some(last)) = (r_secs.first(), r_secs.last()) {
-            let p_offset = if first_segment {
-                0
-            } else {
-                first.header.offset
-            };
-            let p_vaddr = if first_segment {
-                first.header.addr - first.header.offset
-            } else {
-                first.header.addr
-            };
-            let p_filesz = (last.header.offset + last.header.size) - p_offset;
-            first_segment = false;
 
             self.write_phdr(
                 &mut writer,
@@ -479,18 +491,29 @@ impl ShdrManager {
             )?;
         }
 
+        // 2. RX Segment
+        if let (Some(first), Some(last)) = (rx_secs.first(), rx_secs.last()) {
+            let p_offset = first.header.offset;
+            let p_vaddr = first.header.addr;
+            let p_filesz = (last.header.offset + last.header.size) - p_offset;
+
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_LOAD,
+                PF_R | PF_X,
+                p_offset,
+                p_vaddr,
+                p_filesz,
+                p_filesz,
+                page_size,
+            )?;
+        }
+
         // 3. RW Segment
         if let (Some(first), Some(last)) = (rw_secs.first(), rw_secs.last()) {
-            let p_offset = if first_segment {
-                0
-            } else {
-                first.header.offset
-            };
-            let p_vaddr = if first_segment {
-                first.header.addr - first.header.offset
-            } else {
-                first.header.addr
-            };
+            let p_offset = first.header.offset;
+            let p_vaddr = first.header.addr;
             let p_filesz = (last.header.offset + last.header.size) - p_offset;
 
             self.write_phdr(
@@ -521,6 +544,21 @@ impl ShdrManager {
                 dyn_sec.header.addr,
                 dyn_sec.header.size,
                 dyn_sec.header.size,
+                8,
+            )?;
+        }
+
+        // 5. PT_TLS
+        if let Some(tls_sec) = self.shdrs.iter().find(|s| s.header.shtype == ShdrType::Tls) {
+            self.write_phdr(
+                &mut writer,
+                is_64,
+                PT_TLS,
+                PF_R,
+                tls_sec.header.offset,
+                tls_sec.header.addr,
+                tls_sec.header.size,
+                tls_sec.header.size,
                 if is_64 { 8 } else { 4 },
             )?;
         }

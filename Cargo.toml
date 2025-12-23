@@ -90,8 +90,8 @@ delegate = "0.13.3"
 criterion = "0.5.1"
 libloading = "0.8.5"
 env_logger = "0.11.6"
-rstest = "0.26.1"
 gen_relocs = { path = "tools/gen_relocs" }
+object = "0.38.0"
 
 [[bench]]
 name = "benchmark"

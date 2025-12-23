@@ -24,7 +24,7 @@ cfg_if::cfg_if! {
                 _core: &crate::CoreComponent,
                 _rel_type: &ElfRelType,
                 _pltgot: &mut crate::segment::shdr::PltGotSection,
-                _scope: &[crate::Relocated],
+                _scope: &[crate::Relocated<()>],
                 _pre_find: &S,
             ) -> crate::Result<()>
             {
@@ -377,9 +377,9 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     }
 }
 
-#[cfg(not(feature = "rel"))]
+#[cfg(all(not(feature = "rel"), not(target_arch = "x86"), not(target_arch = "arm")))]
 pub type ElfRelType = ElfRela;
-#[cfg(feature = "rel")]
+#[cfg(any(feature = "rel", target_arch = "x86", target_arch = "arm"))]
 pub type ElfRelType = ElfRel;
 
 impl ElfRelType {

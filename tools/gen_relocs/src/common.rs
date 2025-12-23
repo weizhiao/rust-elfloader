@@ -2,6 +2,7 @@
 pub enum SymbolType {
     Func,
     Object,
+    Tls,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +28,8 @@ pub enum ShdrType {
     Text,
     Data,
     Got,
+    GotPlt,
+    Tls,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +44,7 @@ pub struct SymbolDesc {
     pub sym_type: SymbolType,
     pub scope: SymbolScope,
     pub content: Option<Content>,
+    pub size: Option<u64>,
 }
 
 impl SymbolDesc {
@@ -54,6 +58,7 @@ impl SymbolDesc {
                 data: code.to_vec(),
                 shdr_type: ShdrType::Text,
             }),
+            size: None,
         }
     }
 
@@ -67,6 +72,7 @@ impl SymbolDesc {
                 data: data.to_vec(),
                 shdr_type: ShdrType::Data,
             }),
+            size: None,
         }
     }
 
@@ -76,6 +82,7 @@ impl SymbolDesc {
             sym_type: SymbolType::Func,
             scope: SymbolScope::Global,
             content: None,
+            size: None,
         }
     }
 
@@ -85,6 +92,30 @@ impl SymbolDesc {
             sym_type: SymbolType::Object,
             scope: SymbolScope::Global,
             content: None,
+            size: None,
+        }
+    }
+
+    pub fn global_tls(name: impl Into<String>, data: &[u8]) -> Self {
+        Self {
+            name: name.into(),
+            sym_type: SymbolType::Tls,
+            scope: SymbolScope::Global,
+            content: Some(Content {
+                data: data.to_vec(),
+                shdr_type: ShdrType::Tls,
+            }),
+            size: None,
+        }
+    }
+
+    pub fn undefined_tls(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            sym_type: SymbolType::Tls,
+            scope: SymbolScope::Global,
+            content: None,
+            size: None,
         }
     }
 
@@ -97,7 +128,13 @@ impl SymbolDesc {
                 data: code,
                 shdr_type: ShdrType::Plt,
             }),
+            size: None,
         }
+    }
+
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
     }
 }
 
@@ -119,14 +156,31 @@ pub struct RelocEntry {
     /// Symbol name that this relocation references
     pub symbol_name: String,
     pub r_type: RelocType,
+    pub addend: i64,
 }
 
 impl RelocEntry {
     /// Create a new relocation entry
-    pub fn new(symbol_name: impl Into<String>, r_type: u32) -> Self {
+    pub fn with_name(symbol_name: impl Into<String>, r_type: u32) -> Self {
         Self {
             symbol_name: symbol_name.into(),
             r_type: RelocType(r_type),
+            addend: 0,
         }
+    }
+
+    /// Create a new relocation entry without a symbol name
+    pub fn new(r_type: u32) -> Self {
+        Self {
+            symbol_name: String::new(),
+            r_type: RelocType(r_type),
+            addend: 0,
+        }
+    }
+
+    /// Set addend for the relocation
+    pub fn with_addend(mut self, addend: i64) -> Self {
+        self.addend = addend;
+        self
     }
 }
