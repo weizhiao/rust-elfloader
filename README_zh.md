@@ -1,173 +1,159 @@
+
+---
+
+# Relink：高效运行时链接
+
 <p align="center">
-	<img src="./docs/imgs/logo.jpg">
+<img src="./docs/imgs/logo.png" width="500" alt="Relink Logo">
+<br>
 </p>
 
-[![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
-[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
-[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
-
-# elf_loader
-
-⚡ **高性能、跨平台、no_std兼容的ELF文件加载器** ⚡
-
-`elf_loader` 能够从内存或文件加载各种形式的ELF文件，并提供运行时高效链接（包括静态链接与动态链接）。无论您是在开发操作系统内核、嵌入式系统、JIT编译器，还是需要动态加载ELF库的应用程序，`elf_loader` 都能提供卓越的性能和灵活性。
-
-[文档](https://docs.rs/elf_loader/) | [示例](https://github.com/weizhiao/rust-elfloader/tree/main/examples)
+<p align="center">
+<a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/v/elf_loader.svg" alt="Crates.io"></a>
+<a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/d/elf_loader.svg" alt="Crates.io"></a>
+<a href="https://docs.rs/elf_loader"><img src="https://docs.rs/elf_loader/badge.svg" alt="Docs.rs"></a>
+<img src="https://img.shields.io/badge/rust-1.88.0+-blue.svg" alt="Min. Rust Version">
+<a href="https://github.com/weizhiao/rust-elfloader/actions"><img src="https://github.com/weizhiao/rust-elfloader/actions/workflows/rust.yml/badge.svg" alt="Build Status"></a>
+<img src="https://img.shields.io/crates/l/elf_loader.svg" alt="License MIT/Apache-2.0">
+</p>
 
 ---
 
-## 🎯 核心应用场景
+## 🚀 为什么选择 Relink？
 
-- **操作系统开发** - 作为内核中的ELF文件加载器
-- **动态链接器实现** - 构建Rust版本的动态链接器
-- **嵌入式系统** - 在资源受限设备上加载ELF动态库
-- **JIT编译系统** - 作为即时编译器的底层链接器
-- **跨平台开发** - 在Windows上加载ELF动态库（详见 [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader)）
+`Relink` 是一款专为 Rust 生态打造的高性能运行时链接器（JIT Linker）。它不仅能够从传统文件系统，也能直接从内存映像中高效解析各类 ELF 格式，并执行灵活的动态与静态混合链接。
+
+无论是开发操作系统内核、嵌入式系统、JIT 编译器，还是构建插件化应用，Relink 都能以零成本抽象、高效执行和强大扩展性，为您的项目提供坚实支撑。
 
 ---
 
-## ✨ 卓越特性
+## 🔥 关键特性
 
-### 🚀 极致性能
-汲取 `musl` 和 `glibc` 中 `ld.so` 的实现精华，结合Rust的零成本抽象，提供接近原生的性能表现：
-
-```shell
-# 性能基准测试对比
-elf_loader:new   36.478 µs  
-libloading:new   47.065 µs
-
-elf_loader:get   10.477 ns 
-libloading:get   93.369 ns
-```
-
-### 📦 超轻量级
-核心实现极其精简，基于 `elf_loader` 构建的 [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) 编译后仅 **34KB**！
-
-### 🔧 no_std兼容
-完全支持 `no_std` 环境，不强制依赖 `libc` 或操作系统，可在内核和嵌入式设备中无缝使用。
-
-### 🛡️ 编译期安全保障
-利用Rust的生命周期机制，在编译期检查ELF依赖关系，防止悬垂指针和use-after-free错误：
+### 🛡️ 内存安全
+借助 Rust 的所有权系统与智能指针，Relink 确保了运行时的安全性。
+* **生命周期绑定**：获取的符号（Symbol）携带生命周期标记，编译器确保其不会超出库的存活范围，**根除 `use-after-free`**。
+* **自动依赖管理**：使用 `Arc` 自动维护库之间的依赖关系，防止被依赖的库过早释放。
 
 ```rust
-// 如果依赖库在之前被销毁，编译将失败！
-let liba = load_dylib!("liba.so")?;
-let libb = load_dylib!("libb.so")?; // 依赖 liba
-// liba 在 libb 之前被销毁会导致编译错误
+// 🛡️ 编译器级安全屏障：
+let sym = unsafe { lib.get::<fn()>("plugin_fn")? };
+drop(lib); // 💥 试图在这里卸载库...
+// sym();  // 🛑 编译失败！Relink 成功拦截了这次潜在的 Use-After-Free 崩溃。
 ```
 
-### 🔄 高级功能支持
-- **延迟绑定** - 符号在首次调用时解析，提升启动性能
-- **RELR重定位** - 支持现代相对重定位格式，减少内存占用
-- **高度可扩展** - 通过trait系统轻松移植到新平台
+### 🔀 混合链接能力
+打破动态库与静态库的界限，支持将 **可重定位目标文件 (`.o`)** 与 **动态链接库 (`.so`)** 进行混合链接。你可以像加载动态库一样加载 `.o` 文件，并将其中的未定义符号动态链接到系统或其他已加载的库中。
+
+### 🎭 深度定制与符号拦截
+通过实现 `SymbolLookup` trait 和 `RelocationHandler` trait，用户可以深度介入链接过程。
+* **符号拦截与替换**：在加载时拦截并替换库的外部依赖符号，轻松实现函数打桩 (Mock) 或行为监控。
+* **自定义链接逻辑**：完全掌控符号解析策略，构建灵活的插件系统。
+
+### ⚡ 极致性能与全场景支持
+* **高性能**：基于 Rust 的零成本抽象，提供接近原生的加载与符号解析速度。
+* **`no_std` 兼容**：核心库无 OS 依赖，完美适配 **操作系统内核**、**嵌入式设备** 及 **裸机开发**。
+* **现代特性**：支持 **RELR** 等现代 ELF 特性，优化内存占用与启动时间；支持延迟绑定，优化大型动态库的加载速度。
 
 ---
 
-## 🏗️ 架构设计
+## 🎯 它能做什么？
 
-### 易于移植
-只需为您的平台实现 `Mmap` 和 `ElfObject` trait即可完成移植。参考我们的 [默认实现](https://github.com/weizhiao/rust-elfloader/tree/main/src/os) 快速上手。
-
-### 钩子函数扩展
-通过hook函数扩展功能，实现自定义加载逻辑，详见 [dlopen-rs hook示例](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs)。
-
----
-
-## 📋 平台支持
-
-| 指令集       | 动态链接 | 延迟绑定 | 静态链接 | 测试覆盖 |
-| ------------ | -------- | -------- | -------- | -------- |
-| x86_64       | ✅        | ✅        | ✅        | CI       |
-| AArch64      | ✅        | ✅        | TODO     | CI       |
-| RISC-V 64/32 | ✅        | ✅        | TODO     | CI/手动  |
-| LoongArch64  | ✅        | ✅        | TODO     | CI       |
-| x86          | ✅        | ✅        | TODO     | CI       |
-| ARM          | ✅        | ✅        | TODO     | CI       |
+| 场景                   | Relink 带来的变革                                                              |
+| :--------------------- | :----------------------------------------------------------------------------- |
+| **插件化架构**         | 实现比 `dlopen` 更安全、粒度更细的动态模块加载与隔离，支持 `.o` 直接作为插件。 |
+| **JIT 编译器与运行时** | 即时链接编译好的机器码片段，无需手动管理代码位置，极大简化 JIT 实现。          |
+| **操作系统/内核开发**  | 提供高质量的用户态程序加载器原型，或用于实现内核模块的动态加载。               |
+| **游戏/引擎热重载**    | 动态替换游戏逻辑模块，实现“代码即改即生效”的流畅开发体验。                     |
+| **嵌入式/边缘计算**    | 在资源受限的设备上，实现固件模块的安全热更新与动态组合。                       |
+| **安全研究与逆向**     | 通过 Hook 机制，无侵入地分析二进制文件的行为与交互。                           |
 
 ---
 
-## 🚀 快速开始
+## 🚀 即刻上手
 
-### 添加依赖
+### 添加到你的项目
 ```toml
 [dependencies]
-elf_loader = "0.13"
+elf_loader = "0.13"  # 你的运行时链接引擎
 ```
 
-### 基本用法
+### 基础示例：加载并调用一个动态库
 ```rust
 use elf_loader::load_dylib;
-use std::collections::HashMap;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 提供动态库所需的符号
-    let mut symbols = HashMap::new();
-    symbols.insert("print", print as *const ());
-    
-    let pre_find = |name: &str| -> Option<*const ()> {
-        symbols.get(name).copied()
-    };
-
-    // 加载并重定位动态库
-    let lib = load_dylib!("target/libexample.so")?
+fn main() {
+    // 1. 加载库并执行即时链接
+    let lib = load_dylib!("path/to/your_library.so")?
         .relocator()
-        .pre_find(pre_find)
-        .run()?;
-    
-    // 调用库中的函数
-    let func = unsafe { lib.get::<fn() -> i32>("example_function")? };
-    println!("结果: {}", func());
-    
-    Ok(())
+        // 可选：提供自定义符号解析（例如，从主程序导出符号）
+        .pre_find(|sym_name| {
+            if sym_name == "my_host_function" {
+                Some(my_host_function as *mut std::ffi::c_void)
+            } else {
+                None
+            }
+        })
+        .relocate()?; // 完成所有重定位
+
+    // 2. 安全地获取并调用函数
+    let awesome_func: &extern "C" fn(i32) -> i32 = unsafe { lib.get("awesome_func")? };
+    let result = awesome_func(42);
+    println!("结果: {}", result);
 }
 
-fn print(s: &str) {
-    println!("{}", s);
+// 一个可以被插件调用的宿主函数
+extern "C" fn my_host_function(value: i32) -> i32 {
+    value * 2
 }
 ```
 
 ---
 
-## ⚙️ 特性开关
+## 📊 平台支持
 
-| 特性              | 描述                      |
-| ----------------- | ------------------------- |
-| `use-syscall`     | 使用Linux系统调用作为后端 |
-| `version`         | 在符号解析时使用版本信息  |
-| `log`             | 启用日志输出              |
-| `rel`             | 使用REL格式的重定位条目   |
-| `portable-atomic` | 支持无原生原子操作的目标  |
+Relink 致力于跨平台支持。以下是当前的支持矩阵：
 
-**注意**: 在无操作系统的环境中请禁用 `use-syscall` 特性。
-
----
-
-## 💡 系统要求
-
-- **最低Rust版本**: 1.88.0+
-- **支持平台**: 所有主要架构（详见平台支持表格）
+| 架构             | 动态链接 | 延迟绑定 | 混合链接 (.o) |
+| :--------------- | :------: | :------: | :-----------: |
+| **x86_64**       |    ✅     |    ✅     |       ✅       |
+| **x86**          |    ✅     |    ✅     |       🔶       |
+| **AArch64**      |    ✅     |    ✅     |       🔶       |
+| **Arm**          |    ✅     |    ✅     |       🔶       |
+| **RISC-V 64/32** |    ✅     |    ✅     |       🔶       |
+| **LoongArch64**  |    ✅     |    ✅     |       🔶       |
 
 ---
 
-## 🤝 贡献与支持
+## 🤝 参与贡献
 
-我们热烈欢迎社区贡献！无论是改进核心功能、增加示例、完善文档还是修复问题，您的参与都将受到高度赞赏。
+如果你对底层技术、二进制安全或链接器感兴趣，欢迎加入我们！
 
-- **问题反馈**: [GitHub Issues](https://github.com/weizhiao/elf_loader/issues)
-- **功能请求**: 欢迎提出新功能建议
-- **代码贡献**: 提交Pull Request
+* **提交 Issue**：反馈 Bug 或提出你的天才构想。
 
-如果这个项目对您有帮助，请给我们一个 ⭐ 以表示支持！
+* **Star 我们的项目**：这是对开发者最直接的赛博鼓励。⭐
 
-## 🎈贡献者
+* **代码贡献**：期待你的 PR，一起构建 Rust 的运行时链接器。
+
+---
+
+## 📜 许可证
+
+本项目采用双重许可：
+* **[MIT License](LICENSE-MIT)** - 适用于大多数场景。
+* **[Apache License 2.0](LICENSE-APACHE)** - 适用于需要专利保护的项目。
+
+你可以根据需求选择其一。
+
+---
+
+## 🎈 开发者
 
 <a href="https://github.com/weizhiao/rust-elfloader/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="Contributors"/>
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="项目贡献者" />
 </a>
 
 ---
 
-**立即开始使用 `elf_loader`，为您的项目带来高效的ELF加载能力！** 🎉
+**Relink — 为您的项目带来高效的运行时链接能力。** 🚀
+
+---
