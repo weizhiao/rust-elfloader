@@ -7,6 +7,8 @@ use crate::{
 };
 use elf::abi::*;
 
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
@@ -128,15 +130,17 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
 }
 
 impl StaticReloc for X86_64Relocator {
-    fn relocate<S>(
+    fn relocate<PreS, PostS>(
         core: &crate::CoreComponent<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
         scope: &[crate::format::Relocated<()>],
-        pre_find: &S,
+        pre_find: &PreS,
+        post_find: &PostS,
     ) -> crate::Result<()>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
     {
         let symtab = core.symtab().unwrap();
         let r_sym = rel_type.r_symbol();
@@ -147,7 +151,7 @@ impl StaticReloc for X86_64Relocator {
         let offset = rel_type.r_offset();
         let p = base + rel_type.r_offset();
         let find_symbol = |r_sym: usize| {
-            find_symbol_addr(pre_find, core, symtab, scope, r_sym).map(|(val, _)| val)
+            find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym).map(|(val, _)| val)
         };
         let boxed_error = || reloc_error(rel_type, "unknown symbol", core);
         match r_type as _ {

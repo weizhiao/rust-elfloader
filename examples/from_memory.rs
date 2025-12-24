@@ -1,4 +1,4 @@
-use elf_loader::{Relocatable, load_dylib};
+use elf_loader::load_dylib;
 use std::{fs::File, io::Read};
 
 fn main() {

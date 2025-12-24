@@ -11,17 +11,18 @@ use crate::{
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, SymbolLookup},
+    relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
 use core::{fmt::Debug, ops::Deref};
 
 impl<D: 'static> Relocatable<D> for ElfExec<D> {
     type Output = RelocatedExec<D>;
 
-    fn relocate<S, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[Relocated<D>],
-        pre_find: &S,
+        pre_find: &PreS,
+        post_find: &PostS,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
@@ -29,7 +30,8 @@ impl<D: 'static> Relocatable<D> for ElfExec<D> {
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
@@ -37,6 +39,7 @@ impl<D: 'static> Relocatable<D> for ElfExec<D> {
         let (relocated, entry) = self.inner.relocate_impl(
             scope,
             pre_find,
+            post_find,
             pre_handler,
             post_handler,
             lazy,
@@ -86,6 +89,17 @@ impl<D> Debug for ElfExec<D> {
             .field("name", &self.inner.name())
             .field("needed_libs", &self.inner.needed_libs())
             .finish()
+    }
+}
+
+impl<D: 'static> ElfExec<D> {
+    /// Create a builder for relocating the executable
+    ///
+    /// This method returns a `Relocator` that allows configuring the relocation
+    /// process with fine-grained control, such as setting a custom unknown relocation
+    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+        Relocator::new(self)
     }
 }
 

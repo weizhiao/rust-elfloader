@@ -13,7 +13,9 @@ use crate::{
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
-    relocation::{Relocatable, RelocationHandler, SymbolLookup, static_link::StaticRelocation},
+    relocation::{
+        Relocatable, RelocationHandler, Relocator, SymbolLookup, static_link::StaticRelocation,
+    },
     segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
@@ -247,6 +249,17 @@ impl Deref for ElfRelocatable {
     }
 }
 
+impl ElfRelocatable {
+    /// Create a builder for relocating the relocatable file
+    ///
+    /// This method returns a `Relocator` that allows configuring the relocation
+    /// process with fine-grained control, such as setting a custom unknown relocation
+    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), ()> {
+        Relocator::new(self)
+    }
+}
+
 impl Debug for ElfRelocatable {
     /// Formats the ElfRelocatable for debugging purposes
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -259,10 +272,11 @@ impl Debug for ElfRelocatable {
 impl Relocatable<()> for ElfRelocatable {
     type Output = Relocated<()>;
 
-    fn relocate<S, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[Relocated<()>],
-        pre_find: &S,
+        pre_find: &PreS,
+        post_find: &PostS,
         _pre_handler: PreH,
         _post_handler: PostH,
         _lazy: Option<bool>,
@@ -270,11 +284,12 @@ impl Relocatable<()> for ElfRelocatable {
         _use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
-        self.relocate_impl(scope, pre_find)
+        self.relocate_impl(scope, pre_find, post_find)
     }
 }

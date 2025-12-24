@@ -1,4 +1,4 @@
-use elf_loader::{Relocatable, load_dylib};
+use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
@@ -15,12 +15,12 @@ fn main() {
     let liba = load_dylib!("target/liba.so").unwrap();
     let libb = load_dylib!("target/libb.so").unwrap();
     let libc = load_dylib!("target/libc.so").unwrap();
-    let a = liba.relocator().symbols(&pre_find).relocate().unwrap();
+    let a = liba.relocator().pre_find(&pre_find).relocate().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let b = libb
         .relocator()
-        .symbols(&pre_find)
+        .pre_find(&pre_find)
         .scope([&a])
         .relocate()
         .unwrap();
@@ -28,7 +28,7 @@ fn main() {
     assert!(f() == 2);
     let c = libc
         .relocator()
-        .symbols(&pre_find)
+        .pre_find(&pre_find)
         .scope([&a, &b])
         .relocate()
         .unwrap();

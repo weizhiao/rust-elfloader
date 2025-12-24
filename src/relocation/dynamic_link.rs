@@ -56,10 +56,11 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
 }
 
 impl<D> RelocatedCommonPart<D> {
-    pub(crate) fn relocate_impl<PreS, LazyS, PreH, PostH>(
+    pub(crate) fn relocate_impl<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[Relocated<D>],
         pre_find: &PreS,
+        post_find: &PostS,
         mut pre_handler: PreH,
         mut post_handler: PostH,
         lazy: Option<bool>,
@@ -69,6 +70,7 @@ impl<D> RelocatedCommonPart<D> {
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
@@ -105,6 +107,7 @@ impl<D> RelocatedCommonPart<D> {
             self,
             scope,
             pre_find,
+            post_find,
             &mut pre_handler,
             &mut post_handler,
             is_lazy,
@@ -116,10 +119,11 @@ impl<D> RelocatedCommonPart<D> {
 }
 
 /// Perform relocations on an ELF object
-fn relocate_impl<D, PreS, LazyS, PreH, PostH>(
+fn relocate_impl<D, PreS, PostS, LazyS, PreH, PostH>(
     elf: RelocatedCommonPart<D>,
     scope: &[Relocated<D>],
     pre_find: &PreS,
+    post_find: &PostS,
     pre_handler: &mut PreH,
     post_handler: &mut PostH,
     is_lazy: bool,
@@ -127,6 +131,7 @@ fn relocate_impl<D, PreS, LazyS, PreH, PostH>(
 ) -> Result<Relocated<D>>
 where
     PreS: SymbolLookup + ?Sized,
+    PostS: SymbolLookup + ?Sized,
     LazyS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler + ?Sized,
     PostH: RelocationHandler + ?Sized,
@@ -134,6 +139,7 @@ where
     let mut ctx = RelocationContext {
         scope,
         pre_find,
+        post_find,
         pre_handler,
         post_handler,
         dependency_flags: alloc::vec![false; scope.len()],
@@ -221,20 +227,22 @@ pub(crate) struct DynamicRelocation {
 
 impl<D> RelocatedCommonPart<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreS, LazyS, PreH, PostH>(
+    fn relocate_pltrel<PreS, PostS, LazyS, PreH, PostH>(
         &self,
         is_lazy: bool,
         lazy_scope: Option<LazyS>,
-        ctx: &mut RelocationContext<'_, '_, D, PreS, PreH, PostH>,
+        ctx: &mut RelocationContext<'_, '_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
         let scope = ctx.scope;
         let pre_find = ctx.pre_find;
+        let post_find = ctx.post_find;
         let core = self.core_ref();
         let base = core.base();
         let segments = core.segments();
@@ -264,7 +272,7 @@ impl<D> RelocatedCommonPart<D> {
                     }
                 } else {
                     if let Some((symbol, idx)) =
-                        find_symbol_addr(pre_find, core, symtab, scope, r_sym)
+                        find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym)
                     {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
@@ -365,17 +373,19 @@ impl<D> RelocatedCommonPart<D> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreS, PreH, PostH>(
+    fn relocate_dynrel<PreS, PostS, PreH, PostH>(
         &self,
-        ctx: &mut RelocationContext<'_, '_, D, PreS, PreH, PostH>,
+        ctx: &mut RelocationContext<'_, '_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
         let scope = ctx.scope;
         let pre_find = ctx.pre_find;
+        let post_find = ctx.post_find;
         /*
             Relocation formula components:
             A = Addend used to compute the value of the relocatable field
@@ -403,7 +413,7 @@ impl<D> RelocatedCommonPart<D> {
                 // Handle GOT and symbolic relocations
                 REL_GOT | REL_SYMBOLIC => {
                     if let Some((symbol, idx)) =
-                        find_symbol_addr(pre_find, core, symtab, scope, r_sym)
+                        find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym)
                     {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;

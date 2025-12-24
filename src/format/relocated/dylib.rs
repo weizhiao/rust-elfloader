@@ -11,7 +11,7 @@ use crate::{
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, SymbolLookup},
+    relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
 use core::{fmt::Debug, ops::Deref};
 
@@ -54,17 +54,14 @@ impl<D> Debug for ElfDylib<D> {
     }
 }
 
-#[cfg(not(feature = "portable-atomic"))]
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
-
 impl<D> Relocatable<D> for ElfDylib<D> {
     type Output = Relocated<D>;
 
-    fn relocate<S, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[Relocated<D>],
-        pre_find: &S,
+        pre_find: &PreS,
+        post_find: &PostS,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
@@ -72,7 +69,8 @@ impl<D> Relocatable<D> for ElfDylib<D> {
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
@@ -80,6 +78,7 @@ impl<D> Relocatable<D> for ElfDylib<D> {
         let (relocated, _) = self.inner.relocate_impl(
             scope,
             pre_find,
+            post_find,
             pre_handler,
             post_handler,
             lazy,
@@ -102,6 +101,15 @@ impl<D> ElfDylib<D> {
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.inner.user_data_mut()
+    }
+
+    /// Create a builder for relocating the dynamic library
+    ///
+    /// This method returns a `Relocator` that allows configuring the relocation
+    /// process with fine-grained control, such as setting a custom unknown relocation
+    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+        Relocator::new(self)
     }
 }
 

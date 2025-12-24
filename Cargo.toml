@@ -9,7 +9,7 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["elf", "unix", "loader"]
 categories = ["no-std", "os", "embedded"]
-description = "Load ELF files from memory/storage and efficient static/dynamic runtime linking."
+description = "A high-performance, no_std compliant ELF loader and JIT linker for Rust."
 exclude = [".gitignore", "ci", "tests", "examples", "docs", "docker"]
 
 [workspace.package]

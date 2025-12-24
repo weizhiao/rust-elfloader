@@ -1,4 +1,4 @@
-use elf_loader::{Relocatable, load_dylib};
+use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
@@ -14,7 +14,7 @@ fn main() {
     let liba = load_dylib!("target/liba.so")
         .unwrap()
         .relocator()
-        .symbols(&pre_find)
+        .pre_find(&pre_find)
         .relocate()
         .unwrap();
     // Call function a in liba.so

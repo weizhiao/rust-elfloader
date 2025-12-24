@@ -1,6 +1,3 @@
-
----
-
 # Relink: High-Performance Runtime Linking
 
 <p align="center">

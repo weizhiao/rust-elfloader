@@ -1,5 +1,5 @@
 use elf_loader::{
-    Loader, Relocatable,
+    Loader,
     arch::{
         REL_COPY, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC,
     },
@@ -193,7 +193,7 @@ fn run_dynamic_linking(is_lazy: bool) {
     let scope = [helper_relocated.clone()];
     let relocator = dylib
         .relocator()
-        .symbols(symbol_lookup.clone())
+        .pre_find(symbol_lookup.clone())
         .scope(&scope)
         .lazy(is_lazy);
 
@@ -411,7 +411,7 @@ fn static_linking() {
     // Relocate the object with symbol resolution
     let relocated = obj
         .relocator()
-        .symbols(symbol_lookup.clone())
+        .pre_find(symbol_lookup.clone())
         .relocate()
         .expect("Failed to relocate");
     println!("Relocation completed");

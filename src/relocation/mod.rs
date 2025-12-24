@@ -63,16 +63,17 @@ pub trait RelocationHandler {
 }
 
 /// Context for relocation operations
-struct RelocationContext<'a, 'find, D, S: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+struct RelocationContext<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
     scope: &'a [Relocated<D>],
-    pre_find: &'find S,
+    pre_find: &'find PreS,
+    post_find: &'find PostS,
     pre_handler: &'a mut PreH,
     post_handler: &'a mut PostH,
     dependency_flags: Vec<bool>,
 }
 
-impl<'a, 'find, D, S: ?Sized, PreH: ?Sized, PostH: ?Sized>
-    RelocationContext<'a, 'find, D, S, PreH, PostH>
+impl<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
+    RelocationContext<'a, 'find, D, PreS, PostS, PreH, PostH>
 where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
@@ -155,21 +156,12 @@ pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object
     type Output;
 
-    /// Create a builder for relocating the dynamic library
-    ///
-    /// This method returns a `Relocator` that allows configuring the relocation
-    /// process with fine-grained control, such as setting a custom unknown relocation
-    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
-    fn relocator(self) -> Relocator<Self, (), (), (), (), D> {
-        Relocator::new(self)
-    }
-
     /// Execute the relocation process
-    #[doc(hidden)]
-    fn relocate<S, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[Relocated<D>],
-        pre_find: &S,
+        pre_find: &PreS,
+        post_find: &PostS,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
@@ -177,17 +169,19 @@ pub trait Relocatable<D = ()>: Sized {
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler;
 }
 
 /// A builder for configuring and executing the relocation process
-pub struct Relocator<T, PreS, LazyS, PreH, PostH, D = ()>
+pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()>
 where
     T: Relocatable<D>,
     PreS: SymbolLookup,
+    PostS: SymbolLookup,
     LazyS: SymbolLookup,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
@@ -195,6 +189,7 @@ where
     object: T,
     scope: Vec<Relocated<D>>,
     pre_find: PreS,
+    post_find: PostS,
     pre_handler: PreH,
     post_handler: PostH,
     lazy: Option<bool>,
@@ -202,13 +197,14 @@ where
     use_scope_as_lazy: bool,
 }
 
-impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), D> {
+impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
     /// Create a new relocator builder
     pub fn new(object: T) -> Self {
         Self {
             object,
             scope: Vec::new(),
             pre_find: (),
+            post_find: (),
             pre_handler: (),
             post_handler: (),
             lazy: None,
@@ -218,16 +214,17 @@ impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), D> {
     }
 }
 
-impl<T, PreS, LazyS, PreH, PostH, D> Relocator<T, PreS, LazyS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyS, PreH, PostH, D> Relocator<T, PreS, PostS, LazyS, PreH, PostH, D>
 where
     T: Relocatable<D>,
     PreS: SymbolLookup,
+    PostS: SymbolLookup,
     LazyS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     /// Set the preferred symbol lookup function
-    pub fn symbols<S2>(self, pre_find: S2) -> Relocator<T, S2, LazyS, PreH, PostH, D>
+    pub fn pre_find<S2>(self, pre_find: S2) -> Relocator<T, S2, PostS, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
     {
@@ -235,6 +232,25 @@ where
             object: self.object,
             scope: self.scope,
             pre_find,
+            post_find: self.post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+        }
+    }
+
+    /// Set the fallback symbol lookup function
+    pub fn post_find<S2>(self, post_find: S2) -> Relocator<T, PreS, S2, LazyS, PreH, PostH, D>
+    where
+        S2: SymbolLookup,
+    {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             lazy: self.lazy,
@@ -257,7 +273,7 @@ where
     pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
-    ) -> Relocator<T, PreS, LazyS, NewPreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyS, NewPreH, PostH, D>
     where
         NewPreH: RelocationHandler,
     {
@@ -265,6 +281,7 @@ where
             object: self.object,
             scope: self.scope,
             pre_find: self.pre_find,
+            post_find: self.post_find,
             pre_handler: handler,
             post_handler: self.post_handler,
             lazy: self.lazy,
@@ -277,7 +294,7 @@ where
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
-    ) -> Relocator<T, PreS, LazyS, PreH, NewPostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyS, PreH, NewPostH, D>
     where
         NewPostH: RelocationHandler,
     {
@@ -285,6 +302,7 @@ where
             object: self.object,
             scope: self.scope,
             pre_find: self.pre_find,
+            post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: handler,
             lazy: self.lazy,
@@ -303,7 +321,7 @@ where
     pub fn lazy_scope<NewLazyS>(
         self,
         scope: NewLazyS,
-    ) -> Relocator<T, PreS, NewLazyS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
     where
         NewLazyS: SymbolLookup,
     {
@@ -311,6 +329,7 @@ where
             object: self.object,
             scope: self.scope,
             pre_find: self.pre_find,
+            post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             lazy: self.lazy,
@@ -333,6 +352,7 @@ where
         self.object.relocate(
             &self.scope,
             &self.pre_find,
+            &self.post_find,
             self.pre_handler,
             self.post_handler,
             self.lazy,
@@ -502,15 +522,17 @@ fn find_weak<'lib, D>(
 }
 
 #[inline]
-pub(crate) fn find_symbol_addr<S, D>(
-    pre_find: &S,
+pub(crate) fn find_symbol_addr<PreS, PostS, D>(
+    pre_find: &PreS,
+    post_find: &PostS,
     core: &CoreComponent<D>,
     symtab: &SymbolTable,
     scope: &[Relocated<D>],
     r_sym: usize,
 ) -> Option<(RelocValue<usize>, Option<usize>)>
 where
-    S: SymbolLookup + ?Sized,
+    PreS: SymbolLookup + ?Sized,
+    PostS: SymbolLookup + ?Sized,
 {
     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
     if let Some(addr) = pre_find.lookup(syminfo.name()) {
@@ -522,8 +544,19 @@ where
         );
         return Some((RelocValue::new(addr as usize), None));
     }
-    find_symdef_impl(core, scope, dynsym, &syminfo)
-        .map(|(symdef, idx)| (RelocValue::new(symdef.convert() as usize), idx))
+    if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
+        return Some((RelocValue::new(res.0.convert() as usize), res.1));
+    }
+    if let Some(addr) = post_find.lookup(syminfo.name()) {
+        #[cfg(feature = "log")]
+        log::trace!(
+            "binding file [{}] to [post_find]: symbol [{}]",
+            core.name(),
+            syminfo.name()
+        );
+        return Some((RelocValue::new(addr as usize), None));
+    }
+    None
 }
 
 fn find_symdef_impl<'lib, D>(

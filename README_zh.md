@@ -1,6 +1,3 @@
-
----
-
 # Relink：高效运行时链接
 
 <p align="center">

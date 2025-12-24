@@ -102,7 +102,7 @@ pub use format::relocatable::ElfRelocatable;
 pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
 pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol};
 pub use loader::{Hook, Loader};
-pub use relocation::{Relocatable, RelocationHandler, SymbolLookup};
+pub use relocation::{RelocationHandler, SymbolLookup};
 
 /// Error types used throughout the elf_loader library
 ///
