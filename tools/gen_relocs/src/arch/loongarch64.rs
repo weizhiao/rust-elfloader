@@ -1,54 +1,60 @@
 pub(crate) fn generate_plt0_code() -> Vec<u8> {
-    let mut code = vec![0; 32];
-    // pcaddi $t0, ...
-    // ld.d $t1, $t0, ... ; GOT[2]
-    // ld.d $t0, $t0, ... ; GOT[1]
-    // jirl $zero, $t1, 0
-    code
+    vec![0; 32]
 }
 
-pub(crate) fn patch_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64, got_vaddr: u64) {
-    let pc = plt0_vaddr + 4;
-    let target_got1 = got_vaddr + 8;
-    let target_got2 = got_vaddr + 16;
+fn encode_imm26(imm: i32) -> u32 {
+    let imm = imm as u32;
+    ((imm & 0xffff) << 10) | ((imm >> 16) & 0x3ff)
+}
 
-    let off1 = (target_got1 as i64 - pc as i64);
-    let off2 = (target_got2 as i64 - pc as i64);
+pub(crate) fn patch_plt0(
+    plt_data: &mut [u8],
+    plt0_off: usize,
+    plt0_vaddr: u64,
+    got_plt_vaddr: u64,
+) {
+    let pc = plt0_vaddr;
+    let target_got0 = got_plt_vaddr; // GOT[0] is resolver
+    // let _target_got1 = got_vaddr + 8; // GOT[1] is link_map
 
-    // pcaddi $t0, imm20
-    let imm20 = (off1 >> 2) as i32;
-    let pcaddi = 0x18000000u32 | (12 << 0) | ((imm20 as u32 & 0xfffff) << 5); // $t0 is $r12
-    let move_idx = 0x001501a5u32; // or $a1, $t1, $zero (move $a1, $t1)
-    let ld_dylib = 0x28c00000u32 | (4 << 0) | (12 << 5) | (((off2 & 0xfff) as u32) << 10); // $a0 is $r4
-    let ld_resolver = 0x28c00000u32 | (13 << 0) | (12 << 5) | (((off1 & 0xfff) as u32) << 10); // $t1 is $r13
-    let jirl = 0x4c000000u32 | (0 << 0) | (13 << 5) | (0 << 10); // jirl $zero, $t1, 0
+    let off = target_got0 as i64 - pc as i64;
+
+    // 1. pcaddi $t2, imm20
+    let imm20 = (off >> 2) as i32;
+    let pcaddi = 0x18000000u32 | (14 << 0) | ((imm20 as u32 & 0xfffff) << 5); // $t2($r14) = PC + offset
+
+    // 2. ld.d $t0, $t2, 8  (GOT[1] -> link_map, load into $r12)
+    let ld_linkmap = 0x28c00000u32 | (12 << 0) | (14 << 5) | (8 << 10);
+
+    // 3. ld.d $t2, $t2, 0  (GOT[0] -> resolver, load into $r14)
+    let ld_resolver = 0x28c00000u32 | (14 << 0) | (14 << 5) | (0 << 10);
+
+    // 4. jr $t2 (Jump to resolver)
+    let jr = 0x4c000000u32 | (0 << 0) | (14 << 5) | (0 << 10);
 
     plt_data[plt0_off..plt0_off + 4].copy_from_slice(&pcaddi.to_le_bytes());
-    plt_data[plt0_off + 4..plt0_off + 8].copy_from_slice(&move_idx.to_le_bytes());
-    plt_data[plt0_off + 8..plt0_off + 12].copy_from_slice(&ld_dylib.to_le_bytes());
-    plt_data[plt0_off + 12..plt0_off + 16].copy_from_slice(&ld_resolver.to_le_bytes());
-    plt_data[plt0_off + 16..plt0_off + 20].copy_from_slice(&jirl.to_le_bytes());
+    plt_data[plt0_off + 4..plt0_off + 8].copy_from_slice(&ld_linkmap.to_le_bytes());
+    plt_data[plt0_off + 8..plt0_off + 12].copy_from_slice(&ld_resolver.to_le_bytes());
+    plt_data[plt0_off + 12..plt0_off + 16].copy_from_slice(&jr.to_le_bytes());
 }
 
-pub(crate) fn generate_plt_entry_code(
-    _got_idx: u64,
-    reloc_idx: u32,
-    plt_entry_offset: u64,
-) -> Vec<u8> {
+pub(crate) fn generate_plt_entry_code(reloc_idx: u32, plt_entry_offset: u64) -> Vec<u8> {
     let mut code = vec![0; 32];
-    // pcaddi $t1, ...
-    // ld.d $t1, $t1, ...
-    // jirl $zero, $t1, 0
-    // nop
-    // li.d $t1, reloc_idx
-    // b PLT0
 
-    // li.d $t1, reloc_idx
-    let li = 0x02800000 | (13 << 0) | ((reloc_idx & 0xfff) << 10); // addi.d $t1, $zero, imm
+    // LoongArch NOP: andi $r0, $r0, 0 => 0x03400000
+    let nop = 0x03400000u32;
+    code[12..16].copy_from_slice(&nop.to_le_bytes());
 
-    // b PLT0
+    // li.d $t1, reloc_idx * 8 (Load reloc index for lazy binding)
+    let reloc_val = reloc_idx * 8;
+    let li = 0x02800000 | (13 << 0) | ((reloc_val & 0xfff) << 10); // $t1($r13)
+
+    // b PLT0 (Jump to PLT0 resolver stub)
+    // 偏移量计算：PLT0 is usually at the start of section.
+    // Lazy path starts at offset 20. So jump back `plt_entry_offset + 20`.
     let plt0_off = -(plt_entry_offset as i32 + 20);
-    let b = 0x50000000 | (((plt0_off >> 2) as u32 & 0x3ffffff) << 0);
+    let b_imm = plt0_off >> 2;
+    let b = 0x50000000 | encode_imm26(b_imm);
 
     code[16..20].copy_from_slice(&li.to_le_bytes());
     code[20..24].copy_from_slice(&b.to_le_bytes());
@@ -62,24 +68,39 @@ pub(crate) fn patch_plt_entry(
     target_got_vaddr: u64,
 ) {
     let pc = plt_entry_vaddr;
-    let off = (target_got_vaddr as i64 - pc as i64);
+    let off = target_got_vaddr as i64 - pc as i64;
 
     let imm20 = (off >> 2) as i32;
-    let pcaddi = 0x18000000u32 | (13 << 0) | ((imm20 as u32 & 0xfffff) << 5); // $t1 is $r13
-    let ld = 0x28c00000u32 | (13 << 0) | (13 << 5) | (((off & 0xfff) as u32) << 10);
+    let pcaddi = 0x18000000u32 | (14 << 0) | ((imm20 as u32 & 0xfffff) << 5); // pcaddi $t2, imm
+
+    // ld.d $t1, $t2, 0
+    // 注意：这里加载到 $t1 ($r13) 是用来跳转的
+    let ld = 0x28c00000u32 | (13 << 0) | (14 << 5) | (0 << 10);
+
+    // jr $t1
     let jirl = 0x4c000000u32 | (0 << 0) | (13 << 5) | (0 << 10);
 
     plt_data[plt_entry_off..plt_entry_off + 4].copy_from_slice(&pcaddi.to_le_bytes());
     plt_data[plt_entry_off + 4..plt_entry_off + 8].copy_from_slice(&ld.to_le_bytes());
     plt_data[plt_entry_off + 8..plt_entry_off + 12].copy_from_slice(&jirl.to_le_bytes());
+
+    // 偏移 12-16 保持原样，由 generate_plt_entry_code 填充 NOP
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // bl <offset>
-    // ret
-    let mut code = vec![0; 8];
-    code[0..4].copy_from_slice(&[0x00, 0x00, 0x00, 0x50]);
-    code[4..8].copy_from_slice(&[0x00, 0x00, 0x2b, 0x4c]);
+    let mut code = vec![0; 24];
+    // addi.d $sp, $sp, -16
+    code[0..4].copy_from_slice(&[0x63, 0xc0, 0xff, 0x02]);
+    // st.d $ra, $sp, 8
+    code[4..8].copy_from_slice(&[0x61, 0x20, 0xc0, 0x29]);
+    // bl 0 (Placeholder, patched later)
+    code[8..12].copy_from_slice(&[0x00, 0x00, 0x00, 0x50]);
+    // ld.d $ra, $sp, 8
+    code[12..16].copy_from_slice(&[0x61, 0x20, 0xc0, 0x28]);
+    // addi.d $sp, $sp, 16
+    code[16..20].copy_from_slice(&[0x63, 0x40, 0xc0, 0x02]);
+
+    code[20..24].copy_from_slice(&[0x20, 0x00, 0x00, 0x4c]);
     code
 }
 
@@ -89,27 +110,49 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    let off = (target_plt_vaddr as i64 - helper_vaddr as i64) / 4;
-    let insn = 0x50000000 | ((off & 0x3ffffff) as u32);
-    text_data[helper_text_off..helper_text_off + 4].copy_from_slice(&insn.to_le_bytes());
+    // bl is at helper_vaddr + 8
+    // 计算 bl 的 offset (26位, 4字节对齐)
+    let off = (target_plt_vaddr as i64 - (helper_vaddr + 8) as i64) / 4;
+    let insn = 0x54000000 | encode_imm26(off as i32);
+    text_data[helper_text_off + 8..helper_text_off + 12].copy_from_slice(&insn.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {
+    // 0: pcalau12i $a0, %hi20
+    // 4: addi.d $a0, $a0, %lo12
+    // 8: jirl $zero, $ra, 0 (Return)
+    // 12: nop
     let mut code = vec![0; 16];
-    // pcaddi $a0, 2
-    // ld.d $a0, $a0, 0
-    // jirl $zero, $ra, 0
-    code[0..4].copy_from_slice(&[0x44, 0x00, 0x00, 0x18]);
-    code[4..8].copy_from_slice(&[0x84, 0x00, 0xc0, 0x28]);
-    code[8..12].copy_from_slice(&[0x00, 0x00, 0x2b, 0x4c]);
+
+    // pcalau12i $a0, 0 -> 0x1a000004
+    code[0..4].copy_from_slice(&[0x04, 0x00, 0x00, 0x1a]);
+
+    // addi.d $a0, $a0, 0 -> 0x02c00084
+    code[4..8].copy_from_slice(&[0x84, 0x00, 0xc0, 0x02]);
+
+    // jirl $zero, $ra, 0 -> 0x4c000020
+    code[8..12].copy_from_slice(&[0x20, 0x00, 0x00, 0x4c]);
+
+    // nop -> 0x03400000
+    code[12..16].copy_from_slice(&[0x00, 0x00, 0x40, 0x03]);
+
     code
 }
 
 pub(crate) fn patch_ifunc_resolver(
     text_data: &mut [u8],
     offset: usize,
-    _resolver_vaddr: u64,
+    resolver_vaddr: u64,
     target_vaddr: u64,
 ) {
-    text_data[offset + 8..offset + 16].copy_from_slice(&target_vaddr.to_le_bytes());
+    let pc = resolver_vaddr;
+    // LoongArch pcalau12i + addi.d 组合计算绝对地址
+    let hi = (target_vaddr as i64 - (pc as i64 & !0xfff) + 0x800) >> 12;
+    let lo = target_vaddr as i64 & 0xfff;
+
+    let pcalau12i = 0x1a000000u32 | (4 << 0) | ((hi as u32 & 0xfffff) << 5);
+    let addi = 0x02c00000u32 | (4 << 0) | (4 << 5) | ((lo as u32 & 0xfff) << 10);
+
+    text_data[offset..offset + 4].copy_from_slice(&pcalau12i.to_le_bytes());
+    text_data[offset + 4..offset + 8].copy_from_slice(&addi.to_le_bytes());
 }

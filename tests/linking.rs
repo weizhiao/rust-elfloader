@@ -32,6 +32,8 @@ fn get_arch() -> Arch {
         Arch::Arm
     } else if cfg!(target_arch = "x86") {
         Arch::X86
+    } else if cfg!(target_arch = "loongarch64") {
+        Arch::Loongarch64
     } else {
         panic!("Unsupported architecture for dynamic linking test");
     }
@@ -44,10 +46,6 @@ extern "C" fn external_func() -> i32 {
 
 static mut EXTERNAL_VAR: i32 = 100;
 
-thread_local! {
-    static EXTERNAL_TLS: std::cell::Cell<i32> = std::cell::Cell::new(200);
-}
-
 pub fn get_symbol_lookup() -> (
     HashMap<&'static str, usize>,
     Arc<dyn Fn(&str) -> Option<*const ()> + Send + Sync>,
@@ -56,9 +54,6 @@ pub fn get_symbol_lookup() -> (
     symbol_map.insert(EXTERNAL_FUNC_NAME, external_func as usize);
     symbol_map.insert(EXTERNAL_FUNC_NAME2, external_func as usize);
     symbol_map.insert(EXTERNAL_VAR_NAME, &raw const EXTERNAL_VAR as usize);
-    EXTERNAL_TLS.with(|tls| {
-        symbol_map.insert(EXTERNAL_TLS_NAME, tls.as_ptr() as usize);
-    });
 
     let symbol_lookup_map = symbol_map.clone();
     let symbol_lookup = Arc::new(move |name: &str| -> Option<*const ()> {
@@ -146,8 +141,9 @@ fn run_dynamic_linking(is_lazy: bool) {
     println!("\n--- {} Test ---", test_name);
 
     // Save the ELF to a file for inspection
-    let elf_path = "/tmp/test_dynamic.so";
-    std::fs::write(elf_path, &elf_output.data).expect("Failed to write ELF to file");
+    std::fs::write("/tmp/test_dynamic.so", &elf_output.data).expect("Failed to write ELF to file");
+    std::fs::write("/tmp/helper.so", &helper_output.data)
+        .expect("Failed to write helper ELF to file");
 
     let (symbol_map, symbol_lookup) = get_symbol_lookup();
 

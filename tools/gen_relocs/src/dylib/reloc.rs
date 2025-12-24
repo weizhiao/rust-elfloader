@@ -70,7 +70,7 @@ impl RelocMetaData {
             debug_assert!(r.symbol_name.is_empty());
             relocs.push(Reloc {
                 sym_idx: 0,
-                offset: (1 + (got_slot_idx as u64)) * word_size,
+                offset: got_slot_idx * word_size,
                 addend: r.addend,
                 r_type: r.r_type,
                 sym_size: 0,
@@ -82,7 +82,7 @@ impl RelocMetaData {
             let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap() as u64;
             relocs.push(Reloc {
                 sym_idx,
-                offset: (1 + (got_slot_idx as u64)) * word_size,
+                offset: got_slot_idx * word_size,
                 addend: r.addend,
                 r_type: r.r_type,
                 sym_size: 0,
@@ -299,12 +299,8 @@ impl RelocMetaData {
                 let plt0_size = crate::arch::get_plt0_size(self.arch);
                 let plt_entry_size = crate::arch::get_plt_entry_size(self.arch);
                 let plt_entry_off = plt0_size + plt_idx as u64 * plt_entry_size;
-                let initial_val = if reloc.r_type.is_irelative_reloc(self.arch) {
-                    // For IRELATIVE, the GOT entry should be initialized with the resolver address
-                    reloc.addend as u64
-                } else {
-                    crate::arch::get_plt_got_initial_value(self.arch, plt_vaddr, plt_entry_off)
-                };
+                let initial_val =
+                    crate::arch::get_got_plt_init_value(self.arch, plt_vaddr, plt_entry_off);
                 let offset = reloc.offset as usize;
                 let got = allocator.get_mut(&self.got_plt_id);
                 let mut cursor = &mut got[offset..offset + (if is_64 { 8 } else { 4 })];
@@ -328,7 +324,8 @@ impl RelocMetaData {
             if !is_rela && !is_plt && !is_copy {
                 let offset = reloc.offset as usize;
                 // If i < copy_start, it's in GOT
-                if i < copy_start {
+                // If i >= copy_end && i < plt_start, it's IRELATIVE in GOT
+                if i < copy_start || (i >= copy_end && i < plt_start) {
                     let got = allocator.get_mut(&self.got_id);
                     let mut cursor = &mut got[offset..offset + (if is_64 { 8 } else { 4 })];
                     if is_64 {
@@ -385,7 +382,7 @@ impl RelocMetaData {
         for (i, _) in self.plt_relocs().iter().enumerate() {
             let got_off = (3 + i) * word_size;
             let initial_val =
-                crate::arch::get_plt_got_initial_value(arch, plt_vaddr, current_plt_off as u64);
+                crate::arch::get_got_plt_init_value(arch, plt_vaddr, current_plt_off as u64);
 
             if is_64 {
                 let mut cursor = &mut got_plt_data[got_off..got_off + 8];

@@ -339,8 +339,7 @@ impl SymTabMetadata {
         for reloc in relocs.iter().filter(|r| r.r_type.is_plt_reloc(arch)) {
             let func_name = reloc.symbol_name.as_str();
             let plt_sym_name = format!("{}@plt", func_name);
-            let plt_code =
-                arch::generate_plt_entry_code(arch, got_plt_idx, reloc_idx, self.plt_offset);
+            let plt_code = arch::generate_plt_entry_code(arch, reloc_idx, self.plt_offset);
             let plt_desc = SymbolDesc::plt_func(plt_sym_name.clone(), plt_code);
             let plt_idx = self.add_single_symbol(plt_desc);
             self.plt_entries.push((plt_idx, got_plt_idx));

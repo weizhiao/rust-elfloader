@@ -441,6 +441,12 @@ impl<D> RelocatedCommonPart<D> {
                         continue;
                     }
                 }
+                REL_IRELATIVE => {
+                    // Handle indirect function relocations
+                    let addr = RelocValue::new(base) + r_addend;
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    continue;
+                }
                 // No relocation needed
                 REL_NONE => continue,
                 // Unknown relocation type

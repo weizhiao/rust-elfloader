@@ -15,15 +15,20 @@ pub(crate) fn generate_plt0_code() -> Vec<u8> {
     plt_data
 }
 
-pub(crate) fn patch_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64, got_vaddr: u64) {
+pub(crate) fn patch_plt0(
+    plt_data: &mut [u8],
+    plt0_off: usize,
+    plt0_vaddr: u64,
+    got_plt_vaddr: u64,
+) {
     // GOT[1]
-    let target_got1 = got_vaddr + 8;
+    let target_got1 = got_plt_vaddr + 8;
     let rip1 = plt0_vaddr + 6;
     let off1 = (target_got1 as i64 - rip1 as i64) as i32;
     plt_data[plt0_off + 2..plt0_off + 6].copy_from_slice(&off1.to_le_bytes());
 
     // GOT[2]
-    let target_got2 = got_vaddr + 16;
+    let target_got2 = got_plt_vaddr + 16;
     let rip2 = plt0_vaddr + 12;
     let off2 = (target_got2 as i64 - rip2 as i64) as i32;
     plt_data[plt0_off + 8..plt0_off + 12].copy_from_slice(&off2.to_le_bytes());

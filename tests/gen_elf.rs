@@ -13,6 +13,8 @@ fn get_arch() -> Arch {
         Arch::Arm
     } else if cfg!(target_arch = "x86") {
         Arch::X86
+    } else if cfg!(target_arch = "loongarch64") {
+        Arch::Loongarch64
     } else {
         panic!("Unsupported architecture for dynamic linking test");
     }
@@ -37,7 +39,11 @@ fn gen_elf() {
     } else if arch == Arch::Arm {
         vec![0x2a, 0x00, 0xa0, 0xe3, 0x1e, 0xff, 0x2f, 0xe1]
     } else if arch == Arch::Loongarch64 {
-        vec![0x0a, 0xa8, 0x80, 0x02, 0x00, 0x00, 0x00, 0x4c]
+        // 1. addi.w $a0, $zero, 42  => 04 2a 80 02
+        //    (Put 42 into return register $a0/r4)
+        // 2. jirl $zero, $ra, 0     => 20 00 00 4c
+        //    (Return to address in $ra/r1)
+        vec![0x04, 0xa8, 0x80, 0x02, 0x20, 0x00, 0x00, 0x4c]
     } else {
         panic!("Unsupported architecture");
     };
@@ -82,7 +88,7 @@ fn gen_elf() {
 
     let relocs = vec![
         RelocEntry::with_name("callee", rel_jump_slot),
-       // RelocEntry::new(rel_irelative),
+        RelocEntry::new(rel_irelative),
     ];
 
     let output = writer

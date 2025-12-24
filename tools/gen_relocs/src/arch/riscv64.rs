@@ -66,10 +66,15 @@ pub(crate) fn generate_plt0_code() -> Vec<u8> {
     code
 }
 
-pub(crate) fn patch_plt0(plt_data: &mut [u8], plt0_off: usize, plt0_vaddr: u64, got_vaddr: u64) {
+pub(crate) fn patch_plt0(
+    plt_data: &mut [u8],
+    plt0_off: usize,
+    plt0_vaddr: u64,
+    got_plt_vaddr: u64,
+) {
     let pc = plt0_vaddr;
     // Calculate offset to GOT[0]
-    let (hi, lo) = split_addr(pc, got_vaddr);
+    let (hi, lo) = split_addr(pc, got_plt_vaddr);
 
     // 1. auipc t2, hi
     let auipc = encode_utype(0x17, REG_T2, hi);

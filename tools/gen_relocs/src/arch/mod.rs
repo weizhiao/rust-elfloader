@@ -132,6 +132,42 @@ impl RelocType {
             Arch::Loongarch64 => r_type == R_LARCH_COPY,
         }
     }
+
+    pub(crate) fn is_tls_reloc(&self, arch: Arch) -> bool {
+        let r_type = self.as_u32();
+        match arch {
+            Arch::X86_64 => {
+                r_type == R_X86_64_DTPMOD64
+                    || r_type == R_X86_64_DTPOFF64
+                    || r_type == R_X86_64_TPOFF64
+            }
+            Arch::X86 => {
+                r_type == R_386_TLS_DTPMOD32
+                    || r_type == R_386_TLS_DTPOFF32
+                    || r_type == R_386_TLS_TPOFF
+            }
+            Arch::Aarch64 => {
+                r_type == R_AARCH64_TLS_DTPMOD
+                    || r_type == R_AARCH64_TLS_DTPREL
+                    || r_type == R_AARCH64_TLS_TPREL
+            }
+            Arch::Arm => {
+                r_type == R_ARM_TLS_DTPMOD32
+                    || r_type == R_ARM_TLS_DTPOFF32
+                    || r_type == R_ARM_TLS_TPOFF32
+            }
+            Arch::Riscv64 | Arch::Riscv32 => {
+                r_type == R_RISCV_TLS_DTPMOD64
+                    || r_type == R_RISCV_TLS_DTPREL64
+                    || r_type == R_RISCV_TLS_TPREL64
+            }
+            Arch::Loongarch64 => {
+                r_type == R_LARCH_TLS_DTPMOD64
+                    || r_type == R_LARCH_TLS_DTPREL64
+                    || r_type == R_LARCH_TLS_TPREL64
+            }
+        }
+    }
 }
 
 /// Calculate addend value for a relocation based on type and section virtual addresses
@@ -155,6 +191,8 @@ pub fn calculate_addend(
             data_vaddr as i64
         }
     } else if r_type.is_copy_reloc(arch) {
+        0
+    } else if r_type.is_tls_reloc(arch) {
         0
     } else {
         reloc_offset as i64
@@ -260,22 +298,15 @@ pub fn generate_plt0_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn generate_plt_entry_code(
-    arch: Arch,
-    got_plt_idx: u64,
-    reloc_idx: u32,
-    plt_entry_offset: u64,
-) -> Vec<u8> {
+pub fn generate_plt_entry_code(arch: Arch, reloc_idx: u32, plt_entry_offset: u64) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::generate_plt_entry_code(reloc_idx, plt_entry_offset),
         Arch::X86 => x86::generate_plt_entry_code(reloc_idx, plt_entry_offset),
         Arch::Aarch64 => aarch64::generate_plt_entry_code(),
-        Arch::Arm => arm::generate_plt_entry_code(got_plt_idx, reloc_idx, plt_entry_offset),
+        Arch::Arm => arm::generate_plt_entry_code(),
         Arch::Riscv64 => riscv64::generate_plt_entry_code(),
         Arch::Riscv32 => riscv32::generate_plt_entry_code(reloc_idx, plt_entry_offset),
-        Arch::Loongarch64 => {
-            loongarch64::generate_plt_entry_code(got_plt_idx, reloc_idx, plt_entry_offset)
-        }
+        Arch::Loongarch64 => loongarch64::generate_plt_entry_code(reloc_idx, plt_entry_offset),
     }
 }
 
@@ -328,11 +359,13 @@ pub fn patch_plt_entry(
     }
 }
 
-pub fn get_plt_got_initial_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) -> u64 {
+pub fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) -> u64 {
+    // The initial value to be placed in the GOT.PLT entrys points to the instruction
+    // in the PLT entry that jumps to the resolver code. This varies by architecture.
     match arch {
         Arch::X86_64 | Arch::X86 => plt_vaddr + plt_entry_off + 6,
-        Arch::Aarch64 | Arch::Riscv64 => plt_vaddr,
-        Arch::Riscv32 | Arch::Loongarch64 | Arch::Arm => plt_vaddr + plt_entry_off + 16,
+        Arch::Aarch64 | Arch::Riscv64 | Arch::Arm => plt_vaddr,
+        Arch::Riscv32 | Arch::Loongarch64 => plt_vaddr + plt_entry_off + 16,
     }
 }
 
@@ -345,7 +378,7 @@ pub fn get_plt0_size(arch: Arch) -> u64 {
 
 pub fn get_plt_entry_size(arch: Arch) -> u64 {
     match arch {
-        Arch::X86_64 | Arch::X86 | Arch::Aarch64 | Arch::Riscv64 => 16,
-        Arch::Riscv32 | Arch::Loongarch64 | Arch::Arm => 32,
+        Arch::X86_64 | Arch::X86 | Arch::Aarch64 | Arch::Riscv64 | Arch::Arm => 16,
+        Arch::Riscv32 | Arch::Loongarch64 => 32,
     }
 }
