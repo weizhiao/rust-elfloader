@@ -16,20 +16,55 @@ pub const REL_TPOFF: u32 = R_ARM_TLS_TPOFF32;
 pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 
+#[cfg(target_feature = "vfp2")]
 #[unsafe(naked)]
 pub extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
-    push {{r0, r1, r2, r3, r4}}
-    ldr r0, [lr, #-4]
-    add r1, lr, #4 
-	sub r1, ip, r1
-    lsr r1, r1, 2
-    bl {0}
-    mov	ip, r0
-    pop	{{r0, r1, r2, r3, r4, lr}}
-    bx ip
-	",
+        // sp has original lr (4 bytes)
+        // push r0-r4 (5 regs, 20 bytes). sp aligned to 8 bytes (aligned - 24).
+        push {{r0, r1, r2, r3, r4}}
+        vpush {{d0, d1, d2, d3, d4, d5, d6, d7}}
+        
+        // r0 = link_map (GOT[1])
+        ldr r0, [lr, #-4]
+        
+        // r1 = index
+        add r1, lr, #4
+        sub r1, ip, r1
+        lsr r1, r1, #2
+        
+        blx {0}
+        
+        mov ip, r0
+        
+        vpop {{d0, d1, d2, d3, d4, d5, d6, d7}}
+        pop {{r0, r1, r2, r3, r4, lr}}
+        bx ip
+        ",
+        sym crate::relocation::dynamic_link::dl_fixup,
+    )
+}
+
+#[cfg(not(target_feature = "vfp2"))]
+#[unsafe(naked)]
+pub extern "C" fn dl_runtime_resolve() {
+    core::arch::naked_asm!(
+        "
+        push {{r0, r1, r2, r3, r4}}
+        
+        ldr r0, [lr, #-4]
+        
+        add r1, lr, #4
+        sub r1, ip, r1
+        lsr r1, r1, #2
+        
+        blx {0}
+        
+        mov ip, r0
+        pop {{r0, r1, r2, r3, r4, lr}}
+        bx ip
+        ",
         sym crate::relocation::dynamic_link::dl_fixup,
     )
 }

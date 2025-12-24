@@ -372,13 +372,15 @@ pub fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) ->
 pub fn get_plt0_size(arch: Arch) -> u64 {
     match arch {
         Arch::X86_64 | Arch::X86 => 16,
-        Arch::Aarch64 | Arch::Riscv64 | Arch::Riscv32 | Arch::Loongarch64 | Arch::Arm => 32,
+        Arch::Arm => 20,
+        Arch::Aarch64 | Arch::Riscv64 | Arch::Riscv32 | Arch::Loongarch64 => 32,
     }
 }
 
 pub fn get_plt_entry_size(arch: Arch) -> u64 {
     match arch {
-        Arch::X86_64 | Arch::X86 | Arch::Aarch64 | Arch::Riscv64 | Arch::Arm => 16,
+        Arch::Arm => 12,
+        Arch::X86_64 | Arch::X86 | Arch::Aarch64 | Arch::Riscv64 => 16,
         Arch::Riscv32 | Arch::Loongarch64 => 32,
     }
 }

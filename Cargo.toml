@@ -106,8 +106,6 @@ use-syscall = ["dep:syscalls"]
 version = []
 # Enable logging.
 log = ["dep:log"]
-# Use rel as the relocation type
-rel = []
 # support target without native pointer size atomic operation
 portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
 

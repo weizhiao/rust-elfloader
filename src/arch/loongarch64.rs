@@ -55,9 +55,10 @@ pub extern "C" fn dl_runtime_resolve() {
 
         move    $a0, $t0
         srli.d  $a1, $t1, 3
-        bl    {0}
+        la.local $t2, {0}
+        jirl    $ra, $t2, 0
 
-        move    $t0, $a0
+        move    $t2, $a0
 
         ld.d    $ra, $sp, 0
         ld.d    $a0, $sp, 8
@@ -81,7 +82,7 @@ pub extern "C" fn dl_runtime_resolve() {
 
         addi.d  $sp, $sp, 224
 
-        jr      $t0
+        jr      $t2
 	",
         sym crate::relocation::dynamic_link::dl_fixup,
     )

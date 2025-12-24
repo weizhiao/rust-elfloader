@@ -377,9 +377,9 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     }
 }
 
-#[cfg(all(not(feature = "rel"), not(target_arch = "x86"), not(target_arch = "arm")))]
+#[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
 pub type ElfRelType = ElfRela;
-#[cfg(any(feature = "rel", target_arch = "x86", target_arch = "arm"))]
+#[cfg(any(target_arch = "x86", target_arch = "arm"))]
 pub type ElfRelType = ElfRel;
 
 impl ElfRelType {

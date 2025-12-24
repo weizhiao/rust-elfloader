@@ -32,7 +32,7 @@ pub(crate) fn patch_plt0(
 }
 
 pub(crate) fn generate_plt_entry_code() -> Vec<u8> {
-    let mut code = vec![0; 16];
+    let mut code = vec![0; 12];
 
     // 1. add ip, pc, #HIGH
     code[0..4].copy_from_slice(&[0x00, 0xc0, 0x8f, 0xe2]);
@@ -79,8 +79,8 @@ pub(crate) fn patch_plt_entry(
         let high_part = residual & 0xFFF00000; // 这是一个粗略的假设
         let mid_part = residual - high_part;
 
-        let enc_h = encode_arm_imm(high_part).unwrap_or(0);
-        let enc_m = encode_arm_imm(mid_part).unwrap_or(0);
+        let enc_h = encode_arm_imm(high_part).expect("Failed to encode high part of PLT offset");
+        let enc_m = encode_arm_imm(mid_part).expect("Failed to encode mid part of PLT offset");
         (enc_h, enc_m)
     };
 
@@ -112,8 +112,10 @@ fn encode_arm_imm(mut n: u32) -> Option<u32> {
         if n <= 0xFF {
             // 编码格式: rot 在 [11:8], imm 在 [7:0]
             // ARM 解码逻辑是: imm ROR (rot * 2)
-            // 所以我们这里计算出的 r (左移次数) 对应 ARM 的 rot 应该是 (16 - r)
-            let rot_code = if r == 0 { 0 } else { 16 - r };
+            // 我们通过 rotate_left(2*r) 找到了 imm，使得 n.rotate_left(2*r) = imm
+            // 即 n = imm.rotate_right(2*r) = imm ROR (2*r)
+            // 所以 rot 应该等于 r
+            let rot_code = r;
             return Some(n | (rot_code << 8));
         }
         n = n.rotate_left(2);

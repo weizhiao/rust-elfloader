@@ -309,6 +309,10 @@ impl DylibWriter {
                 // EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE
                 0x0001 | 0x0004
             }
+            Arch::Arm => {
+                // EF_ARM_EABI_VER5 | EF_ARM_ABI_FLOAT_HARD
+                0x05000000 | 0x00000400
+            }
             _ => 0,
         }
     }
