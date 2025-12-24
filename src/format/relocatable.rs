@@ -7,16 +7,13 @@
 use core::{fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
 
 use crate::{
-    CoreComponent, Hook, Loader, Result, UserData,
+    CoreComponent, Hook, Loader, Result,
     arch::{ElfRelType, ElfShdr, ElfSymbol},
     format::{CoreComponentInner, ElfType, Relocated},
     loader::FnHandler,
     mmap::Mmap,
     object::ElfObject,
-    relocation::{
-        Relocatable, RelocationHandler, SymbolLookup, dynamic_link::LazyScope,
-        static_link::StaticRelocation,
-    },
+    relocation::{Relocatable, RelocationHandler, SymbolLookup, static_link::StaticRelocation},
     segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
@@ -24,11 +21,11 @@ use crate::{
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use elf::abi::{SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
+use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-impl<M: Mmap, H: Hook> Loader<M, H> {
+impl<M: Mmap, H: Hook<()>> Loader<M, H, ()> {
     /// Load a relocatable ELF file into memory
     ///
     /// This method loads a relocatable ELF file (typically a .o file) into memory
@@ -40,7 +37,7 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     /// * `lazy_bind` - Optional override for lazy binding behavior
     ///
     /// # Returns
-    /// * `Ok(ElfRelocatable)` - The loaded relocatable ELF file
+    /// * `Ok(ElfRelocatable<D>)` - The loaded relocatable ELF file
     /// * `Err(Error)` - If loading fails
     pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
@@ -132,7 +129,7 @@ impl RelocatableBuilder {
                     let symbols: &mut [ElfSymbol] = shdr.content_mut();
                     // Update symbol values with section base offsets
                     for symbol in symbols.iter_mut() {
-                        if symbol.st_type() == STT_FILE {
+                        if symbol.st_type() == STT_FILE || symbol.st_shndx() == SHN_UNDEF as usize {
                             continue;
                         }
                         let section_base = shdrs[symbol.st_shndx()].sh_addr as usize - base;
@@ -198,7 +195,7 @@ impl RelocatableBuilder {
             fini: None,
             fini_array: None,
             fini_handler: self.fini_fn,
-            user_data: UserData::empty(),
+            user_data: (),
             segments: self.segments,
             elf_type: ElfType::Relocatable,
         };
@@ -224,7 +221,7 @@ impl RelocatableBuilder {
 /// all the necessary information to perform the relocation process.
 pub struct ElfRelocatable {
     /// Core component containing basic ELF information
-    pub(crate) core: CoreComponent,
+    pub(crate) core: CoreComponent<()>,
 
     /// Static relocation information
     pub(crate) relocation: StaticRelocation,
@@ -243,7 +240,7 @@ pub struct ElfRelocatable {
 }
 
 impl Deref for ElfRelocatable {
-    type Target = CoreComponent;
+    type Target = CoreComponent<()>;
 
     fn deref(&self) -> &Self::Target {
         &self.core
@@ -259,21 +256,22 @@ impl Debug for ElfRelocatable {
     }
 }
 
-impl Relocatable for ElfRelocatable {
-    type Output = Relocated;
+impl Relocatable<()> for ElfRelocatable {
+    type Output = Relocated<()>;
 
-    fn relocate<S, PreH, PostH>(
+    fn relocate<S, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
+        scope: &[Relocated<()>],
         pre_find: &S,
         _pre_handler: PreH,
         _post_handler: PostH,
         _lazy: Option<bool>,
-        _lazy_scope: Option<LazyScope>,
+        _lazy_scope: Option<LazyS>,
         _use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         S: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {

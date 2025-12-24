@@ -20,29 +20,100 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 pub extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
-// 保存参数寄存器
-    sub sp,sp,8*8
-    stp x0,x1,[sp,16*0]
-    stp x2,x3,[sp,16*1]
-    stp x4,x5,[sp,16*2]
-    stp x6,x7,[sp,16*3]
-// 读取需要的参数
-    ldr x0,[x16,-8]
-    ldr x1,[sp,16*4]
-    sub x1,x1,x16
-    sub x1,x1,8
-    lsr x1,x1,3
-    bl	dl_fixup
-    mov x16,x0
-// 恢复参数寄存器
-    ldp x0,x1,[sp,16*0]
-    ldp x2,x3,[sp,16*1]
-    ldp x4,x5,[sp,16*2]
-    ldp x6,x7,[sp,16*3]
-    ldr x30,[sp,16*4+8]
-// 这里要将plt代码压入栈中的东西也弹出去
-    add sp,sp,8*10
-    br x16
-	"
+    // ==========================================
+    // 1. 保存上下文 (Context Save)
+    // ==========================================
+    // 需要保存:
+    // - x0-x7 (整数参数)
+    // - x8 (间接返回值地址，必须保存!)
+    // - q0-q7 (浮点/向量参数，必须保存!)
+    // 总计空间需求:
+    // Q regs: 8 * 16 = 128 bytes
+    // X regs: 9 * 8  = 72 bytes
+    // Padding: 对齐到 16 字节 -> 总共需要 208 字节
+    
+    sub sp, sp, #208
+
+    // 保存整数寄存器
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+    str x8,     [sp, #64]
+
+    // 保存向量寄存器
+    stp q0, q1, [sp, #80]
+    stp q2, q3, [sp, #112]
+    stp q4, q5, [sp, #144]
+    stp q6, q7, [sp, #176]
+
+    // ==========================================
+    // 2. 准备 dl_fixup 参数
+    // ==========================================
+    // 目标: dl_fixup(struct link_map *l, ElfW(Word) reloc_index)
+    
+    // 【参数 1: link_map】
+    // 标准 PLT0 保证 x16 指向 GOT[2]。
+    // link_map 位于 GOT[1]，即 x16 - 8。
+    ldr x0, [x16, #-8]
+
+    // 【参数 2: reloc_index】
+    // 计算公式: index = (&GOT[n] - &GOT[3]) / 8
+    // - &GOT[n] 存储在 [sp + 208] (PLT0 压入的 x16)
+    // - &GOT[3] 等于 x16 + 8 (因为 x16 是 GOT[2])
+    
+    ldr x10, [sp, #208]   // 从旧栈顶读取 &GOT[n]
+    add x11, x16, #8      // 计算 &GOT[3] 的地址
+    sub x1, x10, x11      // x1 = 字节偏移量
+    lsr x1, x1, #3        // x1 = 偏移量 / 8 (得到索引)
+
+    // 调用解析函数
+    bl {dl_fixup}
+
+    // x0 返回解析后的实际函数地址，暂存到 x17 (x17 是 caller-saved,可以随便用)
+    mov x17, x0
+
+    // ==========================================
+    // 3. 恢复上下文 (Context Restore)
+    // ==========================================
+    ldp q0, q1, [sp, #80]
+    ldp q2, q3, [sp, #112]
+    ldp q4, q5, [sp, #144]
+    ldp q6, q7, [sp, #176]
+
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
+    ldp x4, x5, [sp, #32]
+    ldp x6, x7, [sp, #48]
+    ldr x8,     [sp, #64]
+
+    // ==========================================
+    // 4. 栈清理与跳转
+    // ==========================================
+    // 回收我们分配的 208 字节
+    add sp, sp, #208
+
+    // 弹出 PLT0 压入的 pair (x16, lr)
+    // 注意：x16 (GOT entry) 已经没用了，但 LR (x30) 必须恢复
+    ldp x16, x30, [sp], #16
+
+    // 跳转到解析后的地址
+    br x17
+        ",
+        dl_fixup = sym crate::relocation::dynamic_link::dl_fixup,
     )
+}
+
+/// Map aarch64 relocation type to human readable name
+pub fn rel_type_to_str(r_type: usize) -> &'static str {
+    match r_type as u32 {
+        R_AARCH64_NONE => "R_AARCH64_NONE",
+        R_AARCH64_ABS64 => "R_AARCH64_ABS64",
+        R_AARCH64_GLOB_DAT => "R_AARCH64_GLOB_DAT",
+        R_AARCH64_RELATIVE => "R_AARCH64_RELATIVE",
+        R_AARCH64_JUMP_SLOT => "R_AARCH64_JUMP_SLOT",
+        R_AARCH64_IRELATIVE => "R_AARCH64_IRELATIVE",
+        R_AARCH64_COPY => "R_AARCH64_COPY",
+        _ => "UNKNOWN",
+    }
 }

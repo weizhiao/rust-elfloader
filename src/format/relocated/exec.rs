@@ -11,25 +11,26 @@ use crate::{
     mmap::Mmap,
     object::ElfObject,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, SymbolLookup, dynamic_link::LazyScope},
+    relocation::{Relocatable, RelocationHandler, SymbolLookup},
 };
 use core::{fmt::Debug, ops::Deref};
 
-impl Relocatable for ElfExec {
-    type Output = RelocatedExec;
+impl<D: 'static> Relocatable<D> for ElfExec<D> {
+    type Output = RelocatedExec<D>;
 
-    fn relocate<S, PreH, PostH>(
+    fn relocate<S, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
+        scope: &[Relocated<D>],
         pre_find: &S,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
-        lazy_scope: Option<LazyScope>,
+        lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         S: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
@@ -49,8 +50,8 @@ impl Relocatable for ElfExec {
     }
 }
 
-impl Deref for ElfExec {
-    type Target = RelocatedCommonPart;
+impl<D> Deref for ElfExec<D> {
+    type Target = RelocatedCommonPart<D>;
 
     /// Dereferences to the underlying RelocatedCommonPart
     ///
@@ -67,12 +68,15 @@ impl Deref for ElfExec {
 /// into memory but has not yet undergone relocation. It contains all the
 /// necessary information to perform relocation and prepare the executable
 /// for execution.
-pub struct ElfExec {
+pub struct ElfExec<D>
+where
+    D: 'static,
+{
     /// The common part containing basic ELF object information
-    inner: RelocatedCommonPart,
+    inner: RelocatedCommonPart<D>,
 }
 
-impl Debug for ElfExec {
+impl<D> Debug for ElfExec<D> {
     /// Formats the ElfExec for debugging purposes
     ///
     /// This implementation provides a debug representation that includes
@@ -85,7 +89,7 @@ impl Debug for ElfExec {
     }
 }
 
-impl<M: Mmap, H: Hook> Loader<M, H> {
+impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
     /// Load an executable file into memory
     ///
     /// This method loads an executable ELF file into memory and prepares it
@@ -98,7 +102,7 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     /// # Returns
     /// * `Ok(ElfExec)` - The loaded executable
     /// * `Err(Error)` - If loading fails
-    pub fn load_exec(&mut self, mut object: impl ElfObject) -> Result<ElfExec> {
+    pub fn load_exec(&mut self, mut object: impl ElfObject) -> Result<ElfExec<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -121,14 +125,14 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
 /// and relocated in memory, making it ready for execution. It contains
 /// the entry point and other information needed to run the executable.
 #[derive(Clone)]
-pub struct RelocatedExec {
+pub struct RelocatedExec<D> {
     /// Entry point of the executable
     entry: usize,
     /// The relocated ELF object
-    inner: Relocated,
+    inner: Relocated<D>,
 }
 
-impl RelocatedExec {
+impl<D> RelocatedExec<D> {
     /// Gets the entry point of the executable
     ///
     /// # Returns
@@ -139,7 +143,7 @@ impl RelocatedExec {
     }
 }
 
-impl Debug for RelocatedExec {
+impl<D> Debug for RelocatedExec<D> {
     /// Formats the RelocatedExec for debugging purposes
     ///
     /// This implementation delegates to the inner Relocated object's
@@ -149,8 +153,8 @@ impl Debug for RelocatedExec {
     }
 }
 
-impl Deref for RelocatedExec {
-    type Target = CoreComponent;
+impl<D> Deref for RelocatedExec<D> {
+    type Target = CoreComponent<D>;
 
     /// Dereferences to the underlying CoreComponent
     ///

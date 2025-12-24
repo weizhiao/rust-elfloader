@@ -20,7 +20,7 @@ license = "MIT/Apache-2.0"
 rust-version = "1.88.0"
 
 [workspace]
-members = ["crates/windows-elf-loader", "crates/mini-loader"]
+members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
 
 [workspace.dependencies]
 syscalls = { version = "0.7.0", default-features = false }
@@ -89,7 +89,8 @@ delegate = "0.13.3"
 criterion = "0.5.1"
 libloading = "0.8.5"
 env_logger = "0.11.6"
-rstest = "0.26.1"
+gen-elf = { path = "tools/gen-elf" }
+object = "0.38.0"
 
 [[bench]]
 name = "benchmark"
@@ -104,8 +105,6 @@ use-syscall = ["dep:syscalls"]
 version = []
 # Enable logging.
 log = ["dep:log"]
-# Use rel as the relocation type
-rel = []
 # support target without native pointer size atomic operation
 portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
 

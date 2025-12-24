@@ -3,7 +3,6 @@ use crate::{
     arch::{ElfRelType, ElfSymbol},
     format::Relocated,
     relocate_error,
-    relocation::dynamic_link::LazyScope,
     symbol::{SymbolInfo, SymbolTable},
 };
 use alloc::{format, string::ToString, vec::Vec};
@@ -60,25 +59,26 @@ pub trait RelocationHandler {
     /// - `Some(Ok(Some(idx)))`: Handled successfully and the library at `scope[idx]` is used
     /// - `Some(Err(e))`: Handled but failed
     /// - `None`: Not handled (fallthrough)
-    fn handle(&mut self, ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>>;
+    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>>;
 }
 
 /// Context for relocation operations
-struct RelocationContext<'a, 'find, S: ?Sized, PreH: ?Sized, PostH: ?Sized> {
-    scope: &'a [Relocated],
+struct RelocationContext<'a, 'find, D, S: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+    scope: &'a [Relocated<D>],
     pre_find: &'find S,
     pre_handler: &'a mut PreH,
     post_handler: &'a mut PostH,
     dependency_flags: Vec<bool>,
 }
 
-impl<'a, 'find, S: ?Sized, PreH: ?Sized, PostH: ?Sized> RelocationContext<'a, 'find, S, PreH, PostH>
+impl<'a, 'find, D, S: ?Sized, PreH: ?Sized, PostH: ?Sized>
+    RelocationContext<'a, 'find, D, S, PreH, PostH>
 where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     #[inline]
-    fn handle_pre(&mut self, hctx: &RelocHandleContext<'_>) -> Result<bool> {
+    fn handle_pre(&mut self, hctx: &RelocHandleContext<'_, D>) -> Result<bool> {
         let opt = self.pre_handler.handle(hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -90,7 +90,7 @@ where
     }
 
     #[inline]
-    fn handle_post(&mut self, hctx: &RelocHandleContext<'_>) -> Result<bool> {
+    fn handle_post(&mut self, hctx: &RelocHandleContext<'_, D>) -> Result<bool> {
         let opt = self.post_handler.handle(hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -104,16 +104,16 @@ where
 
 /// Context passed to `RelocationHandler::handle` containing the relocation
 /// entry, the library where the relocation appears and the current scope.
-pub struct RelocHandleContext<'a> {
+pub struct RelocHandleContext<'a, D> {
     rel: &'a ElfRelType,
-    lib: &'a CoreComponent,
-    scope: &'a [Relocated],
+    lib: &'a CoreComponent<D>,
+    scope: &'a [Relocated<D>],
 }
 
-impl<'a> RelocHandleContext<'a> {
+impl<'a, D> RelocHandleContext<'a, D> {
     /// Construct a new `RelocHandleContext`.
     #[inline]
-    fn new(rel: &'a ElfRelType, lib: &'a CoreComponent, scope: &'a [Relocated]) -> Self {
+    fn new(rel: &'a ElfRelType, lib: &'a CoreComponent<D>, scope: &'a [Relocated<D>]) -> Self {
         Self { rel, lib, scope }
     }
 
@@ -125,42 +125,33 @@ impl<'a> RelocHandleContext<'a> {
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &CoreComponent {
+    pub fn lib(&self) -> &CoreComponent<D> {
         self.lib
     }
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &[Relocated] {
+    pub fn scope(&self) -> &[Relocated<D>] {
         self.scope
     }
 
     /// Find symbol definition in the current scope
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<(SymDef<'a>, Option<usize>)> {
+    pub fn find_symdef(&self, r_sym: usize) -> Option<(SymDef<'a, D>, Option<usize>)> {
         let symbol = self.lib.symtab().unwrap();
         let (sym, syminfo) = symbol.symbol_idx(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
     }
 }
 
-impl<F> RelocationHandler for F
-where
-    F: FnMut(&RelocHandleContext<'_>) -> Option<Result<Option<usize>>> + ?Sized,
-{
-    fn handle(&mut self, ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>> {
-        self(ctx)
-    }
-}
-
 impl RelocationHandler for () {
-    fn handle(&mut self, _ctx: &RelocHandleContext<'_>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&mut self, _ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
         None
     }
 }
 
 /// A trait for objects that can be relocated
-pub trait Relocatable: Sized {
+pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object
     type Output;
 
@@ -169,48 +160,49 @@ pub trait Relocatable: Sized {
     /// This method returns a `Relocator` that allows configuring the relocation
     /// process with fine-grained control, such as setting a custom unknown relocation
     /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
-    fn relocator(self) -> Relocator<'static, Self, (), (), ()> {
+    fn relocator(self) -> Relocator<Self, (), (), (), (), D> {
         Relocator::new(self)
     }
 
     /// Execute the relocation process
     #[doc(hidden)]
-    fn relocate<S, PreH, PostH>(
+    fn relocate<S, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
+        scope: &[Relocated<D>],
         pre_find: &S,
         pre_handler: PreH,
         post_handler: PostH,
         lazy: Option<bool>,
-        lazy_scope: Option<LazyScope>,
+        lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         S: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler;
 }
 
 /// A builder for configuring and executing the relocation process
-pub struct Relocator<'find, T, S, PreH, PostH>
+pub struct Relocator<T, PreS, LazyS, PreH, PostH, D = ()>
 where
-    T: Relocatable,
-    S: SymbolLookup,
+    T: Relocatable<D>,
+    PreS: SymbolLookup,
+    LazyS: SymbolLookup,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     object: T,
-    scope: Vec<Relocated>,
-    pre_find: S,
+    scope: Vec<Relocated<D>>,
+    pre_find: PreS,
     pre_handler: PreH,
     post_handler: PostH,
     lazy: Option<bool>,
-    lazy_scope: Option<LazyScope>,
+    lazy_scope: Option<LazyS>,
     use_scope_as_lazy: bool,
-    _marker: core::marker::PhantomData<&'find ()>,
 }
 
-impl<'find, T: Relocatable> Relocator<'find, T, (), (), ()> {
+impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), D> {
     /// Create a new relocator builder
     pub fn new(object: T) -> Self {
         Self {
@@ -222,23 +214,23 @@ impl<'find, T: Relocatable> Relocator<'find, T, (), (), ()> {
             lazy: None,
             lazy_scope: None,
             use_scope_as_lazy: false,
-            _marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<'find, T, S, PreH, PostH> Relocator<'find, T, S, PreH, PostH>
+impl<T, PreS, LazyS, PreH, PostH, D> Relocator<T, PreS, LazyS, PreH, PostH, D>
 where
-    T: Relocatable,
-    S: SymbolLookup,
+    T: Relocatable<D>,
+    PreS: SymbolLookup,
+    LazyS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     /// Set the preferred symbol lookup function
-    pub fn symbols<S2: SymbolLookup + 'find>(
-        self,
-        pre_find: S2,
-    ) -> Relocator<'find, T, S2, PreH, PostH> {
+    pub fn symbols<S2>(self, pre_find: S2) -> Relocator<T, S2, LazyS, PreH, PostH, D>
+    where
+        S2: SymbolLookup,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,
@@ -248,7 +240,6 @@ where
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
             use_scope_as_lazy: self.use_scope_as_lazy,
-            _marker: core::marker::PhantomData,
         }
     }
 
@@ -256,17 +247,20 @@ where
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: core::borrow::Borrow<Relocated>,
+        R: core::borrow::Borrow<Relocated<D>>,
     {
         self.scope = scope.into_iter().map(|r| r.borrow().clone()).collect();
         self
     }
 
     /// Set the pre-processing relocation handler (pre_handler)
-    pub fn pre_handler<NewPreH: RelocationHandler + 'find>(
+    pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
-    ) -> Relocator<'find, T, S, NewPreH, PostH> {
+    ) -> Relocator<T, PreS, LazyS, NewPreH, PostH, D>
+    where
+        NewPreH: RelocationHandler,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,
@@ -276,15 +270,17 @@ where
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
             use_scope_as_lazy: self.use_scope_as_lazy,
-            _marker: core::marker::PhantomData,
         }
     }
 
     /// Set the post-processing relocation handler (post_handler)
-    pub fn post_handler<NewPostH: RelocationHandler + 'find>(
+    pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
-    ) -> Relocator<'find, T, S, PreH, NewPostH> {
+    ) -> Relocator<T, PreS, LazyS, PreH, NewPostH, D>
+    where
+        NewPostH: RelocationHandler,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,
@@ -294,7 +290,6 @@ where
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
             use_scope_as_lazy: self.use_scope_as_lazy,
-            _marker: core::marker::PhantomData,
         }
     }
 
@@ -305,7 +300,13 @@ where
     }
 
     /// Set the lazy scope (symbol lookup for lazy binding)
-    pub fn lazy_scope(self, scope: Option<LazyScope>) -> Relocator<'find, T, S, PreH, PostH> {
+    pub fn lazy_scope<NewLazyS>(
+        self,
+        scope: NewLazyS,
+    ) -> Relocator<T, PreS, NewLazyS, PreH, PostH, D>
+    where
+        NewLazyS: SymbolLookup,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,
@@ -313,9 +314,8 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             lazy: self.lazy,
-            lazy_scope: scope,
+            lazy_scope: Some(scope),
             use_scope_as_lazy: self.use_scope_as_lazy,
-            _marker: core::marker::PhantomData,
         }
     }
 
@@ -326,7 +326,10 @@ where
     }
 
     /// Execute the relocation process
-    pub fn relocate(self) -> Result<T::Output> {
+    pub fn relocate(self) -> Result<T::Output>
+    where
+        D: 'static,
+    {
         self.object.relocate(
             &self.scope,
             &self.pre_find,
@@ -428,12 +431,12 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
     }
 }
 
-pub struct SymDef<'lib> {
+pub struct SymDef<'lib, D> {
     pub sym: Option<&'lib ElfSymbol>,
-    pub lib: &'lib CoreComponent,
+    pub lib: &'lib CoreComponent<D>,
 }
 
-impl<'temp> SymDef<'temp> {
+impl<'temp, D> SymDef<'temp, D> {
     // 获取符号的真实地址(base + st_value)
     pub fn convert(self) -> *const () {
         if likely(self.sym.is_some()) {
@@ -455,31 +458,35 @@ impl<'temp> SymDef<'temp> {
 }
 
 #[cold]
-pub(crate) fn reloc_error<E: core::fmt::Display>(
-    r_type: usize,
-    r_sym: usize,
+pub(crate) fn reloc_error<D, E: core::fmt::Display>(
+    rel: &ElfRelType,
     err: E,
-    lib: &CoreComponent,
+    lib: &CoreComponent<D>,
 ) -> Error {
+    let r_type_str = rel.r_type_str();
+    let r_sym = rel.r_symbol();
     if r_sym == 0 {
         relocate_error(format!(
             "file: {}, relocation type: {}, no symbol, error: {}",
             lib.shortname(),
-            r_type,
+            r_type_str,
             err
         ))
     } else {
         relocate_error(format!(
             "file: {}, relocation type: {}, symbol name: {}, error: {}",
             lib.shortname(),
-            r_type,
+            r_type_str,
             lib.symtab().unwrap().symbol_idx(r_sym).1.name(),
             err
         ))
     }
 }
 
-fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<SymDef<'lib>> {
+fn find_weak<'lib, D>(
+    lib: &'lib CoreComponent<D>,
+    dynsym: &'lib ElfSymbol,
+) -> Option<SymDef<'lib, D>> {
     // 弱符号 + WEAK 用 0 填充rela offset
     if dynsym.is_weak() && dynsym.is_undef() {
         assert!(dynsym.st_value() == 0);
@@ -495,11 +502,11 @@ fn find_weak<'lib>(lib: &'lib CoreComponent, dynsym: &'lib ElfSymbol) -> Option<
 }
 
 #[inline]
-pub(crate) fn find_symbol_addr<S>(
+pub(crate) fn find_symbol_addr<S, D>(
     pre_find: &S,
-    core: &CoreComponent,
+    core: &CoreComponent<D>,
     symtab: &SymbolTable,
-    scope: &[Relocated],
+    scope: &[Relocated<D>],
     r_sym: usize,
 ) -> Option<(RelocValue<usize>, Option<usize>)>
 where
@@ -519,12 +526,12 @@ where
         .map(|(symdef, idx)| (RelocValue::new(symdef.convert() as usize), idx))
 }
 
-fn find_symdef_impl<'lib>(
-    core: &'lib CoreComponent,
-    scope: &'lib [Relocated],
+fn find_symdef_impl<'lib, D>(
+    core: &'lib CoreComponent<D>,
+    scope: &'lib [Relocated<D>],
     sym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
-) -> Option<(SymDef<'lib>, Option<usize>)> {
+) -> Option<(SymDef<'lib, D>, Option<usize>)> {
     if unlikely(sym.is_local()) {
         Some((
             SymDef {

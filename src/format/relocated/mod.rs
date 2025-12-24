@@ -5,7 +5,7 @@
 //! libraries (shared objects) and executables.
 
 use crate::{
-    CoreComponent, Result, UserData,
+    CoreComponent, Result,
     arch::{Dyn, ElfPhdr},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
@@ -70,9 +70,9 @@ struct ElfExtraData {
 ///
 /// This structure holds the data needed to initialize an ELF object
 /// during the relocation process.
-struct LazyData {
+struct LazyData<D> {
     /// Core component containing the basic ELF object information
-    core: CoreComponent,
+    core: CoreComponent<D>,
 
     /// Extra data needed for relocation
     extra: ElfExtraData,
@@ -82,7 +82,7 @@ struct LazyData {
 ///
 /// This enum represents the different states an ELF object can be in
 /// during the loading and relocation process.
-enum State {
+enum State<D> {
     /// Initial empty state
     Empty,
 
@@ -113,14 +113,14 @@ enum State {
         relro: Option<ELFRelro>,
 
         /// User-defined data
-        user_data: UserData,
+        user_data: D,
     },
 
     /// Initialized state with all data ready for relocation
-    Init(LazyData),
+    Init(LazyData<D>),
 }
 
-impl State {
+impl<D> State<D> {
     /// Initialize the state by parsing the dynamic section and preparing relocation data
     ///
     /// This method processes the dynamic section of the ELF file and prepares
@@ -257,12 +257,12 @@ impl State {
 ///
 /// This structure implements lazy parsing of ELF object data, only
 /// initializing the data when it's actually needed.
-struct LazyParse {
+struct LazyParse<D> {
     /// The current state of the parser
-    state: Cell<State>,
+    state: Cell<State<D>>,
 }
 
-impl LazyParse {
+impl<D> LazyParse<D> {
     /// Force initialization of the parser and return a reference to the lazy data
     ///
     /// This method ensures that the ELF object data is initialized and returns
@@ -271,7 +271,7 @@ impl LazyParse {
     ///
     /// # Returns
     /// A reference to the initialized lazy data
-    fn force(&self) -> &LazyData {
+    fn force(&self) -> &LazyData<D> {
         // Fast path - if already initialized, return immediately
         if let State::Init(lazy_data) = unsafe { &*self.state.as_ptr() } {
             return lazy_data;
@@ -295,7 +295,7 @@ impl LazyParse {
     ///
     /// # Returns
     /// A mutable reference to the initialized lazy data
-    fn force_mut(&mut self) -> &mut LazyData {
+    fn force_mut(&mut self) -> &mut LazyData<D> {
         // Fast path - if already initialized, return immediately
         // 快路径加速
         if let State::Init(lazy_data) = self.state.get_mut() {
@@ -313,20 +313,20 @@ impl LazyParse {
     }
 }
 
-impl Deref for LazyParse {
-    type Target = LazyData;
+impl<D> Deref for LazyParse<D> {
+    type Target = LazyData<D>;
 
     /// Dereference to the lazy data
     ///
     /// This implementation allows direct access to the lazy data through
     /// the LazyParse wrapper.
     #[inline]
-    fn deref(&self) -> &LazyData {
+    fn deref(&self) -> &LazyData<D> {
         self.force()
     }
 }
 
-impl DerefMut for LazyParse {
+impl<D> DerefMut for LazyParse<D> {
     /// Mutable dereference to the lazy data
     ///
     /// This implementation allows direct mutable access to the lazy data
@@ -340,24 +340,23 @@ impl DerefMut for LazyParse {
 ///
 /// This structure represents the common components shared by all relocated
 /// ELF objects, whether they are dynamic libraries or executables.
-pub struct RelocatedCommonPart {
+pub struct RelocatedCommonPart<D>
+where
+    D: 'static,
+{
     /// Entry point of the ELF object
     entry: usize,
-
     /// PT_INTERP segment value (interpreter path)
     interp: Option<&'static str>,
-
     /// Name of the ELF file
     name: &'static CStr,
-
     /// Program headers
     phdrs: ElfPhdrs,
-
     /// Data parsed lazily
-    data: LazyParse,
+    data: LazyParse<D>,
 }
 
-impl RelocatedCommonPart {
+impl<D> RelocatedCommonPart<D> {
     /// Gets the entry point of the ELF object
     ///
     /// # Returns
@@ -372,7 +371,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// A reference to the CoreComponent
     #[inline]
-    pub fn core_ref(&self) -> &CoreComponent {
+    pub fn core_ref(&self) -> &CoreComponent<D> {
         &self.data.core
     }
 
@@ -381,7 +380,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// A cloned CoreComponent
     #[inline]
-    pub fn core(&self) -> CoreComponent {
+    pub fn core(&self) -> CoreComponent<D> {
         self.data.core.clone()
     }
 
@@ -390,7 +389,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// The CoreComponent
     #[inline]
-    pub fn into_core(self) -> CoreComponent {
+    pub fn into_core(self) -> CoreComponent<D> {
         self.data.force();
         match self.data.state.into_inner() {
             State::Empty | State::Uninit { .. } => unreachable!(),
@@ -517,7 +516,7 @@ impl RelocatedCommonPart {
     /// # Returns
     /// An optional mutable reference to the user data
     #[inline]
-    pub(crate) fn user_data_mut(&mut self) -> Option<&mut UserData> {
+    pub(crate) fn user_data_mut(&mut self) -> Option<&mut D> {
         Arc::get_mut(&mut self.data.core.inner).map(|inner| &mut inner.user_data)
     }
 
@@ -534,7 +533,7 @@ impl RelocatedCommonPart {
             /// Gets the memory length of the ELF object map.
             pub fn map_len(&self) -> usize;
             /// Gets user data from the ELF object.
-            pub fn user_data(&self) -> &UserData;
+            pub fn user_data(&self) -> &D;
         }
     }
 }
@@ -544,9 +543,10 @@ impl RelocatedCommonPart {
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final RelocatedCommonPart object.
-pub(crate) struct RelocatedBuilder<'hook, H, M: Mmap>
+pub(crate) struct RelocatedBuilder<'hook, H, M: Mmap, D = ()>
 where
-    H: Hook,
+    H: Hook<D>,
+    D: Default,
 {
     /// Hook function for processing program headers (always present)
     hook: &'hook H,
@@ -567,7 +567,7 @@ where
     dynamic_ptr: Option<NonNull<Dyn>>,
 
     /// User-defined data
-    user_data: UserData,
+    user_data: D,
 
     /// Memory segments
     segments: ElfSegments,
@@ -585,9 +585,9 @@ where
     _marker: PhantomData<M>,
 }
 
-impl<'hook, H, M: Mmap> RelocatedBuilder<'hook, H, M>
+impl<'hook, H, M: Mmap, D: Default> RelocatedBuilder<'hook, H, M, D>
 where
-    H: Hook,
+    H: Hook<D>,
 {
     /// Create a new RelocatedBuilder
     ///
@@ -601,7 +601,7 @@ where
     ///
     /// # Returns
     /// A new RelocatedBuilder instance
-    pub(crate) const fn new(
+    pub(crate) fn new(
         hook: &'hook H,
         segments: ElfSegments,
         name: CString,
@@ -617,7 +617,7 @@ where
             relro: None,
             dynamic_ptr: None,
             segments,
-            user_data: UserData::empty(),
+            user_data: D::default(),
             init_fn,
             fini_fn,
             interp: None,
@@ -719,7 +719,7 @@ where
     /// # Returns
     /// * `Ok(RelocatedCommonPart)` - The built relocated ELF object
     /// * `Err(Error)` - If building fails
-    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<RelocatedCommonPart> {
+    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<RelocatedCommonPart<D>> {
         // Determine if this is a dynamic library
         let elf_type = if self.ehdr.is_dylib() {
             ElfType::Dylib

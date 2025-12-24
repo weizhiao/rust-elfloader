@@ -20,11 +20,14 @@ impl StaticRelocation {
 }
 
 impl ElfRelocatable {
-    pub(crate) fn relocate_impl<S: SymbolLookup + ?Sized>(
+    pub(crate) fn relocate_impl<S>(
         mut self,
-        scope: &[Relocated],
+        scope: &[Relocated<()>],
         pre_find: &S,
-    ) -> Result<Relocated> {
+    ) -> Result<Relocated<()>>
+    where
+        S: SymbolLookup + ?Sized,
+    {
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
                 StaticRelocator::relocate(&self.core, rel, &mut self.pltgot, scope, pre_find)?;
@@ -37,13 +40,15 @@ impl ElfRelocatable {
 }
 
 pub(crate) trait StaticReloc {
-    fn relocate<S: SymbolLookup + ?Sized>(
-        core: &CoreComponent,
+    fn relocate<S>(
+        core: &CoreComponent<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[Relocated],
+        scope: &[Relocated<()>],
         pre_find: &S,
-    ) -> Result<()>;
+    ) -> Result<()>
+    where
+        S: SymbolLookup + ?Sized;
 
     fn needs_got(_rel_type: u32) -> bool {
         false

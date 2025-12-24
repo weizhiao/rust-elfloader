@@ -16,7 +16,34 @@ use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-pub(crate) type LazyScope = Arc<dyn SymbolLookup + Send + Sync>;
+/// LazyScope holds both the local scope lookup and an optional parent scope
+/// This avoids requiring D to be 'static by storing weak references to libraries
+struct LazyScope<D = (), S: SymbolLookup = ()>
+where
+    S: SymbolLookup,
+{
+    /// Weak references to the local libraries for symbol lookup
+    libs: Vec<CoreComponentRef<D>>,
+    custom_scope: Option<S>,
+}
+
+impl<D, S: SymbolLookup> SymbolLookup for LazyScope<D, S> {
+    fn lookup(&self, name: &str) -> Option<*const ()> {
+        // First try the parent scope if available
+        if let Some(parent) = &self.custom_scope {
+            if let Some(sym) = parent.lookup(name) {
+                return Some(sym);
+            }
+        }
+        // Then try the local libraries
+        self.libs.iter().find_map(|lib| unsafe {
+            let core = lib.upgrade()?;
+            RelocatedDylib::from_core(core)
+                .get::<()>(name)
+                .map(|sym| sym.into_raw())
+        })
+    }
+}
 
 /// Resolve indirect function address
 ///
@@ -28,19 +55,21 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
     RelocValue::new(ifunc())
 }
 
-impl RelocatedCommonPart {
-    pub(crate) fn relocate_impl<S, PreH, PostH>(
+impl<D> RelocatedCommonPart<D> {
+    pub(crate) fn relocate_impl<PreS, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated],
-        pre_find: &S,
+        scope: &[Relocated<D>],
+        pre_find: &PreS,
         mut pre_handler: PreH,
         mut post_handler: PostH,
         lazy: Option<bool>,
-        lazy_scope: Option<LazyScope>,
+        lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
-    ) -> Result<(Relocated, usize)>
+    ) -> Result<(Relocated<D>, usize)>
     where
-        S: SymbolLookup + ?Sized,
+        D: 'static,
+        PreS: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
@@ -55,11 +84,21 @@ impl RelocatedCommonPart {
         let is_lazy = lazy.unwrap_or(self.is_lazy());
         let entry = self.entry();
 
-        let lazy_scope = if is_lazy && use_scope_as_lazy {
-            let libs = scope.iter().map(|lib| lib.downgrade()).collect();
-            Some(create_lazy_scope(libs, lazy_scope))
+        let lazy_scope = if is_lazy {
+            if use_scope_as_lazy {
+                let libs = scope.iter().map(|lib| lib.downgrade()).collect();
+                Some(LazyScope {
+                    libs,
+                    custom_scope: lazy_scope,
+                })
+            } else {
+                Some(LazyScope {
+                    libs: Vec::new(),
+                    custom_scope: lazy_scope,
+                })
+            }
         } else {
-            lazy_scope
+            None
         };
 
         let relocated = relocate_impl(
@@ -77,17 +116,18 @@ impl RelocatedCommonPart {
 }
 
 /// Perform relocations on an ELF object
-fn relocate_impl<'find, S, PreH, PostH>(
-    elf: RelocatedCommonPart,
-    scope: &[Relocated],
-    pre_find: &'find S,
+fn relocate_impl<D, PreS, LazyS, PreH, PostH>(
+    elf: RelocatedCommonPart<D>,
+    scope: &[Relocated<D>],
+    pre_find: &PreS,
     pre_handler: &mut PreH,
     post_handler: &mut PostH,
     is_lazy: bool,
-    lazy_scope: Option<LazyScope>,
-) -> Result<Relocated>
+    lazy_scope: Option<LazyS>,
+) -> Result<Relocated<D>>
 where
-    S: SymbolLookup + ?Sized,
+    PreS: SymbolLookup + ?Sized,
+    LazyS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler + ?Sized,
     PostH: RelocationHandler + ?Sized,
 {
@@ -102,7 +142,7 @@ where
         .relocate_dynrel(&mut ctx)?
         .relocate_pltrel(is_lazy, lazy_scope, &mut ctx)?
         .finish();
-    let deps = ctx
+    let deps: Vec<Relocated<D>> = ctx
         .dependency_flags
         .iter()
         .enumerate()
@@ -111,26 +151,9 @@ where
     Ok(unsafe { Relocated::from_core_deps(elf.into_core(), deps) })
 }
 
-fn create_lazy_scope(libs: Vec<CoreComponentRef>, lazy_scope: Option<LazyScope>) -> LazyScope {
-    let libs = Arc::new(libs);
-    let closure = move |name: &str| {
-        lazy_scope
-            .as_ref()
-            .and_then(|lookup| lookup.lookup(name))
-            .or_else(|| {
-                libs.iter().find_map(|lib| unsafe {
-                    RelocatedDylib::from_core(lib.upgrade().unwrap())
-                        .get::<()>(name)
-                        .map(|sym| sym.into_raw())
-                })
-            })
-    };
-    Arc::new(closure)
-}
-
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
-#[unsafe(no_mangle)]
-unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
+#[allow(dead_code)]
+pub unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
     // Get the relocation entry for this function call
     let rela = unsafe {
         &*dylib
@@ -196,16 +219,17 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-impl RelocatedCommonPart {
+impl<D> RelocatedCommonPart<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<S, PreH, PostH>(
+    fn relocate_pltrel<PreS, LazyS, PreH, PostH>(
         &self,
         is_lazy: bool,
-        lazy_scope: Option<LazyScope>,
-        ctx: &mut RelocationContext<'_, '_, S, PreH, PostH>,
+        lazy_scope: Option<LazyS>,
+        ctx: &mut RelocationContext<'_, '_, D, PreS, PreH, PostH>,
     ) -> Result<&Self>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
@@ -257,12 +281,7 @@ impl RelocatedCommonPart {
             }
             // Handle unknown relocations with the provided handler
             if ctx.handle_post(&hctx)? {
-                return Err(reloc_error(
-                    r_type as _,
-                    r_sym,
-                    "Unhandled relocation",
-                    core,
-                ));
+                return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }
 
@@ -346,12 +365,12 @@ impl RelocatedCommonPart {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<S, PreH, PostH>(
+    fn relocate_dynrel<PreS, PreH, PostH>(
         &self,
-        ctx: &mut RelocationContext<'_, '_, S, PreH, PostH>,
+        ctx: &mut RelocationContext<'_, '_, D, PreS, PreH, PostH>,
     ) -> Result<&Self>
     where
-        S: SymbolLookup + ?Sized,
+        PreS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
@@ -389,7 +408,7 @@ impl RelocatedCommonPart {
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
-                        segments.write(rel.r_offset(), symbol);
+                        segments.write(rel.r_offset(), symbol + r_addend);
                         continue;
                     }
                 }
@@ -409,17 +428,24 @@ impl RelocatedCommonPart {
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
                     if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
+                        let len = hctx.lib.symtab().unwrap().symbol_idx(r_sym).0.st_size();
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }
-                        let len = symdef.sym.unwrap().st_size();
                         let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
-                        let src = core
+                        let src = symdef
+                            .lib
                             .segments()
                             .get_slice(symdef.sym.unwrap().st_value(), len);
                         dest.copy_from_slice(src);
                         continue;
                     }
+                }
+                REL_IRELATIVE => {
+                    // Handle indirect function relocations
+                    let addr = RelocValue::new(base) + r_addend;
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    continue;
                 }
                 // No relocation needed
                 REL_NONE => continue,
@@ -429,12 +455,7 @@ impl RelocatedCommonPart {
 
             // Handle unknown relocations with the provided handler
             if ctx.handle_post(&hctx)? {
-                return Err(reloc_error(
-                    r_type as _,
-                    r_sym,
-                    "Unhandled relocation",
-                    core,
-                ));
+                return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }
         Ok(self)

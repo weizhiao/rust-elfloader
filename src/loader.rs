@@ -1,5 +1,5 @@
 use crate::{
-    ElfObject, Result, UserData,
+    ElfObject, Result,
     arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
     ehdr::ElfHeader,
     format::{
@@ -75,20 +75,20 @@ impl ElfBuf {
 
 /// Context provided to hook functions during ELF loading.
 /// Contains information about the current program header being processed.
-pub struct HookContext<'a> {
+pub struct HookContext<'a, D> {
     name: &'a CStr,
     phdr: &'a ElfPhdr,
     segments: &'a ElfSegments,
-    user_data: &'a mut UserData,
+    user_data: &'a mut D,
 }
 
-impl<'a> HookContext<'a> {
+impl<'a, D> HookContext<'a, D> {
     /// Create a new HookContext.
     pub(crate) fn new(
         name: &'a CStr,
         phdr: &'a ElfPhdr,
         segments: &'a ElfSegments,
-        user_data: &'a mut UserData,
+        user_data: &'a mut D,
     ) -> Self {
         Self {
             name,
@@ -114,27 +114,27 @@ impl<'a> HookContext<'a> {
     }
 
     /// Get mutable access to user data for customization.
-    pub fn user_data_mut(&mut self) -> &mut UserData {
+    pub fn user_data_mut(&mut self) -> &mut D {
         self.user_data
     }
 }
 
 /// Hook trait used for processing program headers during load.
-pub trait Hook {
-    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a>) -> Result<()>;
+pub trait Hook<D = ()> {
+    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, D>) -> Result<()>;
 }
 
-impl<F> Hook for F
+impl<F, D> Hook<D> for F
 where
-    F: for<'a> Fn(&'a mut HookContext<'a>) -> Result<()>,
+    F: for<'a> Fn(&'a mut HookContext<'a, D>) -> Result<()>,
 {
-    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a>) -> Result<()> {
+    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, D>) -> Result<()> {
         (self)(ctx)
     }
 }
 
 impl Hook for () {
-    fn call<'a>(&'a self, _ctx: &'a mut HookContext<'a>) -> Result<()> {
+    fn call<'a>(&'a self, _ctx: &'a mut HookContext<'a, ()>) -> Result<()> {
         Ok(())
     }
 }
@@ -142,19 +142,20 @@ impl Hook for () {
 pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 
 /// The elf object loader
-pub struct Loader<M, H>
+pub struct Loader<M, H, D = ()>
 where
     M: Mmap,
-    H: Hook,
+    H: Hook<D>,
+    D: Default + 'static,
 {
     pub(crate) buf: ElfBuf,
     init_fn: FnHandler,
     fini_fn: FnHandler,
     hook: H,
-    _marker: PhantomData<M>,
+    _marker: PhantomData<(M, D)>,
 }
 
-impl Loader<DefaultMmap, ()> {
+impl Loader<DefaultMmap, (), ()> {
     /// Create a new loader with default DefaultMmap and no hook
     pub fn new() -> Self {
         let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
@@ -172,7 +173,7 @@ impl Loader<DefaultMmap, ()> {
     }
 }
 
-impl<M: Mmap, H: Hook> Loader<M, H> {
+impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
     /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
     pub fn set_init(&mut self, init_fn: FnHandler) -> &mut Self {
         self.init_fn = init_fn;
@@ -186,7 +187,11 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     }
 
     /// Consume self and return一个新的Loader，允许替换为新的Hook类型
-    pub fn with_hook<NewHook: Hook>(self, hook: NewHook) -> Loader<M, NewHook> {
+    pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD>
+    where
+        NewD: Default,
+        NewHook: Hook<NewD>,
+    {
         Loader {
             buf: self.buf,
             init_fn: self.init_fn,
@@ -197,7 +202,7 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
     }
 
     /// Consume self并返回一个新的Loader，允许替换为用户自定义的Mmap类型
-    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H> {
+    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D> {
         Loader {
             buf: self.buf,
             init_fn: self.init_fn,
@@ -226,14 +231,14 @@ impl<M: Mmap, H: Hook> Loader<M, H> {
         &'loader mut self,
         ehdr: ElfHeader,
         mut object: impl ElfObject,
-    ) -> Result<RelocatedCommonPart> {
+    ) -> Result<RelocatedCommonPart<D>> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let builder: RelocatedBuilder<'_, H, M> = RelocatedBuilder::new(
+        let builder: RelocatedBuilder<'_, H, M, D> = RelocatedBuilder::new(
             &self.hook,
             segments,
             object.file_name().to_owned(),

@@ -9,9 +9,7 @@ use crate::{
     },
 };
 use alloc::vec::Vec;
-use elf::abi::{
-    SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_INIT_ARRAY, SHT_NOBITS, SHT_REL, SHT_RELA,
-};
+use elf::abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_REL, SHT_RELA};
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 /// Convert section flags to memory protection flags
@@ -128,7 +126,8 @@ impl ShdrSegments {
 pub(crate) struct PltGotSection {
     got_base: usize,                // Base address of GOT
     plt_base: usize,                // Base address of PLT
-    cur_idx: usize,                 // Current index in GOT
+    got_idx: usize,                 // Current index in GOT
+    plt_idx: usize,                 // Current index in PLT
     got_map: HashMap<usize, usize>, // Map from symbol index to GOT entry index
     plt_map: HashMap<usize, usize>, // Map from symbol index to PLT entry index
 }
@@ -208,7 +207,8 @@ impl PltGotSection {
                 }
             }
         }
-        (got_set.len(), plt_set.len())
+        // GOT should contain entries for both GOT relocations and PLT stubs
+        (got_set.len() + plt_set.len(), plt_set.len())
     }
 
     /// Create a GOT section header based on relocation entries
@@ -248,7 +248,8 @@ impl PltGotSection {
     /// Create a new PltGotSection instance
     fn new(got: &Shdr, plt: &Shdr) -> Self {
         Self {
-            cur_idx: 0,
+            got_idx: 0,
+            plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
             got_base: got.sh_addr as usize,
@@ -273,8 +274,8 @@ impl PltGotSection {
             }
             Entry::Vacant(entry) => {
                 // Create new GOT entry
-                let idx = *entry.insert(self.cur_idx);
-                self.cur_idx += 1;
+                let idx = *entry.insert(self.got_idx);
+                self.got_idx += 1;
                 GotEntry::Vacant(unsafe {
                     UsizeEntry(&mut *((idx * ent_size + base) as *mut usize))
                 })
@@ -295,10 +296,16 @@ impl PltGotSection {
             }
             Entry::Vacant(entry) => {
                 // Create new PLT entry
-                let idx = *entry.insert(self.cur_idx);
+                let plt_idx = *entry.insert(self.plt_idx);
+                self.plt_idx += 1;
+
+                // Each PLT entry needs a corresponding GOT entry
+                let got_idx = self.got_idx;
+                self.got_idx += 1;
+
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
-                        (idx * plt_ent_size + plt_base) as *mut u8,
+                        (plt_idx * plt_ent_size + plt_base) as *mut u8,
                         plt_ent_size,
                     )
                 };
@@ -306,11 +313,10 @@ impl PltGotSection {
                 // Copy the appropriate PLT entry template
                 plt.copy_from_slice(&PLT_ENTRY);
 
-                self.cur_idx += 1;
                 PltEntry::Vacant {
                     plt,
                     got: unsafe {
-                        UsizeEntry(&mut *((idx * got_ent_size + got_base) as *mut usize))
+                        UsizeEntry(&mut *((got_idx * got_ent_size + got_base) as *mut usize))
                     },
                 }
             }
@@ -335,8 +341,8 @@ impl<'shdr> SectionUnit<'shdr> {
 
     /// Add a section to this unit based on its type
     fn add_section(&mut self, shdr: &'shdr mut ElfShdr) {
-        // NOBITS sections and INIT_ARRAY sections are zero-initialized
-        if shdr.sh_type == SHT_NOBITS || shdr.sh_type == SHT_INIT_ARRAY {
+        // NOBITS sections are zero-initialized
+        if shdr.sh_type == SHT_NOBITS {
             self.zero_sectons.push(shdr);
         } else {
             self.content_sections.push(shdr);

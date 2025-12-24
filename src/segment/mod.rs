@@ -8,13 +8,7 @@ pub(crate) mod phdr;
 pub(crate) mod shdr;
 
 use super::mmap::{self, Mmap, ProtFlags};
-use crate::{
-    Result,
-    arch::Phdr,
-    mmap::MapFlags,
-    object::ElfObject,
-    relocation::RelocValue,
-};
+use crate::{Result, arch::Phdr, mmap::MapFlags, object::ElfObject, relocation::RelocValue};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
@@ -254,11 +248,19 @@ impl ElfSegment {
                 // The remaining space is guaranteed to be page-aligned
                 let zero_mmap_addr = zero_end;
                 let zero_mmap_len = self.zero_size - write_len;
+
+                // For relocatable objects, we need read-write permissions initially
+                let prot = if self.from_relocatable {
+                    ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
+                } else {
+                    self.prot
+                };
+
                 unsafe {
                     M::mmap_anonymous(
                         zero_mmap_addr,
                         zero_mmap_len,
-                        self.prot,
+                        prot,
                         mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
                     )?;
                 }

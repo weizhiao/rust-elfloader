@@ -1,175 +1,172 @@
+
+---
+
+# Relink: High-Performance Runtime Linking
+
 <p align="center">
-    <img src="./docs/imgs/logo.jpg">
+<img src="./docs/imgs/logo.png" width="500" alt="Relink Logo">
+<br>
 </p>
 
-[![](https://img.shields.io/crates/v/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![](https://img.shields.io/crates/d/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![license](https://img.shields.io/crates/l/elf_loader.svg)](https://crates.io/crates/elf_loader)
-[![elf_loader on docs.rs](https://docs.rs/elf_loader/badge.svg)](https://docs.rs/elf_loader)
-[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/weizhiao/elf_loader)
-[![Build Status](https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg)](https://github.com/weizhiao/elf_loader/actions)
-
-# elf loader
-
-English | [中文](README_zh.md)  
-
-⚡ **High-performance, cross-platform, no-std compatible ELF file loader** ⚡
-
-`elf_loader` can load various forms of ELF files from either memory or storage, and provides efficient runtime linking, including both static and dynamic linking. Whether you are developing an OS kernel, an embedded system, a JIT compiler, or an application that requires dynamic loading of ELF libraries, `elf_loader` delivers exceptional performance and flexibility.
-
-[Documentation](https://docs.rs/elf_loader/) | [Examples](https://github.com/weizhiao/rust-elfloader/tree/main/examples)
+<p align="center">
+<a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/v/elf_loader.svg" alt="Crates.io"></a>
+<a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/d/elf_loader.svg" alt="Crates.io"></a>
+<a href="https://docs.rs/elf_loader"><img src="https://docs.rs/elf_loader/badge.svg" alt="Docs.rs"></a>
+<img src="https://img.shields.io/badge/rust-1.88.0+-blue.svg" alt="Min. Rust Version">
+<a href="https://github.com/weizhiao/rust-elfloader/actions"><img src="https://github.com/weizhiao/rust-elfloader/actions/workflows/rust.yml/badge.svg" alt="Build Status"></a>
+<img src="https://img.shields.io/crates/l/elf_loader.svg" alt="License MIT/Apache-2.0">
+</p>
 
 ---
 
-## 🎯 Core Use Cases
+## 🚀 Why Relink?
 
-- **Operating System Development** - As an ELF file loader in kernel
-- **Dynamic Linker Implementation** - Building a Rust version of the dynamic linker
-- **Embedded Systems** - Loading ELF dynamic libraries on resource-constrained devices
-- **JIT Compilation Systems** - As a low-level linker for Just-In-Time compilers
-- **Cross-platform Development** - Loading ELF dynamic libraries on Windows (see [windows-elf-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/windows-elf-loader))
+**Relink** is a high-performance runtime linker (JIT Linker) tailor-made for the Rust ecosystem. It efficiently parses various ELF formats—not only from traditional file systems but also directly from memory images—and performs flexible dynamic and static hybrid linking.
+
+Whether you are developing **OS kernels**, **embedded systems**, **JIT compilers**, or building **plugin-based applications**, Relink provides a solid foundation with zero-cost abstractions, high-speed execution, and powerful extensibility.
 
 ---
 
-## ✨ Outstanding Features
+## 🔥 Key Features
 
-### 🚀 Extreme Performance
-Drawing on the implementation essence of `musl` and `glibc`'s `ld.so`, combined with Rust's zero-cost abstractions, it delivers near-native performance:
+### 🛡️ Memory Safety
 
-```shell
-# Performance benchmark comparison
-elf_loader:new   36.478 µs  
-libloading:new   47.065 µs
+Leveraging Rust's ownership system and smart pointers, Relink ensures safety at runtime.
 
-elf_loader:get   10.477 ns 
-libloading:get   93.369 ns
-```
-
-### 📦 Ultra Lightweight
-The core implementation is extremely compact. The [mini-loader](https://github.com/weizhiao/rust-elfloader/tree/main/crates/mini-loader) built on `elf_loader` compiles to only **34KB**!
-
-### 🔧 No-std Compatible
-Fully supports `no_std` environments without enforcing `libc` or OS dependencies, seamlessly usable in kernels and embedded devices.
-
-### 🛡️ Compile-time Safety
-Utilizing Rust's lifetime mechanism to check ELF dependency relationships at compile-time, preventing dangling pointers and use-after-free errors:
+* **Lifetime Binding**: Symbols retrieved from a library carry lifetime markers. The compiler ensures they do not outlive the library itself, **erasing `use-after-free` risks**.
+* **Automatic Dependency Management**: Uses `Arc` to automatically maintain dependency trees between libraries, preventing a required library from being dropped prematurely.
 
 ```rust
-// Compilation will fail if dependent libraries are dropped prematurely!
-let liba = load_dylib!("liba.so")?;
-let libb = load_dylib!("libb.so")?; // Depends on liba
-// Dropping liba before libb will cause a compile error
+// 🛡️ The compiler protects you:
+let sym = unsafe { lib.get::<fn()>("plugin_fn")? };
+drop(lib); // If the library is dropped here...
+// sym();  // ❌ Compilation Error! The symbol's lifetime ends with the library.
+
 ```
 
-### 🔄 Advanced Features Support
-- **Lazy Binding** - Symbols resolved on first call, improving startup performance
-- **RELR Relocation** - Supports modern relative relocation format, reducing memory footprint
-- **Highly Extensible** - Easily port to new platforms through the trait system
+### 🔀 Hybrid Linking Capability
+
+Relink supports mixing **Relocatable Object files (`.o`)** and **Dynamic Shared Objects (`.so`)**. You can load a `.o` file just like a dynamic library and link its undefined symbols to the system or other loaded libraries at runtime.
+
+### 🎭 Deep Customization & Interception
+
+By implementing the `SymbolLookup` and `RelocationHandler` traits, users can deeply intervene in the linking process.
+
+* **Symbol Interception**: Intercept and replace external dependency symbols during loading. Perfect for function mocking, behavioral monitoring, or hot-patching.
+* **Custom Linking Logic**: Take full control over symbol resolution strategies to build highly flexible plugin systems.
+
+### ⚡ Extreme Performance & Versatility
+
+* **Zero-Cost Abstractions**: Built with Rust to provide near-native loading and symbol resolution speeds.
+* **`no_std` Support**: The core library has no OS dependencies, making it ideal for **OS kernels**, **embedded devices**, and **bare-metal development**.
+* **Modern Features**: Supports **RELR** for modern ELF optimization; supports **Lazy Binding** to improve cold-start times for large dynamic libraries.
 
 ---
 
-## 🏗️ Architecture Design
+## 🎯 Use Cases
 
-### Easy to Port
-Just implement the `Mmap` and `ElfObject` traits for your platform to complete the port. Refer to our [default implementation](https://github.com/weizhiao/rust-elfloader/tree/main/src/os) for quick start.
-
-### Hook Function Extension
-Extend functionality through hook functions to implement custom loading logic. See [dlopen-rs hook example](https://github.com/weizhiao/rust-dlopen/blob/main/src/loader.rs).
-
----
-
-## 📋 Platform Support
-
-| Architecture | Dynamic Linking | Lazy Binding | Static Linking | Test Coverage |
-| ------------ | --------------- | ------------ | -------------- | ------------- |
-| x86_64       | ✅               | ✅            | ✅              | CI            |
-| AArch64      | ✅               | ✅            | TODO           | CI            |
-| RISC-V 64/32 | ✅               | ✅            | TODO           | CI/Manual     |
-| LoongArch64  | ✅               | ✅            | TODO           | CI            |
-| x86          | ✅               | ✅            | TODO           | CI            |
-| ARM          | ✅               | ✅            | TODO           | CI            |
+| Scenario                      | The Relink Advantage                                                                                        |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Plugin Architectures**      | Enables safer, finer-grained dynamic module loading than `dlopen`, supporting `.o` files as direct plugins. |
+| **JIT Compilers & Runtimes**  | Instantly link compiled machine code fragments without manual memory offset management.                     |
+| **OS/Kernel Development**     | Provides a high-quality loader prototype for user-space programs or dynamic kernel module loading.          |
+| **Game Engine Hot-Reloading** | Dynamically swap game logic modules for a "code-change-to-live-effect" development experience.              |
+| **Embedded & Edge Computing** | Securely update firmware modules or combine features dynamically on resource-constrained devices.           |
+| **Security Research**         | Use the Hook mechanism to non-invasively analyze binary behavior and interactions.                          |
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started
 
-### Add Dependency
+### Add to your project
+
 ```toml
 [dependencies]
-elf_loader = "0.13"
+elf_loader = "0.13"  # Your runtime linking engine
+
 ```
 
-### Basic Usage
+### Basic Example: Load and Call a Dynamic Library
+
 ```rust
 use elf_loader::load_dylib;
-use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Provide symbols required by the dynamic library
-    let mut symbols = HashMap::new();
-    symbols.insert("print", print as *const ());
-    
-    let pre_find = |name: &str| -> Option<*const ()> {
-        symbols.get(name).copied()
-    };
-
-    // Load and relocate dynamic library
-    let lib = load_dylib!("target/libexample.so")?
+    // 1. Load the library and perform instant linking
+    let lib = load_dylib!("path/to/your_library.so")?
         .relocator()
-        .pre_find(pre_find)
-        .run()?;
-    
-    // Call function in the library
-    let func = unsafe { lib.get::<fn() -> i32>("example_function")? };
-    println!("Result: {}", func());
+        // Optional: Provide custom symbol resolution (e.g., export symbols from host)
+        .pre_find(|sym_name| {
+            if sym_name == "my_host_function" {
+                Some(my_host_function as *mut std::ffi::c_void)
+            } else {
+                None
+            }
+        })
+        .relocate()?; // Complete all relocations
+
+    // 2. Safely retrieve and call the function
+    let awesome_func: &extern "C" fn(i32) -> i32 = unsafe { lib.get("awesome_func")? };
+    let result = awesome_func(42);
+    println!("Result: {}", result);
     
     Ok(())
 }
 
-fn print(s: &str) {
-    println!("{}", s);
+// A host function that can be called by the plugin
+extern "C" fn my_host_function(value: i32) -> i32 {
+    value * 2
 }
+
 ```
 
 ---
 
-## ⚙️ Feature Flags
+## 📊 Platform Support
 
-| Feature           | Description                                                   |
-| ----------------- | ------------------------------------------------------------- |
-| `use-syscall`     | Use Linux system calls as backend                             |
-| `version`         | Use version information when resolving symbols                |
-| `log`             | Enable logging output                                         |
-| `rel`             | Use REL as relocation type                                    |
-| `portable-atomic` | Support targets without native pointer size atomic operations |
+Relink is committed to broad cross-platform support. Current support matrix:
 
-**Note**: Disable the `use-syscall` feature in environments without an operating system.
-
----
-
-## 💡 System Requirements
-
-- **Minimum Rust Version**: 1.88.0+
-- **Supported Platforms**: All major architectures (see platform support table)
+| Architecture     | Dynamic Linking | Lazy Binding | Hybrid Linking (.o) |
+| ---------------- | --------------- | ------------ | ------------------- |
+| **x86_64**       | ✅               | ✅            | ✅                   |
+| **x86**          | ✅               | ✅            | 🔶                   |
+| **AArch64**      | ✅               | ✅            | 🔶                   |
+| **Arm**          | ✅               | ✅            | 🔶                   |
+| **RISC-V 64/32** | ✅               | ✅            | 🔶                   |
+| **LoongArch64**  | ✅               | ✅            | 🔶                   |
 
 ---
 
-## 🤝 Contribution and Support
+## 🤝 Contributing
 
-We warmly welcome community contributions! Whether it's improving core functionality, adding examples, perfecting documentation, or fixing issues, your participation will be highly appreciated.
+If you are interested in low-level systems, binary security, or linker internals, we’d love to have you!
 
-- **Issue Reporting**: [GitHub Issues](https://github.com/weizhiao/elf_loader/issues)
-- **Feature Requests**: Welcome new feature suggestions
-- **Code Contribution**: Submit Pull Requests
+* **Open an Issue**: Report bugs or propose your next big idea.
+* **Star the Project**: Show your support for the developers! ⭐
+* **Code Contributions**: PRs are always welcome—help us build the ultimate Rust runtime linker.
 
-If this project is helpful to you, please give us a ⭐ to show your support!
+---
 
-## 🎈Contributors
+## 📜 License
+
+This project is dual-licensed under:
+
+* **[MIT License](https://www.google.com/search?q=LICENSE-MIT)**
+* **[Apache License 2.0](https://www.google.com/search?q=LICENSE-APACHE)**
+
+Choose the one that best suits your needs.
+
+---
+
+## 🎈 Contributors
 
 <a href="https://github.com/weizhiao/rust-elfloader/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="Contributors"/>
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/rust-elfloader" alt="Project Contributors" />
 </a>
 
 ---
 
-**Start using `elf_loader` now to bring efficient ELF loading capabilities to your project!** 🎉
+**Relink — Empowering your projects with high-performance runtime linking.** 🚀
+
+---
+

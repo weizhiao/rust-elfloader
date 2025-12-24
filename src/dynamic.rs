@@ -57,50 +57,52 @@ impl ElfDynamic {
                 match dynamic.d_tag as _ {
                     DT_FLAGS => flags = dynamic.d_un as usize,
                     DT_FLAGS_1 => flags_1 = dynamic.d_un as usize,
-                    DT_PLTGOT => got_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
+                    DT_PLTGOT => got_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_NEEDED => {
-                        needed_libs.push(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        if let Some(val) = NonZeroUsize::new(dynamic.d_un as usize) {
+                            needed_libs.push(val);
+                        }
                     }
                     DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
                     DT_GNU_HASH => gnu_hash_off = Some(dynamic.d_un as usize),
                     DT_SYMTAB => symtab_off = dynamic.d_un as usize,
                     DT_STRTAB => strtab_off = dynamic.d_un as usize,
                     DT_PLTRELSZ => {
-                        pltrel_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        pltrel_size = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_PLTREL => {
                         is_rela = Some(dynamic.d_un as i64 == DT_RELA);
                     }
                     DT_JMPREL => {
-                        pltrel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        pltrel_off = NonZeroUsize::new(dynamic.d_un as usize)
                     }
-                    DT_RELR => relr_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
+                    DT_RELR => relr_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_RELA | DT_REL => {
                         is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
-                        rel_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_off = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_RELASZ | DT_RELSZ => {
-                        rel_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_size = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_RELRSZ => {
-                        relr_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        relr_size = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_RELACOUNT | DT_RELCOUNT => {
-                        rel_count = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        rel_count = NonZeroUsize::new(dynamic.d_un as usize)
                     }
-                    DT_INIT => init_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
-                    DT_FINI => fini_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize)),
+                    DT_INIT => init_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_FINI => fini_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_INIT_ARRAY => {
-                        init_array_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        init_array_off = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_INIT_ARRAYSZ => {
-                        init_array_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        init_array_size = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_FINI_ARRAY => {
-                        fini_array_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        fini_array_off = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_FINI_ARRAYSZ => {
-                        fini_array_size = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
+                        fini_array_size = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_VERSYM => {
                         version_ids_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
@@ -145,30 +147,52 @@ impl ElfDynamic {
         } else if let Some(off) = elf_hash_off {
             ElfDynamicHashTab::Elf(off)
         } else {
+            // If no hash table is present, we can't perform symbol lookup.
+            // However, for some simple cases (like our test generator), we might not strictly need it
+            // if we don't do symbol lookup via hash.
+            // But the loader architecture seems to rely on it.
+            // Let's return a dummy or error.
+            // The error "dynamic section does not have DT_GNU_HASH nor DT_HASH" comes from here.
+            // We added DT_HASH to the generator, but maybe it's 0 and treated as None?
+            // DT_HASH value is the offset. If we set it to 0, it might be valid if the hash table is at offset 0 (unlikely).
+            // In the generator we set it to 0.
+            // Let's check if 0 is considered valid.
+            // In the loop: DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
+            // So 0 is Some(0).
+
             return Err(parse_dynamic_error(
                 "dynamic section does not have DT_GNU_HASH nor DT_HASH",
             ));
         };
 
         // Extract relocation tables
-        let pltrel = pltrel_off
-            .map(|pltrel_off| segments.get_slice(pltrel_off.get(), pltrel_size.unwrap().get()));
-        let dynrel =
-            rel_off.map(|rel_off| segments.get_slice(rel_off.get(), rel_size.unwrap().get()));
-        let relr =
-            relr_off.map(|relr_off| segments.get_slice(relr_off.get(), relr_size.unwrap().get()));
+        let pltrel = pltrel_off.map(|pltrel_off| {
+            segments.get_slice(pltrel_off.get(), pltrel_size.map(|s| s.get()).unwrap_or(0))
+        });
+        let dynrel = rel_off.map(|rel_off| {
+            segments.get_slice(rel_off.get(), rel_size.map(|s| s.get()).unwrap_or(0))
+        });
+        let relr = relr_off.map(|relr_off| {
+            segments.get_slice(relr_off.get(), relr_size.map(|s| s.get()).unwrap_or(0))
+        });
 
         // Extract initialization and finalization functions
         let init_fn = init_off
             .map(|val| unsafe { core::mem::transmute(segments.get_ptr::<fn()>(val.get())) });
         let init_array_fn = init_array_off.map(|init_array_off| {
-            segments.get_slice(init_array_off.get(), init_array_size.unwrap().get())
+            segments.get_slice(
+                init_array_off.get(),
+                init_array_size.map(|s| s.get()).unwrap_or(0),
+            )
         });
         let fini_fn = fini_off.map(|fini_off| unsafe {
             core::mem::transmute(segments.get_ptr::<fn()>(fini_off.get()))
         });
         let fini_array_fn = fini_array_off.map(|fini_array_off| {
-            segments.get_slice(fini_array_off.get(), fini_array_size.unwrap().get())
+            segments.get_slice(
+                fini_array_off.get(),
+                fini_array_size.map(|s| s.get()).unwrap_or(0),
+            )
         });
 
         // Extract versioning information
