@@ -1,4 +1,4 @@
-use crate::common::ShdrType;
+use crate::common::SectionKind;
 use crate::dylib::{
     shdr::{Section, SectionAllocator, SectionHeader, SectionId},
     symtab::SymTabMetadata,
@@ -31,7 +31,7 @@ impl CodeMetaData {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::Text,
+                shtype: SectionKind::Text,
                 addr: 0,
                 offset: 0,
                 size: self.text_size,
@@ -42,7 +42,7 @@ impl CodeMetaData {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::Plt,
+                shtype: SectionKind::Plt,
                 addr: 0,
                 offset: 0,
                 size: self.plt_size,

@@ -11,6 +11,7 @@ pub mod riscv64;
 pub mod x86;
 pub mod x86_64;
 
+/// Supported CPU architectures for ELF generation.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
     X86_64,
@@ -23,6 +24,35 @@ pub enum Arch {
 }
 
 impl Arch {
+    /// Returns the architecture of the current host.
+    pub fn current() -> Self {
+        #[cfg(target_arch = "x86_64")]
+        return Arch::X86_64;
+        #[cfg(target_arch = "x86")]
+        return Arch::X86;
+        #[cfg(target_arch = "aarch64")]
+        return Arch::Aarch64;
+        #[cfg(target_arch = "riscv64")]
+        return Arch::Riscv64;
+        #[cfg(target_arch = "riscv32")]
+        return Arch::Riscv32;
+        #[cfg(target_arch = "arm")]
+        return Arch::Arm;
+        #[cfg(target_arch = "loongarch64")]
+        return Arch::Loongarch64;
+        #[cfg(not(any(
+            target_arch = "x86_64",
+            target_arch = "x86",
+            target_arch = "aarch64",
+            target_arch = "riscv64",
+            target_arch = "riscv32",
+            target_arch = "arm",
+            target_arch = "loongarch64"
+        )))]
+        panic!("Unsupported architecture");
+    }
+
+    /// Returns true if the architecture is 64-bit.
     pub fn is_64(&self) -> bool {
         match self {
             Arch::X86_64 | Arch::Aarch64 | Arch::Riscv64 | Arch::Loongarch64 => true,
@@ -30,12 +60,95 @@ impl Arch {
         }
     }
 
+    /// Returns true if the architecture uses RELA (with addend) relocations.
     pub fn is_rela(&self) -> bool {
         match self {
             Arch::X86_64 | Arch::Aarch64 | Arch::Riscv64 | Arch::Riscv32 | Arch::Loongarch64 => {
                 true
             }
             Arch::X86 | Arch::Arm => false,
+        }
+    }
+
+    /// Returns the architecture-specific JUMP_SLOT relocation type.
+    pub fn jump_slot_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_JUMP_SLOT,
+            Arch::X86 => R_386_JMP_SLOT,
+            Arch::Aarch64 => R_AARCH64_JUMP_SLOT,
+            Arch::Arm => R_ARM_JUMP_SLOT,
+            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_JUMP_SLOT,
+            Arch::Loongarch64 => R_LARCH_JUMP_SLOT,
+        }
+    }
+
+    /// Returns the architecture-specific GLOB_DAT relocation type.
+    pub fn glob_dat_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_GLOB_DAT,
+            Arch::X86 => R_386_GLOB_DAT,
+            Arch::Aarch64 => R_AARCH64_GLOB_DAT,
+            Arch::Arm => R_ARM_GLOB_DAT,
+            Arch::Riscv64 => R_RISCV_64,
+            Arch::Riscv32 => R_RISCV_32,
+            Arch::Loongarch64 => R_LARCH_64,
+        }
+    }
+
+    /// Returns the architecture-specific RELATIVE relocation type.
+    pub fn relative_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_RELATIVE,
+            Arch::X86 => R_386_RELATIVE,
+            Arch::Aarch64 => R_AARCH64_RELATIVE,
+            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_RELATIVE,
+            Arch::Arm => R_ARM_RELATIVE,
+            Arch::Loongarch64 => R_LARCH_RELATIVE,
+        }
+    }
+
+    pub fn irelative_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_IRELATIVE,
+            Arch::X86 => R_386_IRELATIVE,
+            Arch::Aarch64 => R_AARCH64_IRELATIVE,
+            Arch::Arm => R_ARM_IRELATIVE,
+            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_IRELATIVE,
+            Arch::Loongarch64 => R_LARCH_IRELATIVE,
+        }
+    }
+
+    pub fn abs_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_64,
+            Arch::X86 => R_386_32,
+            Arch::Aarch64 => R_AARCH64_ABS64,
+            Arch::Riscv64 => R_RISCV_64,
+            Arch::Riscv32 => R_RISCV_32,
+            Arch::Arm => R_ARM_ABS32,
+            Arch::Loongarch64 => R_LARCH_64,
+        }
+    }
+
+    pub fn copy_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_COPY,
+            Arch::X86 => R_386_COPY,
+            Arch::Aarch64 => R_AARCH64_COPY,
+            Arch::Arm => R_ARM_COPY,
+            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_COPY,
+            Arch::Loongarch64 => R_LARCH_COPY,
+        }
+    }
+
+    pub fn dtpoff_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_DTPOFF64,
+            Arch::X86 => R_386_TLS_DTPOFF32,
+            Arch::Aarch64 => R_AARCH64_TLS_DTPMOD, // Simplified
+            Arch::Arm => R_ARM_TLS_DTPOFF32,
+            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_TLS_DTPMOD64,
+            Arch::Loongarch64 => R_LARCH_TLS_DTPMOD64,
         }
     }
 }
@@ -171,7 +284,7 @@ impl RelocType {
 }
 
 /// Calculate addend value for a relocation based on type and section virtual addresses
-pub fn calculate_addend(
+pub(crate) fn calculate_addend(
     arch: Arch,
     r_type: RelocType,
     reloc_offset: u64,

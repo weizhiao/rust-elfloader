@@ -1,4 +1,4 @@
-use crate::common::{RelocEntry, RelocType, ShdrType};
+use crate::common::{RelocEntry, RelocType, SectionKind};
 use crate::dylib::symtab::IFUNC_RESOLVER_NAME;
 use crate::{
     Arch,
@@ -233,11 +233,11 @@ impl RelocMetaData {
         symtab: &SymTabMetadata,
         allocator: &mut SectionAllocator,
     ) -> Result<()> {
-        let plt_vaddr = shdr_manager.get_vaddr(ShdrType::Plt);
-        let data_vaddr = shdr_manager.get_vaddr(ShdrType::Data);
-        let got_vaddr = shdr_manager.get_vaddr(ShdrType::Got);
-        let got_plt_vaddr = shdr_manager.get_vaddr(ShdrType::GotPlt);
-        let dyn_vaddr = shdr_manager.get_vaddr(ShdrType::Dynamic);
+        let plt_vaddr = shdr_manager.get_vaddr(SectionKind::Plt);
+        let data_vaddr = shdr_manager.get_vaddr(SectionKind::Data);
+        let got_vaddr = shdr_manager.get_vaddr(SectionKind::Got);
+        let got_plt_vaddr = shdr_manager.get_vaddr(SectionKind::GotPlt);
+        let dyn_vaddr = shdr_manager.get_vaddr(SectionKind::Dynamic);
 
         self.patch_got(allocator, self.arch, dyn_vaddr, plt_vaddr);
         self.patch_reloc(
@@ -405,9 +405,9 @@ impl RelocMetaData {
             header: SectionHeader {
                 name_off: 0,
                 shtype: if is_rela {
-                    ShdrType::RelaDyn
+                    SectionKind::RelaDyn
                 } else {
-                    ShdrType::RelDyn
+                    SectionKind::RelDyn
                 },
                 addr: 0,
                 offset: 0,
@@ -420,9 +420,9 @@ impl RelocMetaData {
             header: SectionHeader {
                 name_off: 0,
                 shtype: if is_rela {
-                    ShdrType::RelaPlt
+                    SectionKind::RelaPlt
                 } else {
-                    ShdrType::RelPlt
+                    SectionKind::RelPlt
                 },
                 addr: 0,
                 offset: 0,
@@ -435,7 +435,7 @@ impl RelocMetaData {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::Got,
+                shtype: SectionKind::Got,
                 addr: 0,
                 offset: 0,
                 size: self.got_size(),
@@ -447,7 +447,7 @@ impl RelocMetaData {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::GotPlt,
+                shtype: SectionKind::GotPlt,
                 addr: 0,
                 offset: 0,
                 size: self.got_plt_size(),

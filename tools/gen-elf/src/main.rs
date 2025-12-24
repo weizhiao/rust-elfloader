@@ -1,8 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use gen_relocs::{Arch, DylibWriter, RelocEntry, SymbolDesc, gen_static_elf};
-use std::fs::File;
-use std::io::Write;
+use gen_elf::{Arch, DylibWriter, RelocEntry, SymbolDesc};
 use std::path::{Path, PathBuf};
 
 const EXTERNAL_FUNC_NAME: &str = "external_func";
@@ -19,57 +17,16 @@ fn gen_dynamic_elf(out_path: &Path, arch: Arch) -> Result<()> {
         out.set_extension("so");
     }
 
-    let (rel_jump_slot, rel_got, rel_symbolic, rel_copy, rel_dtpoff, rel_relative, rel_irelative) =
-        match arch {
-            Arch::X86_64 => (
-                object::elf::R_X86_64_JUMP_SLOT,
-                object::elf::R_X86_64_GLOB_DAT,
-                object::elf::R_X86_64_64,
-                object::elf::R_X86_64_COPY,
-                object::elf::R_X86_64_DTPOFF64,
-                object::elf::R_X86_64_RELATIVE,
-                object::elf::R_X86_64_IRELATIVE,
-            ),
-            Arch::Aarch64 => (
-                object::elf::R_AARCH64_JUMP_SLOT,
-                object::elf::R_AARCH64_GLOB_DAT,
-                object::elf::R_AARCH64_ABS64,
-                object::elf::R_AARCH64_COPY,
-                object::elf::R_AARCH64_TLS_DTPMOD, // Simplified
-                object::elf::R_AARCH64_RELATIVE,
-                object::elf::R_AARCH64_IRELATIVE,
-            ),
-            Arch::X86 => (
-                object::elf::R_386_JMP_SLOT,
-                object::elf::R_386_GLOB_DAT,
-                object::elf::R_386_32,
-                object::elf::R_386_COPY,
-                object::elf::R_386_TLS_DTPMOD32,
-                object::elf::R_386_RELATIVE,
-                object::elf::R_386_IRELATIVE,
-            ),
-            Arch::Riscv64 => (
-                object::elf::R_RISCV_JUMP_SLOT,
-                0,
-                object::elf::R_RISCV_64,
-                object::elf::R_RISCV_COPY,
-                object::elf::R_RISCV_TLS_DTPMOD64,
-                object::elf::R_RISCV_RELATIVE,
-                object::elf::R_RISCV_IRELATIVE,
-            ),
-            _ => (0, 0, 0, 0, 0, 0, 0),
-        };
-
     let relocs = vec![
-        RelocEntry::with_name(EXTERNAL_FUNC_NAME, rel_jump_slot),
-        RelocEntry::with_name(EXTERNAL_FUNC_NAME2, rel_jump_slot),
-        RelocEntry::with_name(EXTERNAL_VAR_NAME, rel_got),
-        RelocEntry::with_name(LOCAL_VAR_NAME, rel_symbolic),
-        RelocEntry::with_name(COPY_VAR_NAME, rel_copy),
-        RelocEntry::with_name(EXTERNAL_TLS_NAME, rel_dtpoff),
-        RelocEntry::with_name(EXTERNAL_TLS_NAME2, rel_dtpoff),
-        RelocEntry::new(rel_relative),
-        RelocEntry::new(rel_irelative),
+        RelocEntry::jump_slot(EXTERNAL_FUNC_NAME, arch),
+        RelocEntry::jump_slot(EXTERNAL_FUNC_NAME2, arch),
+        RelocEntry::glob_dat(EXTERNAL_VAR_NAME, arch),
+        RelocEntry::abs(LOCAL_VAR_NAME, arch),
+        RelocEntry::copy(COPY_VAR_NAME, arch),
+        RelocEntry::dtpoff(EXTERNAL_TLS_NAME, arch),
+        RelocEntry::dtpoff(EXTERNAL_TLS_NAME2, arch),
+        RelocEntry::relative(arch),
+        RelocEntry::irelative(arch),
     ];
 
     // Use default configuration for standard ELF generation
@@ -100,9 +57,8 @@ fn gen_relocatable_elf(out_path: &Path, arch: Arch) -> Result<()> {
         SymbolDesc::global_object("tls_external", &[]),
     ];
 
-    let elf_data = gen_static_elf(arch, &symbols, &[])?;
-    let mut f = File::create(&out)?;
-    f.write_all(&elf_data.data)?;
+    let writer = gen_elf::ObjectWriter::new(arch);
+    let _ = writer.write_file(&out, &symbols, &[])?;
     println!("Wrote {}", out.display());
     Ok(())
 }

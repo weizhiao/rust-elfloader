@@ -1,4 +1,4 @@
-use crate::common::{ShdrType, SymbolDesc, SymbolScope, SymbolType};
+use crate::common::{SectionKind, SymbolDesc, SymbolScope, SymbolType};
 use crate::dylib::{
     StringTable,
     shdr::{Section, SectionAllocator, SectionHeader, SectionId},
@@ -45,7 +45,7 @@ pub(crate) struct SymTabMetadata {
     arch: Arch,
     dynstr: StringTable,
     dynsym: Vec<Symbol>,
-    dynsym_shdr_types: Vec<ShdrType>,
+    dynsym_shdr_types: Vec<SectionKind>,
     sym_index: HashMap<String, usize>,
     helper_index: HashMap<usize, usize>,
     symbols: Vec<SymbolDesc>,
@@ -64,7 +64,7 @@ pub(crate) struct SymTabMetadata {
 }
 
 impl SymTabMetadata {
-    fn add_symbol(&mut self, name: &str, sym: Symbol, shdr_type: ShdrType) -> usize {
+    fn add_symbol(&mut self, name: &str, sym: Symbol, shdr_type: SectionKind) -> usize {
         let sym_idx = self.dynsym.len();
         self.dynsym.push(sym);
         self.dynsym_shdr_types.push(shdr_type);
@@ -115,7 +115,7 @@ impl SymTabMetadata {
                 value: 0,
                 size: 0,
             },
-            ShdrType::Null,
+            SectionKind::Null,
         );
         // Add provided symbols
         symtab.add_symbols(symbols);
@@ -172,36 +172,36 @@ impl SymTabMetadata {
             };
 
         let (shdr_type, value) = if let Some(content) = &s.content {
-            let off = match content.shdr_type {
-                ShdrType::Text => {
+            let off = match content.kind {
+                SectionKind::Text => {
                     let off = self.text_offset;
                     self.text_offset += content.data.len() as u64;
                     off
                 }
-                ShdrType::Data => {
+                SectionKind::Data => {
                     let off = self.data_offset;
                     self.data_offset += content.data.len() as u64;
                     off
                 }
-                ShdrType::Tls => {
+                SectionKind::Tls => {
                     let off = self.tls_offset;
                     self.tls_offset += content.data.len() as u64;
                     off
                 }
-                ShdrType::Plt => {
+                SectionKind::Plt => {
                     let off = self.plt_offset;
                     self.plt_offset += content.data.len() as u64;
                     off
                 }
-                _ => todo!("Unsupported shdr_type in SymbolDesc content"),
+                _ => todo!("Unsupported purpose in SymbolDesc content"),
             };
-            (content.shdr_type, off)
+            (content.kind, off)
         } else {
             // Undefined symbols
             let shdr_type = match s.sym_type {
-                SymbolType::Func => ShdrType::Text,
-                SymbolType::Object => ShdrType::Data,
-                SymbolType::Tls => ShdrType::Tls,
+                SymbolType::Func => SectionKind::Text,
+                SymbolType::Object => SectionKind::Data,
+                SymbolType::Tls => SectionKind::Tls,
             };
             (shdr_type, 0)
         };
@@ -230,7 +230,7 @@ impl SymTabMetadata {
             .filter(|s| {
                 s.content
                     .as_ref()
-                    .map_or(false, |c| matches!(c.shdr_type, ShdrType::Text))
+                    .map_or(false, |c| matches!(c.kind, SectionKind::Text))
             })
             .collect();
 
@@ -248,7 +248,7 @@ impl SymTabMetadata {
         let mut content = vec![];
         for s in &self.symbols {
             if let Some(c) = &s.content {
-                if matches!(c.shdr_type, ShdrType::Plt) {
+                if matches!(c.kind, SectionKind::Plt) {
                     content.extend_from_slice(&c.data);
                 }
             }
@@ -260,7 +260,7 @@ impl SymTabMetadata {
         let mut content = vec![];
         for s in &self.symbols {
             if let Some(c) = &s.content {
-                if matches!(c.shdr_type, ShdrType::Data) {
+                if matches!(c.kind, SectionKind::Data) {
                     content.extend_from_slice(&c.data);
                 }
             }
@@ -272,7 +272,7 @@ impl SymTabMetadata {
         let mut content = vec![];
         for s in &self.symbols {
             if let Some(c) = &s.content {
-                if matches!(c.shdr_type, ShdrType::Tls) {
+                if matches!(c.kind, SectionKind::Tls) {
                     content.extend_from_slice(&c.data);
                 }
             }
@@ -360,7 +360,7 @@ impl SymTabMetadata {
         plt_vaddr: u64,
         text_vaddr: u64,
         data_vaddr: u64,
-        shdr_map: &HashMap<ShdrType, usize>,
+        shdr_map: &HashMap<SectionKind, usize>,
     ) {
         for (i, sym) in self.dynsym.iter_mut().enumerate().skip(1) {
             // Skip undefined symbols
@@ -371,10 +371,10 @@ impl SymTabMetadata {
             if let Some(&sec_idx) = shdr_map.get(&shdr_type) {
                 sym.shndx = sec_idx as u16;
                 let base_vaddr = match shdr_type {
-                    ShdrType::Text => text_vaddr,
-                    ShdrType::Data => data_vaddr,
-                    ShdrType::Plt => plt_vaddr,
-                    ShdrType::Tls => 0, // TLS symbols are relative to TLS segment
+                    SectionKind::Text => text_vaddr,
+                    SectionKind::Data => data_vaddr,
+                    SectionKind::Plt => plt_vaddr,
+                    SectionKind::Tls => 0, // TLS symbols are relative to TLS segment
                     _ => 0,
                 };
                 sym.value += base_vaddr;
@@ -450,7 +450,7 @@ impl SymTabMetadata {
         plt_vaddr: u64,
         text_vaddr: u64,
         data_vaddr: u64,
-        shdr_map: &HashMap<ShdrType, usize>,
+        shdr_map: &HashMap<SectionKind, usize>,
         allocator: &mut SectionAllocator,
     ) {
         self.update_symbol_values(plt_vaddr, text_vaddr, data_vaddr, shdr_map);
@@ -469,7 +469,7 @@ impl SymTabMetadata {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::DynStr,
+                shtype: SectionKind::DynStr,
                 addr: 0,
                 offset: 0,
                 size: self.dynstr_size,
@@ -480,7 +480,7 @@ impl SymTabMetadata {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::DynSym,
+                shtype: SectionKind::DynSym,
                 addr: 0,
                 offset: 0,
                 size: self.dynsym_size,
@@ -491,7 +491,7 @@ impl SymTabMetadata {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::Hash,
+                shtype: SectionKind::Hash,
                 addr: 0,
                 offset: 0,
                 size: self.hash_size,

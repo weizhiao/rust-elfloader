@@ -5,13 +5,12 @@ const REG_T2: u32 = 7;
 const REG_T3: u32 = 28;
 
 pub(crate) fn generate_plt0_code() -> Vec<u8> {
-    // 现代 glibc PLT0 (32 bytes)
     // 59e0: auipc t2, 0x?
     // 59e4: sub   t1, t1, t3
     // 59e8: ld    t3, ?(t2)
     // 59ec: addi  t1, t1, ?
     // 59f0: addi  t0, t2, ?
-    // 59f4: srli  t1, t1, 0x1    <-- 关键修正
+    // 59f4: srli  t1, t1, 0x1
     // 59f8: ld    t0, 8(t0)
     // 59fc: jr    t3
 
@@ -128,7 +127,6 @@ pub(crate) fn patch_plt_entry(
     plt_data[plt_entry_off + 4..plt_entry_off + 8].copy_from_slice(&ld.to_le_bytes());
 }
 
-// 辅助函数保持不变
 fn split_addr(pc: u64, target: u64) -> (u32, u32) {
     let offset = target as i64 - pc as i64;
     let hi = (offset + 0x800) as u32 & 0xfffff000;
@@ -144,13 +142,11 @@ fn encode_itype(op: u32, rd: u32, rs1: u32, imm: u32) -> u32 {
     op | (rd << 7) | (rs1 << 15) | ((imm & 0xfff) << 20)
 }
 
-// 新增 R-Type 编码器用于 sub 指令
 fn encode_rtype(op: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) -> u32 {
     op | (rd << 7) | (funct3 << 12) | (rs1 << 15) | (rs2 << 20) | (funct7 << 25)
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // 总共 2 条指令，8 字节
     let mut code = vec![0; 8];
 
     // 1. auipc t0, 0 (Placeholder)

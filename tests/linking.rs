@@ -5,7 +5,7 @@ use elf_loader::{
     },
     object::ElfBinary,
 };
-use gen_relocs::{Arch, DylibWriter, ElfWriterConfig, RelocEntry, SymbolDesc, gen_static_elf};
+use gen_elf::{Arch, DylibWriter, ElfWriterConfig, ObjectWriter, RelocEntry, SymbolDesc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,25 +19,6 @@ const LOCAL_VAR_NAME: &str = "local_var";
 
 const IFUNC_RESOLVER_VALUE: u64 = 100;
 
-fn get_arch() -> Arch {
-    if cfg!(target_arch = "x86_64") {
-        Arch::X86_64
-    } else if cfg!(target_arch = "aarch64") {
-        Arch::Aarch64
-    } else if cfg!(target_arch = "riscv64") {
-        Arch::Riscv64
-    } else if cfg!(target_arch = "riscv32") {
-        Arch::Riscv32
-    } else if cfg!(target_arch = "arm") {
-        Arch::Arm
-    } else if cfg!(target_arch = "x86") {
-        Arch::X86
-    } else if cfg!(target_arch = "loongarch64") {
-        Arch::Loongarch64
-    } else {
-        panic!("Unsupported architecture for dynamic linking test");
-    }
-}
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct F64x2(pub [f64; 2]);
@@ -143,7 +124,7 @@ fn dynamic_linking_with_lazy() {
 }
 
 fn run_dynamic_linking(is_lazy: bool) {
-    let arch = get_arch();
+    let arch = Arch::current();
     // 1. Generate helper library that defines the symbol to be copied
     let config = ElfWriterConfig::default().with_ifunc_resolver_val(IFUNC_RESOLVER_VALUE);
     let helper_writer = DylibWriter::with_config(arch, config.clone());
@@ -379,7 +360,7 @@ fn run_dynamic_linking(is_lazy: bool) {
 
 #[test]
 fn static_linking() {
-    let arch = get_arch();
+    let arch = Arch::current();
 
     // Define symbols
     let symbols = vec![
@@ -405,7 +386,9 @@ fn static_linking() {
         }
     };
 
-    let output = gen_static_elf(arch, &symbols, &relocs).expect("Failed to generate static ELF");
+    let output = ObjectWriter::new(arch)
+        .write(&symbols, &relocs)
+        .expect("Failed to generate static ELF");
     let elf_data = &output.data;
     let reloc_offsets = &output.reloc_offsets;
 

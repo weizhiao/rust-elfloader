@@ -1,4 +1,4 @@
-use crate::common::ShdrType;
+use crate::common::SectionKind;
 use crate::dylib::shdr::{Section, SectionAllocator, SectionHeader, SectionId};
 use crate::dylib::symtab::SymTabMetadata;
 
@@ -24,7 +24,7 @@ impl TlsMetaData {
             sections.push(Section {
                 header: SectionHeader {
                     name_off: 0,
-                    shtype: ShdrType::Tls,
+                    shtype: SectionKind::Tls,
                     addr: 0,
                     offset: 0,
                     size: self.size,

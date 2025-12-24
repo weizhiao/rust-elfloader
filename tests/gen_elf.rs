@@ -1,28 +1,9 @@
-use gen_relocs::{Arch, DylibWriter, RelocEntry, SymbolDesc};
-
-fn get_arch() -> Arch {
-    if cfg!(target_arch = "x86_64") {
-        Arch::X86_64
-    } else if cfg!(target_arch = "aarch64") {
-        Arch::Aarch64
-    } else if cfg!(target_arch = "riscv64") {
-        Arch::Riscv64
-    } else if cfg!(target_arch = "riscv32") {
-        Arch::Riscv32
-    } else if cfg!(target_arch = "arm") {
-        Arch::Arm
-    } else if cfg!(target_arch = "x86") {
-        Arch::X86
-    } else if cfg!(target_arch = "loongarch64") {
-        Arch::Loongarch64
-    } else {
-        panic!("Unsupported architecture for dynamic linking test");
-    }
-}
+use gen_elf::{Arch, DylibWriter, RelocEntry, SymbolDesc};
+use std::path::PathBuf;
 
 #[test]
 fn gen_elf() {
-    let arch = get_arch();
+    let arch = Arch::current();
     let writer = DylibWriter::new(arch);
 
     // callee: returns 42
@@ -48,47 +29,11 @@ fn gen_elf() {
         panic!("Unsupported architecture");
     };
 
-    // We need a jump slot relocation for "callee"
-    // In gen_relocs, RelocEntry::with_name(name, REL_JUMP_SLOT) will create a PLT entry
-    // and a JUMP_SLOT relocation in .rela.plt
-    let (rel_jump_slot, rel_irelative) = if arch == Arch::X86_64 {
-        (
-            object::elf::R_X86_64_JUMP_SLOT,
-            object::elf::R_X86_64_IRELATIVE,
-        )
-    } else if arch == Arch::Aarch64 {
-        (
-            object::elf::R_AARCH64_JUMP_SLOT,
-            object::elf::R_AARCH64_IRELATIVE,
-        )
-    } else if arch == Arch::X86 {
-        (object::elf::R_386_JMP_SLOT, object::elf::R_386_IRELATIVE)
-    } else if arch == Arch::Riscv64 {
-        (
-            object::elf::R_RISCV_JUMP_SLOT,
-            object::elf::R_RISCV_IRELATIVE,
-        )
-    } else if arch == Arch::Riscv32 {
-        (
-            object::elf::R_RISCV_JUMP_SLOT,
-            object::elf::R_RISCV_IRELATIVE,
-        )
-    } else if arch == Arch::Arm {
-        (object::elf::R_ARM_JUMP_SLOT, object::elf::R_ARM_IRELATIVE)
-    } else if arch == Arch::Loongarch64 {
-        (
-            object::elf::R_LARCH_JUMP_SLOT,
-            object::elf::R_LARCH_IRELATIVE,
-        )
-    } else {
-        panic!("Unsupported architecture");
-    };
-
     let symbols = vec![SymbolDesc::global_func("callee", &callee_code)];
 
     let relocs = vec![
-        RelocEntry::with_name("callee", rel_jump_slot),
-        RelocEntry::new(rel_irelative),
+        RelocEntry::jump_slot("callee", arch),
+        RelocEntry::irelative(arch),
     ];
 
     let output = writer
@@ -96,8 +41,8 @@ fn gen_elf() {
         .expect("Failed to generate ELF");
 
     // Use a unique name to avoid conflicts
-    let mut elf_path = std::env::current_dir().expect("Failed to get current dir");
-    elf_path.push(format!("test_plt_libloading_{:?}.so", arch));
+    let mut elf_path = PathBuf::from("/tmp");
+    elf_path.push(format!("gen_elf_{:?}.so", arch));
     let elf_path_str = elf_path
         .to_str()
         .expect("Failed to convert path to string")
@@ -147,7 +92,7 @@ fn gen_elf() {
     let plt_reloc = output
         .relocations
         .iter()
-        .find(|r| r.r_type == rel_jump_slot)
+        .find(|r| r.r_type == Arch::current().jump_slot_reloc())
         .expect("Failed to find PLT relocation");
 
     let got_entry_addr = load_bias + plt_reloc.vaddr;

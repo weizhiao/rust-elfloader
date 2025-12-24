@@ -1,4 +1,4 @@
-use crate::common::ShdrType;
+use crate::common::SectionKind;
 use crate::dylib::{
     DYN_SIZE_32, DYN_SIZE_64, HASH_SIZE, REL_SIZE_32, REL_SIZE_64, RELA_SIZE_32, RELA_SIZE_64,
     SYM_SIZE_32, SYM_SIZE_64, StringTable, layout::ElfLayout,
@@ -11,127 +11,135 @@ use std::collections::HashMap;
 #[derive(Clone, Copy)]
 pub(crate) struct SectionHeader {
     pub(crate) name_off: u32,
-    pub(crate) shtype: ShdrType,
+    pub(crate) shtype: SectionKind,
     pub(crate) addr: u64,
     pub(crate) offset: u64,
     pub(crate) size: u64,
     pub(crate) addralign: u64,
 }
 
-impl ShdrType {
+impl SectionKind {
     fn as_str(&self) -> &'static str {
         match self {
-            ShdrType::Null => ".null",
-            ShdrType::DynStr => ".dynstr",
-            ShdrType::DynSym => ".dynsym",
-            ShdrType::RelaDyn => ".rela.dyn",
-            ShdrType::RelaPlt => ".rela.plt",
-            ShdrType::RelDyn => ".rel.dyn",
-            ShdrType::RelPlt => ".rel.plt",
-            ShdrType::Dynamic => ".dynamic",
-            ShdrType::Hash => ".hash",
-            ShdrType::ShStrTab => ".shstrtab",
-            ShdrType::Plt => ".plt",
-            ShdrType::Text => ".text",
-            ShdrType::Data => ".data",
-            ShdrType::Got => ".got",
-            ShdrType::GotPlt => ".got.plt",
-            ShdrType::Tls => ".tdata",
+            SectionKind::Null => ".null",
+            SectionKind::DynStr => ".dynstr",
+            SectionKind::DynSym => ".dynsym",
+            SectionKind::RelaDyn => ".rela.dyn",
+            SectionKind::RelaPlt => ".rela.plt",
+            SectionKind::RelDyn => ".rel.dyn",
+            SectionKind::RelPlt => ".rel.plt",
+            SectionKind::Dynamic => ".dynamic",
+            SectionKind::Hash => ".hash",
+            SectionKind::ShStrTab => ".shstrtab",
+            SectionKind::Plt => ".plt",
+            SectionKind::Text => ".text",
+            SectionKind::Data => ".data",
+            SectionKind::Got => ".got",
+            SectionKind::GotPlt => ".got.plt",
+            SectionKind::Tls => ".tdata",
         }
     }
 
     fn shtype(&self) -> u32 {
         match self {
-            ShdrType::Null => SHT_NULL,
-            ShdrType::DynStr | ShdrType::ShStrTab => SHT_STRTAB,
-            ShdrType::DynSym => SHT_DYNSYM,
-            ShdrType::RelaDyn | ShdrType::RelaPlt => SHT_RELA,
-            ShdrType::RelDyn | ShdrType::RelPlt => SHT_REL,
-            ShdrType::Dynamic => SHT_DYNAMIC,
-            ShdrType::Hash => SHT_HASH,
-            ShdrType::Plt | ShdrType::Text | ShdrType::Data => SHT_PROGBITS,
-            ShdrType::Got | ShdrType::GotPlt => SHT_PROGBITS,
-            ShdrType::Tls => SHT_PROGBITS,
+            SectionKind::Null => SHT_NULL,
+            SectionKind::DynStr | SectionKind::ShStrTab => SHT_STRTAB,
+            SectionKind::DynSym => SHT_DYNSYM,
+            SectionKind::RelaDyn | SectionKind::RelaPlt => SHT_RELA,
+            SectionKind::RelDyn | SectionKind::RelPlt => SHT_REL,
+            SectionKind::Dynamic => SHT_DYNAMIC,
+            SectionKind::Hash => SHT_HASH,
+            SectionKind::Plt | SectionKind::Text | SectionKind::Data => SHT_PROGBITS,
+            SectionKind::Got | SectionKind::GotPlt => SHT_PROGBITS,
+            SectionKind::Tls => SHT_PROGBITS,
         }
     }
 
     fn flags(&self) -> u64 {
         match self {
-            ShdrType::Plt | ShdrType::Text => (SHF_ALLOC | SHF_EXECINSTR) as u64,
-            ShdrType::Data | ShdrType::Got | ShdrType::GotPlt => (SHF_ALLOC | SHF_WRITE) as u64,
-            ShdrType::Tls => (SHF_ALLOC | SHF_WRITE | SHF_TLS) as u64,
-            ShdrType::Dynamic => (SHF_ALLOC | SHF_WRITE) as u64,
-            ShdrType::DynStr
-            | ShdrType::DynSym
-            | ShdrType::RelaDyn
-            | ShdrType::RelaPlt
-            | ShdrType::RelDyn
-            | ShdrType::RelPlt
-            | ShdrType::Hash => SHF_ALLOC as u64,
+            SectionKind::Plt | SectionKind::Text => (SHF_ALLOC | SHF_EXECINSTR) as u64,
+            SectionKind::Data | SectionKind::Got | SectionKind::GotPlt => {
+                (SHF_ALLOC | SHF_WRITE) as u64
+            }
+            SectionKind::Tls => (SHF_ALLOC | SHF_WRITE | SHF_TLS) as u64,
+            SectionKind::Dynamic => (SHF_ALLOC | SHF_WRITE) as u64,
+            SectionKind::DynStr
+            | SectionKind::DynSym
+            | SectionKind::RelaDyn
+            | SectionKind::RelaPlt
+            | SectionKind::RelDyn
+            | SectionKind::RelPlt
+            | SectionKind::Hash => SHF_ALLOC as u64,
             _ => 0,
         }
     }
 
     fn entsize(&self, is_64: bool) -> u64 {
         match self {
-            ShdrType::DynSym => {
+            SectionKind::DynSym => {
                 if is_64 {
                     SYM_SIZE_64
                 } else {
                     SYM_SIZE_32
                 }
             }
-            ShdrType::RelaDyn | ShdrType::RelaPlt => {
+            SectionKind::RelaDyn | SectionKind::RelaPlt => {
                 if is_64 {
                     RELA_SIZE_64
                 } else {
                     RELA_SIZE_32
                 }
             }
-            ShdrType::RelDyn | ShdrType::RelPlt => {
+            SectionKind::RelDyn | SectionKind::RelPlt => {
                 if is_64 {
                     REL_SIZE_64
                 } else {
                     REL_SIZE_32
                 }
             }
-            ShdrType::Dynamic => {
+            SectionKind::Dynamic => {
                 if is_64 {
                     DYN_SIZE_64
                 } else {
                     DYN_SIZE_32
                 }
             }
-            ShdrType::Hash => HASH_SIZE,
-            ShdrType::Got => {
+            SectionKind::Hash => HASH_SIZE,
+            SectionKind::Got => {
                 if is_64 {
                     8
                 } else {
                     4
                 }
             }
-            ShdrType::Null => 0,
+            SectionKind::Null => 0,
             _ => 0,
         }
     }
 
-    fn info(&self, map: &HashMap<ShdrType, usize>) -> u32 {
+    fn info(&self, map: &HashMap<SectionKind, usize>) -> u32 {
         match self {
-            ShdrType::DynSym => 1, // First non-local symbol
-            ShdrType::RelaPlt | ShdrType::RelPlt => *map.get(&ShdrType::Plt).unwrap_or(&0) as u32,
-            ShdrType::Null => 0,
+            SectionKind::DynSym => 1, // First non-local symbol
+            SectionKind::RelaPlt | SectionKind::RelPlt => {
+                *map.get(&SectionKind::Plt).unwrap_or(&0) as u32
+            }
+            SectionKind::Null => 0,
             _ => 0,
         }
     }
 
-    fn link(&self, map: &HashMap<ShdrType, usize>) -> u32 {
+    fn link(&self, map: &HashMap<SectionKind, usize>) -> u32 {
         match self {
-            ShdrType::DynSym => *map.get(&ShdrType::DynStr).unwrap() as u32,
-            ShdrType::RelaDyn | ShdrType::RelDyn => *map.get(&ShdrType::DynSym).unwrap() as u32,
-            ShdrType::RelaPlt | ShdrType::RelPlt => *map.get(&ShdrType::DynSym).unwrap() as u32,
-            ShdrType::Dynamic => *map.get(&ShdrType::DynStr).unwrap() as u32,
-            ShdrType::Hash => *map.get(&ShdrType::DynSym).unwrap() as u32,
-            ShdrType::Null => 0,
+            SectionKind::DynSym => *map.get(&SectionKind::DynStr).unwrap() as u32,
+            SectionKind::RelaDyn | SectionKind::RelDyn => {
+                *map.get(&SectionKind::DynSym).unwrap() as u32
+            }
+            SectionKind::RelaPlt | SectionKind::RelPlt => {
+                *map.get(&SectionKind::DynSym).unwrap() as u32
+            }
+            SectionKind::Dynamic => *map.get(&SectionKind::DynStr).unwrap() as u32,
+            SectionKind::Hash => *map.get(&SectionKind::DynSym).unwrap() as u32,
+            SectionKind::Null => 0,
             _ => 0,
         }
     }
@@ -285,7 +293,7 @@ impl ShdrManager {
         }
 
         // Add .shstrtab itself
-        let shstrtab_name = ShdrType::ShStrTab.as_str();
+        let shstrtab_name = SectionKind::ShStrTab.as_str();
         let shstrtab_off = shstrtab.add(shstrtab_name);
 
         let shstrtab_data = shstrtab.data();
@@ -297,7 +305,7 @@ impl ShdrManager {
         self.add_section(
             SectionHeader {
                 name_off: shstrtab_off,
-                shtype: ShdrType::ShStrTab,
+                shtype: SectionKind::ShStrTab,
                 addr: 0,
                 offset: 0,
                 size: shstrtab_data.len() as u64,
@@ -307,7 +315,7 @@ impl ShdrManager {
         );
     }
 
-    pub(crate) fn get_shdr_map(&self) -> HashMap<ShdrType, usize> {
+    pub(crate) fn get_shdr_map(&self) -> HashMap<SectionKind, usize> {
         let mut map = HashMap::new();
         for (i, sec) in self.shdrs.iter().enumerate() {
             map.insert(sec.header.shtype, i + 1);
@@ -315,7 +323,7 @@ impl ShdrManager {
         map
     }
 
-    pub(crate) fn get_vaddr(&self, shtype: ShdrType) -> u64 {
+    pub(crate) fn get_vaddr(&self, shtype: SectionKind) -> u64 {
         self.shdrs
             .iter()
             .find(|s| s.header.shtype == shtype)
@@ -323,7 +331,7 @@ impl ShdrManager {
             .unwrap_or(0)
     }
 
-    pub(crate) fn get_size(&self, shtype: ShdrType) -> u64 {
+    pub(crate) fn get_size(&self, shtype: SectionKind) -> u64 {
         self.shdrs
             .iter()
             .find(|s| s.header.shtype == shtype)
@@ -331,7 +339,7 @@ impl ShdrManager {
             .unwrap_or(0)
     }
 
-    pub(crate) fn get_data_id(&self, shtype: ShdrType) -> SectionId {
+    pub(crate) fn get_data_id(&self, shtype: SectionKind) -> SectionId {
         self.shdrs
             .iter()
             .find(|s| s.header.shtype == shtype)
@@ -366,10 +374,10 @@ impl ShdrManager {
                     has_rw = true;
                 }
             }
-            if sec.header.shtype == ShdrType::Dynamic {
+            if sec.header.shtype == SectionKind::Dynamic {
                 has_dynamic = true;
             }
-            if sec.header.shtype == ShdrType::Tls {
+            if sec.header.shtype == SectionKind::Tls {
                 has_tls = true;
             }
         }
@@ -533,7 +541,7 @@ impl ShdrManager {
         if let Some(dyn_sec) = self
             .shdrs
             .iter()
-            .find(|s| s.header.shtype == ShdrType::Dynamic)
+            .find(|s| s.header.shtype == SectionKind::Dynamic)
         {
             self.write_phdr(
                 &mut writer,
@@ -549,7 +557,7 @@ impl ShdrManager {
         }
 
         // 5. PT_TLS
-        if let Some(tls_sec) = self.shdrs.iter().find(|s| s.header.shtype == ShdrType::Tls) {
+        if let Some(tls_sec) = self.shdrs.iter().find(|s| s.header.shtype == SectionKind::Tls) {
             self.write_phdr(
                 &mut writer,
                 is_64,

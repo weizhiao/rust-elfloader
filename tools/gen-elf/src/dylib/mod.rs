@@ -1,5 +1,5 @@
 use crate::Arch;
-use crate::common::{RelocEntry, ShdrType, SymbolDesc};
+use crate::common::{RelocEntry, SectionKind, SymbolDesc};
 use crate::dylib::data::DataMetaData;
 use crate::dylib::dynamic::DynamicMetadata;
 use crate::dylib::layout::ElfLayout;
@@ -61,14 +61,20 @@ pub struct ElfWriterConfig {
     pub ifunc_resolver_val: Option<u64>,
 }
 
-impl ElfWriterConfig {
-    /// Create a default configuration
-    pub fn default() -> Self {
+impl Default for ElfWriterConfig {
+    fn default() -> Self {
         Self {
             base_addr: 0,
             page_size: 0x1000,
             ifunc_resolver_val: None,
         }
+    }
+}
+
+impl ElfWriterConfig {
+    /// Create a default configuration
+    pub fn default() -> Self {
+        <Self as Default>::default()
     }
 
     /// Set custom base address
@@ -91,34 +97,35 @@ impl ElfWriterConfig {
 }
 
 /// Relocation metadata for testing and verification
+/// Relocation metadata for testing and verification.
 #[derive(Clone, Debug)]
 pub struct RelocationInfo {
-    /// Virtual address of the relocation in mapped memory
+    /// Virtual address where the relocation is applied.
     pub vaddr: u64,
-    /// Relocation type
+    /// Architecture-specific relocation type.
     pub r_type: u32,
-    /// Symbol index
+    /// Index of the symbol in the dynamic symbol table.
     pub sym_idx: u64,
-    /// Addend value for relocation calculation
+    /// Addend for the relocation.
     pub addend: i64,
-    /// Symbol size (useful for COPY relocations)
+    /// Size of the referenced symbol (useful for COPY relocations).
     pub sym_size: u64,
 }
 
-/// Output of ELF generation containing the file data and relocation metadata
+/// Result of an ELF generation process.
 #[derive(Clone)]
 pub struct ElfWriteOutput {
-    /// Raw ELF file bytes
+    /// Raw bytes of the generated ELF file.
     pub data: Vec<u8>,
-    /// Base address used during ELF generation
+    /// Base address used for virtual address calculations.
     pub base_addr: u64,
-    /// Virtual address of the data segment
+    /// Virtual address of the data segment.
     pub data_vaddr: u64,
-    /// Virtual address of the text segment
+    /// Virtual address of the text segment.
     pub text_vaddr: u64,
-    /// Relocation entries for verification
+    /// List of dynamic relocations generated.
     pub relocations: Vec<RelocationInfo>,
-    /// The value returned by the IFUNC resolver
+    /// The value returned by the IFUNC resolver.
     pub ifunc_resolver_val: u64,
 }
 
@@ -139,24 +146,25 @@ const DYN_SIZE_64: u64 = 16;
 const DYN_SIZE_32: u64 = 8;
 const HASH_SIZE: u64 = 4;
 
+/// A writer for generating dynamic library (Shared Object) ELF files.
 pub struct DylibWriter {
     arch: Arch,
     config: ElfWriterConfig,
 }
 
 impl DylibWriter {
-    /// Create a new ELF writer with default configuration
+    /// Create a new DylibWriter for the specified architecture with default configuration.
     pub fn new(arch: Arch) -> Self {
         let config = ElfWriterConfig::default();
         Self { arch, config }
     }
 
-    /// Create a new ELF writer with custom configuration
+    /// Create a new DylibWriter with a custom configuration.
     pub fn with_config(arch: Arch, config: ElfWriterConfig) -> Self {
         Self { arch, config }
     }
 
-    /// Write ELF to file, returning the output metadata for verification
+    /// Write the generated ELF to a file and return the metadata.
     pub fn write_file(
         &self,
         out_path: &Path,
@@ -168,6 +176,7 @@ impl DylibWriter {
         Ok(output)
     }
 
+    /// Generate the ELF bytes and metadata.
     pub fn write(
         &self,
         raw_relocs: &[RelocEntry],
@@ -213,10 +222,10 @@ impl DylibWriter {
 
         // 6. Update all metadata with final addresses
         let shdr_map = shdr_manager.get_shdr_map();
-        let plt_vaddr = shdr_manager.get_vaddr(ShdrType::Plt);
-        let text_vaddr = shdr_manager.get_vaddr(ShdrType::Text);
-        let data_vaddr = shdr_manager.get_vaddr(ShdrType::Data);
-        let got_plt_vaddr = shdr_manager.get_vaddr(ShdrType::GotPlt);
+        let plt_vaddr = shdr_manager.get_vaddr(SectionKind::Plt);
+        let text_vaddr = shdr_manager.get_vaddr(SectionKind::Text);
+        let data_vaddr = shdr_manager.get_vaddr(SectionKind::Data);
+        let got_plt_vaddr = shdr_manager.get_vaddr(SectionKind::GotPlt);
 
         // Update symbols
         symtab.patch_symtab(plt_vaddr, text_vaddr, data_vaddr, &shdr_map, &mut allocator);
@@ -255,7 +264,7 @@ impl DylibWriter {
             phnum: shdr_manager.get_phnum(),
             shentsize: (if is_64 { SHDR_SIZE_64 } else { SHDR_SIZE_32 }) as u16,
             shnum: (shdr_manager.get_shdr_count() + 1) as u16,
-            shstrndx: *shdr_map.get(&ShdrType::ShStrTab).unwrap() as u16,
+            shstrndx: *shdr_map.get(&SectionKind::ShStrTab).unwrap() as u16,
         };
         ehdr.write(&mut out_bytes, is_64)?;
 

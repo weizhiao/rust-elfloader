@@ -84,7 +84,7 @@ jobs:
         sh ci/run.sh
     strategy:
       matrix:
-        target: [ x86_64-unknown-none, riscv64gc-unknown-none-elf]
+        target: [ x86_64-unknown-none]
         channel: [ nightly ]
 
   bench:

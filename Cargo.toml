@@ -20,7 +20,7 @@ license = "MIT/Apache-2.0"
 rust-version = "1.88.0"
 
 [workspace]
-members = ["crates/windows-elf-loader", "crates/mini-loader"]
+members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
 
 [workspace.dependencies]
 syscalls = { version = "0.7.0", default-features = false }
@@ -44,7 +44,6 @@ libc = { version = "0.2.171", default-features = false }
 
 [build-dependencies]
 cc = "1.0"
-gen_relocs = { path = "tools/gen_relocs" }
 
 [dependencies.syscalls]
 workspace = true
@@ -90,7 +89,7 @@ delegate = "0.13.3"
 criterion = "0.5.1"
 libloading = "0.8.5"
 env_logger = "0.11.6"
-gen_relocs = { path = "tools/gen_relocs" }
+gen-elf = { path = "tools/gen-elf" }
 object = "0.38.0"
 
 [[bench]]

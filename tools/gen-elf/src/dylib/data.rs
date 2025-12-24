@@ -1,4 +1,4 @@
-use crate::common::ShdrType;
+use crate::common::SectionKind;
 use crate::dylib::{
     reloc::RelocMetaData,
     shdr::{Section, SectionAllocator, SectionHeader, SectionId},
@@ -30,7 +30,7 @@ impl DataMetaData {
     pub(crate) fn create_sections(&self, sections: &mut Vec<Section>) {
         let data = SectionHeader {
             name_off: 0,
-            shtype: ShdrType::Data,
+            shtype: SectionKind::Data,
             addr: 0,
             offset: 0,
             size: self.data_size,

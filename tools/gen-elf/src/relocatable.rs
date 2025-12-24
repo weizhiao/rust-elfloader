@@ -1,24 +1,57 @@
-use crate::common::{
-    RelocEntry, ShdrType, SymbolDesc, SymbolScope as CommonSymbolScope, SymbolType,
-};
 use crate::Arch;
+use crate::common::{
+    RelocEntry, SectionKind, SymbolDesc, SymbolScope as CommonSymbolScope, SymbolType,
+};
 use anyhow::Result;
 use object::{
+    Architecture, BinaryFormat, Endianness, SectionKind as ObjectSectionKind, SymbolKind,
+    SymbolScope,
     write::{Object, Relocation, Symbol, SymbolSection},
-    Architecture, BinaryFormat, Endianness, SectionKind, SymbolKind, SymbolScope,
 };
 use std::collections::HashMap;
 
-pub struct StaticElfOutput {
+/// Result of a relocatable object file generation.
+pub struct ObjectElfOutput {
+    /// Raw bytes of the generated ELF file.
     pub data: Vec<u8>,
+    /// Offsets where relocations were applied.
     pub reloc_offsets: Vec<u64>,
 }
 
-pub fn gen_static_elf(
+/// A writer for generating relocatable object (.o) ELF files.
+pub struct ObjectWriter {
+    arch: Arch,
+}
+
+impl ObjectWriter {
+    /// Create a new ObjectWriter for the specified architecture.
+    pub fn new(arch: Arch) -> Self {
+        Self { arch }
+    }
+
+    /// Generate the relocatable ELF bytes and metadata.
+    pub fn write(&self, symbols: &[SymbolDesc], relocs: &[RelocEntry]) -> Result<ObjectElfOutput> {
+        gen_static_elf(self.arch, symbols, relocs)
+    }
+
+    /// Write the generated relocatable ELF to a file and return the metadata.
+    pub fn write_file(
+        &self,
+        out_path: &std::path::Path,
+        symbols: &[SymbolDesc],
+        relocs: &[RelocEntry],
+    ) -> Result<ObjectElfOutput> {
+        let output = self.write(symbols, relocs)?;
+        std::fs::write(out_path, &output.data)?;
+        Ok(output)
+    }
+}
+
+fn gen_static_elf(
     arch: Arch,
     symbols: &[SymbolDesc],
     relocs: &[RelocEntry],
-) -> Result<StaticElfOutput> {
+) -> Result<ObjectElfOutput> {
     let obj_arch: Architecture = arch.into();
     let mut obj = Object::new(BinaryFormat::Elf, obj_arch, Endianness::Little);
 
@@ -29,13 +62,13 @@ pub fn gen_static_elf(
     // First pass: create sections and add defined symbols
     for sym_desc in symbols {
         if let Some(content) = &sym_desc.content {
-            let section_id = *section_map.entry(content.shdr_type).or_insert_with(|| {
-                let (name, kind) = match content.shdr_type {
-                    ShdrType::Text => (".text", SectionKind::Text),
-                    ShdrType::Data => (".data", SectionKind::Data),
-                    ShdrType::Plt => (".plt", SectionKind::Text),
-                    ShdrType::Tls => (".tdata", SectionKind::Tls),
-                    _ => (".data", SectionKind::Data),
+            let section_id = *section_map.entry(content.kind).or_insert_with(|| {
+                let (name, kind) = match content.kind {
+                    SectionKind::Text => (".text", ObjectSectionKind::Text),
+                    SectionKind::Data => (".data", ObjectSectionKind::Data),
+                    SectionKind::Plt => (".plt", ObjectSectionKind::Text),
+                    SectionKind::Tls => (".tdata", ObjectSectionKind::Tls),
+                    _ => (".data", ObjectSectionKind::Data),
                 };
                 obj.add_section(vec![], name.as_bytes().to_vec(), kind)
             });
@@ -92,8 +125,8 @@ pub fn gen_static_elf(
     // Let's assume for now they apply to the .text section if it exists, or .data.
 
     let target_section_id = section_map
-        .get(&ShdrType::Text)
-        .or_else(|| section_map.get(&ShdrType::Data))
+        .get(&SectionKind::Text)
+        .or_else(|| section_map.get(&SectionKind::Data))
         .copied();
 
     if let Some(section_id) = target_section_id {
@@ -132,7 +165,7 @@ pub fn gen_static_elf(
     // Write object file bytes
     let elf_data = obj.write()?;
 
-    Ok(StaticElfOutput {
+    Ok(ObjectElfOutput {
         data: elf_data,
         reloc_offsets,
     })

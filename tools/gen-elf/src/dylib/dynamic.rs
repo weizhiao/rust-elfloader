@@ -3,7 +3,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use object::elf::*;
 
 use crate::Arch;
-use crate::common::ShdrType;
+use crate::common::SectionKind;
 use crate::dylib::reloc::RelocMetaData;
 use crate::dylib::shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager};
 use crate::dylib::{
@@ -39,7 +39,7 @@ impl DynamicMetadata {
         sections.push(Section {
             header: SectionHeader {
                 name_off: 0,
-                shtype: ShdrType::Dynamic,
+                shtype: SectionKind::Dynamic,
                 addr: 0,
                 offset: 0,
                 size: dyn_size,
@@ -56,24 +56,24 @@ impl DynamicMetadata {
             let vaddr = sec.header.addr;
             let size = sec.header.size;
             match sec.header.shtype {
-                ShdrType::DynStr => {
+                SectionKind::DynStr => {
                     self.add_entry(DT_STRTAB as i64, vaddr);
                     self.add_entry(DT_STRSZ as i64, size);
                 }
-                ShdrType::DynSym => {
+                SectionKind::DynSym => {
                     self.add_entry(DT_SYMTAB as i64, vaddr);
                     self.add_entry(
                         DT_SYMENT as i64,
                         if is_64 { SYM_SIZE_64 } else { SYM_SIZE_32 },
                     );
                 }
-                ShdrType::Hash => {
+                SectionKind::Hash => {
                     self.add_entry(DT_HASH as i64, vaddr);
                 }
-                ShdrType::Got => {
+                SectionKind::Got => {
                     self.add_entry(DT_PLTGOT as i64, vaddr);
                 }
-                ShdrType::RelaDyn => {
+                SectionKind::RelaDyn => {
                     self.add_entry(DT_RELA as i64, vaddr);
                     self.add_entry(DT_RELASZ as i64, size);
                     self.add_entry(
@@ -82,7 +82,7 @@ impl DynamicMetadata {
                     );
                     self.add_entry(DT_RELACOUNT as i64, 0);
                 }
-                ShdrType::RelDyn => {
+                SectionKind::RelDyn => {
                     self.add_entry(DT_REL as i64, vaddr);
                     self.add_entry(DT_RELSZ as i64, size);
                     self.add_entry(
@@ -91,7 +91,7 @@ impl DynamicMetadata {
                     );
                     self.add_entry(DT_RELCOUNT as i64, 0);
                 }
-                ShdrType::RelaPlt | ShdrType::RelPlt => {
+                SectionKind::RelaPlt | SectionKind::RelPlt => {
                     self.add_entry(DT_JMPREL as i64, vaddr);
                     self.add_entry(DT_PLTRELSZ as i64, size);
                     self.add_entry(
@@ -140,34 +140,34 @@ impl DynamicMetadata {
     ) -> Result<()> {
         let is_64 = self.arch.is_64();
         let is_rela = self.arch.is_rela();
-        self.update_entry(DT_STRTAB as i64, shdr_manager.get_vaddr(ShdrType::DynStr));
-        self.update_entry(DT_SYMTAB as i64, shdr_manager.get_vaddr(ShdrType::DynSym));
-        self.update_entry(DT_HASH as i64, shdr_manager.get_vaddr(ShdrType::Hash));
+        self.update_entry(DT_STRTAB as i64, shdr_manager.get_vaddr(SectionKind::DynStr));
+        self.update_entry(DT_SYMTAB as i64, shdr_manager.get_vaddr(SectionKind::DynSym));
+        self.update_entry(DT_HASH as i64, shdr_manager.get_vaddr(SectionKind::Hash));
         self.update_entry(DT_PLTGOT as i64, got_plt_vaddr);
         if is_rela {
-            let rela_dyn_vaddr = shdr_manager.get_vaddr(ShdrType::RelaDyn);
-            let rela_dyn_size = shdr_manager.get_size(ShdrType::RelaDyn);
+            let rela_dyn_vaddr = shdr_manager.get_vaddr(SectionKind::RelaDyn);
+            let rela_dyn_size = shdr_manager.get_size(SectionKind::RelaDyn);
             self.update_entry(DT_RELA as i64, rela_dyn_vaddr);
             self.update_entry(DT_RELASZ as i64, rela_dyn_size);
 
-            let rela_plt_vaddr = shdr_manager.get_vaddr(ShdrType::RelaPlt);
-            let rela_plt_size = shdr_manager.get_size(ShdrType::RelaPlt);
+            let rela_plt_vaddr = shdr_manager.get_vaddr(SectionKind::RelaPlt);
+            let rela_plt_size = shdr_manager.get_size(SectionKind::RelaPlt);
             self.update_entry(DT_JMPREL as i64, rela_plt_vaddr);
             self.update_entry(DT_PLTRELSZ as i64, rela_plt_size);
             self.update_entry(DT_RELACOUNT as i64, reloc.relative_count() as u64);
         } else {
-            let rel_dyn_vaddr = shdr_manager.get_vaddr(ShdrType::RelDyn);
-            let rel_dyn_size = shdr_manager.get_size(ShdrType::RelDyn);
+            let rel_dyn_vaddr = shdr_manager.get_vaddr(SectionKind::RelDyn);
+            let rel_dyn_size = shdr_manager.get_size(SectionKind::RelDyn);
             self.update_entry(DT_REL as i64, rel_dyn_vaddr);
             self.update_entry(DT_RELSZ as i64, rel_dyn_size);
 
-            let rel_plt_vaddr = shdr_manager.get_vaddr(ShdrType::RelPlt);
-            let rel_plt_size = shdr_manager.get_size(ShdrType::RelPlt);
+            let rel_plt_vaddr = shdr_manager.get_vaddr(SectionKind::RelPlt);
+            let rel_plt_size = shdr_manager.get_size(SectionKind::RelPlt);
             self.update_entry(DT_JMPREL as i64, rel_plt_vaddr);
             self.update_entry(DT_PLTRELSZ as i64, rel_plt_size);
             self.update_entry(DT_RELCOUNT as i64, reloc.relative_count() as u64);
         }
-        let dyn_id = shdr_manager.get_data_id(ShdrType::Dynamic);
+        let dyn_id = shdr_manager.get_data_id(SectionKind::Dynamic);
         self.write_to_vec(allocator.get_mut(&dyn_id), is_64)?;
         Ok(())
     }
