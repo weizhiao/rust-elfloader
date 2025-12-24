@@ -5,7 +5,7 @@ use crate::{
     relocate_error,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{boxed::Box, format, string::ToString, vec::Vec};
 use core::{
     ops::{Add, Sub},
     ptr::null,
@@ -20,18 +20,57 @@ use portable_atomic_util::Arc;
 pub(crate) mod dynamic_link;
 pub(crate) mod static_link;
 
-/// A trait for looking up symbols during relocation
+/// A trait for looking up symbols during relocation.
 ///
 /// This trait allows for flexible symbol resolution strategies, supporting
-/// both closures and complex structs with state.
+/// both closures and complex structs with state. It is used to find the
+/// addresses of external symbols that the ELF object depends on.
+///
+/// # Examples
+///
+/// Using a closure:
+/// ```rust
+/// use elf_loader::SymbolLookup;
+///
+/// let lookup = |name: &str| {
+///     if name == "my_func" {
+///         Some(0x1234 as *const ())
+///     } else {
+///         None
+///     }
+/// };
+/// ```
+///
+/// Using a custom struct:
+/// ```rust
+/// use elf_loader::SymbolLookup;
+/// use std::collections::HashMap;
+///
+/// struct MyResolver {
+///     symbols: HashMap<String, usize>,
+/// }
+///
+/// impl SymbolLookup for MyResolver {
+///     fn lookup(&self, name: &str) -> Option<*const ()> {
+///         self.symbols.get(name).map(|&addr| addr as *const ())
+///     }
+/// }
+/// ```
 pub trait SymbolLookup {
-    /// Find the address of a symbol by name
+    /// Finds the address of a symbol by its name.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the symbol to look up.
+    ///
+    /// # Returns
+    /// * `Some(*const ())` - The address of the symbol if found.
+    /// * `None` - If the symbol was not found.
     fn lookup(&self, name: &str) -> Option<*const ()>;
 }
 
-impl<F> SymbolLookup for F
+impl<F: ?Sized> SymbolLookup for F
 where
-    F: Fn(&str) -> Option<*const ()> + ?Sized,
+    F: Fn(&str) -> Option<*const ()>,
 {
     fn lookup(&self, name: &str) -> Option<*const ()> {
         self(name)
@@ -50,16 +89,50 @@ impl SymbolLookup for () {
     }
 }
 
-/// A trait for handling unknown relocations
+/// A trait for handling unknown or custom relocations.
+///
+/// This trait allows users to provide custom logic for relocations that are
+/// not handled by the default relocator or for intercepting relocations.
+///
+/// # Examples
+///
+/// ```rust
+/// use elf_loader::{RelocationHandler, RelocHandleContext, Result};
+///
+/// struct MyHandler;
+///
+/// impl RelocationHandler for MyHandler {
+///     fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+///         let rel = ctx.rel();
+///         // Custom logic to handle specific relocation types or symbols
+///         None // Fallthrough to default behavior
+///     }
+/// }
+/// ```
 pub trait RelocationHandler {
-    /// Handle an unknown relocation
+    /// Handles a relocation.
     ///
-    /// Returns:
-    /// - `Some(Ok(None))`: Handled successfully
-    /// - `Some(Ok(Some(idx)))`: Handled successfully and the library at `scope[idx]` is used
-    /// - `Some(Err(e))`: Handled but failed
-    /// - `None`: Not handled (fallthrough)
+    /// # Arguments
+    /// * `ctx` - The context containing information about the relocation.
+    ///
+    /// # Returns
+    /// * `Some(Ok(None))` - The relocation was handled successfully.
+    /// * `Some(Ok(Some(idx)))` - The relocation was handled successfully, and the library at `scope[idx]` was used.
+    /// * `Some(Err(e))` - The relocation was handled but failed with an error.
+    /// * `None` - The relocation was not handled by this handler (fallthrough to default behavior).
     fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>>;
+}
+
+impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
+    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+        (**self).handle(ctx)
+    }
+}
+
+impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
+    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+        (**self).handle(ctx)
+    }
 }
 
 /// Context for relocation operations
@@ -176,16 +249,29 @@ pub trait Relocatable<D = ()>: Sized {
         PostH: RelocationHandler;
 }
 
-/// A builder for configuring and executing the relocation process
-pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()>
-where
-    T: Relocatable<D>,
-    PreS: SymbolLookup,
-    PostS: SymbolLookup,
-    LazyS: SymbolLookup,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
-{
+/// A builder for configuring and executing the relocation process.
+///
+/// `Relocator` provides a fluent interface for setting up symbol resolution
+/// strategies, relocation handlers, and binding behaviors before performing
+/// the actual relocation of an ELF object.
+///
+/// # Examples
+/// ```no_run
+/// use elf_loader::{Loader, object::ElfBinary};
+///
+/// let mut loader = Loader::new();
+/// let bytes = &[]; // ELF file bytes
+/// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
+///
+/// let relocated = lib.relocator()
+///     .pre_find_fn(|name| {
+///         if name == "malloc" { Some(0x1234 as *const ()) } else { None }
+///     })
+///     .lazy(true)
+///     .relocate()
+///     .unwrap();
+/// ```
+pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
     object: T,
     scope: Vec<Relocated<D>>,
     pre_find: PreS,
@@ -198,7 +284,7 @@ where
 }
 
 impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
-    /// Create a new relocator builder
+    /// Creates a new `Relocator` builder for the given object.
     pub fn new(object: T) -> Self {
         Self {
             object,
@@ -223,7 +309,10 @@ where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
-    /// Set the preferred symbol lookup function
+    /// Sets the preferred symbol lookup strategy.
+    ///
+    /// Symbols will be searched using this strategy before checking the
+    /// default scope or fallback strategies.
     pub fn pre_find<S2>(self, pre_find: S2) -> Relocator<T, S2, PostS, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
@@ -241,7 +330,49 @@ where
         }
     }
 
-    /// Set the fallback symbol lookup function
+    /// Sets the preferred symbol lookup strategy using a closure.
+    pub fn pre_find_fn(
+        self,
+        pre_find: impl Fn(&str) -> Option<*const ()>,
+    ) -> Relocator<T, impl Fn(&str) -> Option<*const ()>, PostS, LazyS, PreH, PostH, D> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find,
+            post_find: self.post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+        }
+    }
+
+    /// Sets the fallback symbol lookup strategy using a closure.
+    ///
+    /// This strategy will be used if a symbol is not found in the preferred
+    /// strategy or the default scope.
+    pub fn post_find_fn(
+        self,
+        post_find: impl Fn(&str) -> Option<*const ()>,
+    ) -> Relocator<T, PreS, impl Fn(&str) -> Option<*const ()>, LazyS, PreH, PostH, D> {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            lazy: self.lazy,
+            lazy_scope: self.lazy_scope,
+            use_scope_as_lazy: self.use_scope_as_lazy,
+        }
+    }
+
+    /// Sets the fallback symbol lookup strategy.
+    ///
+    /// This strategy will be used if a symbol is not found in the preferred
+    /// strategy or the default scope.
     pub fn post_find<S2>(self, post_find: S2) -> Relocator<T, PreS, S2, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
@@ -259,7 +390,10 @@ where
         }
     }
 
-    /// Set the scope of relocated libraries for symbol resolution
+    /// Sets the scope of relocated libraries for symbol resolution.
+    ///
+    /// The relocator will search for symbols in these libraries in the order
+    /// they are provided.
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -269,7 +403,9 @@ where
         self
     }
 
-    /// Set the pre-processing relocation handler (pre_handler)
+    /// Sets the pre-processing relocation handler.
+    ///
+    /// This handler is called before the default relocation logic.
     pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
@@ -290,7 +426,10 @@ where
         }
     }
 
-    /// Set the post-processing relocation handler (post_handler)
+    /// Sets the post-processing relocation handler.
+    ///
+    /// This handler is called after the default relocation logic if the
+    /// relocation was not already handled.
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
@@ -311,19 +450,22 @@ where
         }
     }
 
-    /// Enable or disable lazy binding
+    /// Enables or disables lazy binding.
+    ///
+    /// If enabled, some relocations (typically PLT entries) will be resolved
+    /// on-demand when the function is first called.
     pub fn lazy(mut self, lazy: bool) -> Self {
         self.lazy = Some(lazy);
         self
     }
 
-    /// Set the lazy scope (symbol lookup for lazy binding)
+    /// Sets the lazy scope for symbol resolution during lazy binding.
     pub fn lazy_scope<NewLazyS>(
         self,
         scope: NewLazyS,
     ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
     where
-        NewLazyS: SymbolLookup,
+        NewLazyS: SymbolLookup + Send + Sync + 'static,
     {
         Relocator {
             object: self.object,
@@ -338,13 +480,19 @@ where
         }
     }
 
-    /// Use scope as lazy scope (merges with any previously set lazy scope)
+    /// Uses the provided scope as the lazy scope for symbol resolution.
     pub fn use_scope_as_lazy(mut self) -> Self {
         self.use_scope_as_lazy = true;
         self
     }
 
-    /// Execute the relocation process
+    /// Executes the relocation process.
+    ///
+    /// This method consumes the relocator and returns the relocated ELF object.
+    ///
+    /// # Returns
+    /// * `Ok(T::Output)` - The relocated ELF object.
+    /// * `Err(Error)` - If relocation fails.
     pub fn relocate(self) -> Result<T::Output>
     where
         D: 'static,

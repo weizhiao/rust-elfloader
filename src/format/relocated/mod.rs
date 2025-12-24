@@ -336,58 +336,60 @@ impl<D> DerefMut for LazyParse<D> {
     }
 }
 
-/// A common part of relocated ELF objects
+/// A common part of relocated ELF objects.
 ///
 /// This structure represents the common components shared by all relocated
 /// ELF objects, whether they are dynamic libraries or executables.
+/// It contains basic information like entry point, name, and program headers,
+/// as well as lazily parsed data required for relocation and symbol lookup.
 pub struct RelocatedCommonPart<D>
 where
     D: 'static,
 {
-    /// Entry point of the ELF object
+    /// Entry point of the ELF object.
     entry: usize,
-    /// PT_INTERP segment value (interpreter path)
+    /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
-    /// Name of the ELF file
+    /// Name of the ELF file.
     name: &'static CStr,
-    /// Program headers
+    /// Program headers.
     phdrs: ElfPhdrs,
-    /// Data parsed lazily
+    /// Data parsed lazily.
     data: LazyParse<D>,
 }
 
 impl<D> RelocatedCommonPart<D> {
-    /// Gets the entry point of the ELF object
+    /// Gets the entry point of the ELF object.
     ///
     /// # Returns
-    /// The virtual address of the entry point
+    /// The virtual address of the entry point.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
     }
 
-    /// Gets the core component reference of the ELF object
+    /// Gets the core component reference of the ELF object.
     ///
     /// # Returns
-    /// A reference to the CoreComponent
+    /// A reference to the [`CoreComponent`].
     #[inline]
     pub fn core_ref(&self) -> &CoreComponent<D> {
         &self.data.core
     }
 
-    /// Gets the core component of the ELF object
+    /// Gets the core component of the ELF object.
     ///
     /// # Returns
-    /// A cloned CoreComponent
+    /// A cloned [`CoreComponent`].
     #[inline]
     pub fn core(&self) -> CoreComponent<D> {
         self.data.core.clone()
     }
 
-    /// Converts this object into its core component
+    /// Converts this object into its core component.
     ///
     /// # Returns
-    /// The CoreComponent
+    /// The [`CoreComponent`].
     #[inline]
     pub fn into_core(self) -> CoreComponent<D> {
         self.data.force();

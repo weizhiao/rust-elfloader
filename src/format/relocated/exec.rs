@@ -65,7 +65,7 @@ impl<D> Deref for ElfExec<D> {
     }
 }
 
-/// An unrelocated executable file
+/// An unrelocated executable file.
 ///
 /// This structure represents an executable ELF file that has been loaded
 /// into memory but has not yet undergone relocation. It contains all the
@@ -75,12 +75,12 @@ pub struct ElfExec<D>
 where
     D: 'static,
 {
-    /// The common part containing basic ELF object information
+    /// The common part containing basic ELF object information.
     inner: RelocatedCommonPart<D>,
 }
 
 impl<D> Debug for ElfExec<D> {
-    /// Formats the ElfExec for debugging purposes
+    /// Formats the [`ElfExec`] for debugging purposes.
     ///
     /// This implementation provides a debug representation that includes
     /// the executable name and its dependencies.
@@ -93,9 +93,9 @@ impl<D> Debug for ElfExec<D> {
 }
 
 impl<D: 'static> ElfExec<D> {
-    /// Create a builder for relocating the executable
+    /// Creates a builder for relocating the executable.
     ///
-    /// This method returns a `Relocator` that allows configuring the relocation
+    /// This method returns a [`Relocator`] that allows configuring the relocation
     /// process with fine-grained control, such as setting a custom unknown relocation
     /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
@@ -104,18 +104,27 @@ impl<D: 'static> ElfExec<D> {
 }
 
 impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
-    /// Load an executable file into memory
+    /// Loads an executable file into memory.
     ///
     /// This method loads an executable ELF file into memory and prepares it
     /// for relocation. The file is validated to ensure it is indeed an
     /// executable and not a dynamic library.
     ///
     /// # Arguments
-    /// * `object` - The ELF object to load as an executable
+    /// * `object` - The ELF object to load as an executable.
     ///
     /// # Returns
-    /// * `Ok(ElfExec)` - The loaded executable
-    /// * `Err(Error)` - If loading fails
+    /// * `Ok(ElfExec)` - The loaded executable.
+    /// * `Err(Error)` - If loading fails.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use elf_loader::{Loader, object::ElfBinary};
+    ///
+    /// let mut loader = Loader::new();
+    /// let bytes = &[]; // ELF executable bytes
+    /// let exec = loader.load_exec(ElfBinary::new("my_exec", bytes)).unwrap();
+    /// ```
     pub fn load_exec(&mut self, mut object: impl ElfObject) -> Result<ElfExec<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
@@ -133,24 +142,24 @@ impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
     }
 }
 
-/// An executable file that has been relocated
+/// An executable file that has been relocated.
 ///
 /// This structure represents an executable ELF file that has been loaded
 /// and relocated in memory, making it ready for execution. It contains
 /// the entry point and other information needed to run the executable.
 #[derive(Clone)]
 pub struct RelocatedExec<D> {
-    /// Entry point of the executable
+    /// Entry point of the executable.
     entry: usize,
-    /// The relocated ELF object
+    /// The relocated ELF object.
     inner: Relocated<D>,
 }
 
 impl<D> RelocatedExec<D> {
-    /// Gets the entry point of the executable
+    /// Returns the entry point of the executable.
     ///
     /// # Returns
-    /// The virtual address of the entry point
+    /// The virtual address of the entry point.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
@@ -158,9 +167,9 @@ impl<D> RelocatedExec<D> {
 }
 
 impl<D> Debug for RelocatedExec<D> {
-    /// Formats the RelocatedExec for debugging purposes
+    /// Formats the [`RelocatedExec`] for debugging purposes.
     ///
-    /// This implementation delegates to the inner Relocated object's
+    /// This implementation delegates to the inner [`Relocated`] object's
     /// debug implementation.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.inner.fmt(f)
@@ -170,10 +179,10 @@ impl<D> Debug for RelocatedExec<D> {
 impl<D> Deref for RelocatedExec<D> {
     type Target = CoreComponent<D>;
 
-    /// Dereferences to the underlying CoreComponent
+    /// Dereferences to the underlying [`CoreComponent`].
     ///
-    /// This implementation allows direct access to the CoreComponent
-    /// fields through the RelocatedExec wrapper.
+    /// This implementation allows direct access to the [`CoreComponent`]
+    /// fields through the [`RelocatedExec`] wrapper.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }

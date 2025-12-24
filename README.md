@@ -93,9 +93,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lib = load_dylib!("path/to/your_library.so")?
         .relocator()
         // Optional: Provide custom symbol resolution (e.g., export symbols from host)
-        .pre_find(|sym_name| {
+        .pre_find_fn(|sym_name| {
             if sym_name == "my_host_function" {
-                Some(my_host_function as *mut std::ffi::c_void)
+                Some(my_host_function as *const ())
             } else {
                 None
             }
@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .relocate()?; // Complete all relocations
 
     // 2. Safely retrieve and call the function
-    let awesome_func: &extern "C" fn(i32) -> i32 = unsafe { lib.get("awesome_func")? };
+    let awesome_func = unsafe { lib.get::<fn(i32) -> i32>("awesome_func")? };
     let result = awesome_func(42);
     println!("Result: {}", result);
     

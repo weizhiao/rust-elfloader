@@ -83,9 +83,9 @@ fn main() {
     let lib = load_dylib!("path/to/your_library.so")?
         .relocator()
         // 可选：提供自定义符号解析（例如，从主程序导出符号）
-        .pre_find(|sym_name| {
+        .pre_find_fn(|sym_name| {
             if sym_name == "my_host_function" {
-                Some(my_host_function as *mut std::ffi::c_void)
+                Some(my_host_function as *const ())
             } else {
                 None
             }
@@ -93,7 +93,7 @@ fn main() {
         .relocate()?; // 完成所有重定位
 
     // 2. 安全地获取并调用函数
-    let awesome_func: &extern "C" fn(i32) -> i32 = unsafe { lib.get("awesome_func")? };
+    let awesome_func = unsafe { lib.get::<fn(i32) -> i32>("awesome_func")? };
     let result = awesome_func(42);
     println!("结果: {}", result);
 }

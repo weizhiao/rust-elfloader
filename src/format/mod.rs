@@ -46,49 +46,52 @@ impl<D> Deref for Relocated<D> {
     }
 }
 
-/// An unrelocated ELF file
+/// An unrelocated ELF file.
 ///
 /// This enum represents an ELF file that has been loaded into memory but
-/// has not yet undergone relocation. It can be either a dynamic library
-/// or an executable.
+/// has not yet undergone relocation. It can be either a dynamic library,
+/// an executable, or a relocatable object file.
 #[derive(Debug)]
 pub enum Elf<D>
 where
     D: 'static,
 {
-    /// A dynamic library (shared object)
+    /// A dynamic library (shared object, `.so`).
     Dylib(ElfDylib<D>),
 
-    /// An executable file
+    /// An executable file.
     Exec(ElfExec<D>),
 
-    /// A relocatable file (object file)
+    /// A relocatable object file (`.o`).
     Relocatable(ElfRelocatable),
 }
 
-/// An ELF file that has been relocated
+/// An ELF file that has been relocated and is ready for execution.
 ///
 /// This enum represents an ELF file that has been loaded and relocated.
-/// It maintains lifetime information to prevent premature deallocation
-/// of dependencies.
+/// It maintains dependency information to ensure that required libraries
+/// are not deallocated while this ELF is still in use.
 #[derive(Debug, Clone)]
 pub enum RelocatedElf<D> {
-    /// A relocated dynamic library
+    /// A relocated dynamic library.
     Dylib(RelocatedDylib<D>),
 
-    /// A relocated executable
+    /// A relocated executable.
     Exec(RelocatedExec<D>),
 
-    /// A relocated relocatable file (always uses () for user_data)
+    /// A relocated relocatable file.
     Relocatable(Relocated<()>),
 }
 
 impl<D: 'static> Elf<D> {
-    /// Create a builder for relocating the ELF file
+    /// Creates a builder for relocating the ELF file.
     ///
-    /// This method returns a `Relocator` that allows configuring the relocation
-    /// process with fine-grained control, such as setting a custom unknown relocation
-    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
+    /// This method returns a [`Relocator`] that allows configuring the relocation
+    /// process with fine-grained control, such as:
+    /// * Providing custom symbol resolution strategies.
+    /// * Handling unknown relocations.
+    /// * Configuring lazy or eager binding.
+    /// * Specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
@@ -224,24 +227,32 @@ impl<D: 'static> Relocatable<D> for Elf<D> {
 
 /// A symbol from ELF object
 ///
+/// A symbol loaded from an ELF file.
+///
 /// This structure represents a symbol loaded from an ELF file, such as a
 /// function or global variable. It provides safe access to the symbol
 /// while maintaining proper lifetime information.
+///
+/// The type parameter `T` represents the type of the symbol (e.g., a function
+/// signature or a variable type).
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
-    /// Raw pointer to the symbol data
+    /// Raw pointer to the symbol data.
     pub(crate) ptr: *mut (),
 
-    /// Phantom data to maintain lifetime information
+    /// Phantom data to maintain lifetime information.
     pd: PhantomData<&'lib T>,
 }
 
 impl<'lib, T> Deref for Symbol<'lib, T> {
     type Target = T;
 
-    /// Dereferences to the underlying symbol type
+    /// Dereferences to the underlying symbol type.
     ///
-    /// This allows direct use of the symbol as if it were of type T.
+    /// This allows direct use of the symbol as if it were of type `T`.
+    ///
+    /// # Returns
+    /// A reference to the symbol of type `T`.
     fn deref(&self) -> &T {
         unsafe { &*(&self.ptr as *const *mut _ as *const T) }
     }
@@ -266,20 +277,21 @@ unsafe impl<T: Send> Send for Symbol<'_, T> {}
 // Safety: Symbol can be shared between threads if T can
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-/// A relocated ELF object
+/// A relocated ELF object.
 ///
 /// This structure represents an ELF file that has been loaded and relocated
 /// in memory. It maintains references to its dependencies to prevent
-/// premature deallocation.
+/// premature deallocation of required libraries while this object is still in use.
 #[derive(Debug)]
 pub struct Relocated<D> {
-    /// The core component containing the actual ELF data
+    /// The core component containing the actual ELF data.
     pub(crate) core: CoreComponent<D>,
-    /// The dependencies of the ELF object
+    /// The dependencies of the ELF object.
     pub(crate) deps: Arc<[Relocated<D>]>,
 }
 
 impl<D> Clone for Relocated<D> {
+    /// Clones the [`Relocated`] object, incrementing the reference count of its dependencies.
     fn clone(&self) -> Self {
         Relocated {
             core: self.core.clone(),
@@ -289,18 +301,18 @@ impl<D> Clone for Relocated<D> {
 }
 
 impl<D> Relocated<D> {
-    /// Creates a Relocated instance from a CoreComponent
+    /// Creates a [`Relocated`] instance from a [`CoreComponent`].
     ///
     /// # Safety
-    /// The current ELF object has not yet been relocated, so it is dangerous
-    /// to use this function to convert `CoreComponent` to `RelocateDylib`.
-    /// Lifecycle information is lost.
+    /// This function is unsafe because it assumes the ELF object has been
+    /// properly relocated, which is not verified here. Additionally, it
+    /// creates an empty dependency list, which may not be correct for all objects.
     ///
     /// # Arguments
-    /// * `core` - The CoreComponent to wrap
+    /// * `core` - The [`CoreComponent`] to wrap.
     ///
     /// # Returns
-    /// A new Relocated instance
+    /// A new [`Relocated`] instance.
     #[inline]
     pub unsafe fn from_core(core: CoreComponent<D>) -> Self {
         Relocated {
@@ -309,24 +321,23 @@ impl<D> Relocated<D> {
         }
     }
 
-    /// Gets the dependencies of the ELF object (short name `deps`)
+    /// Returns the dependencies of the ELF object.
     pub fn deps(&self) -> &[Relocated<D>] {
         &self.deps
     }
 
-    /// Creates a Relocated instance from a CoreComponent and dependencies
+    /// Creates a [`Relocated`] instance from a [`CoreComponent`] and its dependencies.
     ///
     /// # Safety
-    /// The current ELF object has not yet been relocated, so it is dangerous
-    /// to use this function to convert `CoreComponent` to `RelocateDylib`.
-    /// Lifecycle information is lost.
+    /// This function is unsafe because it assumes the ELF object has been
+    /// properly relocated, which is not verified here.
     ///
     /// # Arguments
-    /// * `core` - The CoreComponent to wrap
-    /// * `deps` - The dependencies of the ELF object
+    /// * `core` - The [`CoreComponent`] to wrap.
+    /// * `deps` - The dependencies of the ELF object.
     ///
     /// # Returns
-    /// A new Relocated instance
+    /// A new [`Relocated`] instance.
     #[inline]
     pub unsafe fn from_core_deps(core: CoreComponent<D>, deps: Vec<Relocated<D>>) -> Self {
         Relocated {
@@ -398,11 +409,11 @@ impl<D> Relocated<D> {
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, Loader, Relocatable};
+    /// # use elf_loader::{object::ElfBinary, Symbol, Loader};
     /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().relocator().symbols(&| _: &str| None).scope([].iter()).relocate().unwrap();
+    /// #        .unwrap().relocator().relocate().unwrap();
     /// unsafe {
     ///     let awesome_function: Symbol<unsafe extern "C" fn(f64) -> f64> =
     ///         lib.get("awesome_function").unwrap();
@@ -412,11 +423,11 @@ impl<D> Relocated<D> {
     ///
     /// A static variable may also be loaded and inspected:
     /// ```no_run
-    /// # use elf_loader::{object::ElfBinary, Symbol, Loader, Relocatable};
+    /// # use elf_loader::{object::ElfBinary, Symbol, Loader};
     /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().relocator().symbols(&| _: &str| None).scope([].iter()).relocate().unwrap();
+    /// #        .unwrap().relocator().relocate().unwrap();
     /// unsafe {
     ///     let awesome_variable: Symbol<*mut f64> = lib.get("awesome_variable").unwrap();
     ///     **awesome_variable = 42.0;
@@ -581,34 +592,40 @@ impl<D> Drop for CoreComponentInner<D> {
     }
 }
 
-/// `CoreComponentRef` is a version of `CoreComponent` that holds a non-owning reference to the managed allocation.
+/// A non-owning reference to a [`CoreComponent`].
+///
+/// `CoreComponentRef` holds a weak reference to the managed allocation of a
+/// [`CoreComponent`]. It can be used to avoid circular dependencies or to
+/// check if the component is still alive.
 #[derive(Clone)]
 pub struct CoreComponentRef<D = ()> {
-    /// Weak reference to the CoreComponentInner
+    /// Weak reference to the [`CoreComponentInner`].
     inner: Weak<CoreComponentInner<D>>,
 }
 
 impl<D> CoreComponentRef<D> {
-    /// Attempts to upgrade the Weak pointer to an Arc
+    /// Attempts to upgrade the weak pointer to an [`CoreComponent`].
     ///
     /// # Returns
-    /// * `Some(CoreComponent)` - If the upgrade is successful
-    /// * `None` - If the CoreComponent has been dropped
+    /// * `Some(CoreComponent)` - If the component is still alive and the upgrade is successful.
+    /// * `None` - If the [`CoreComponent`] has been dropped.
     pub fn upgrade(&self) -> Option<CoreComponent<D>> {
         self.inner.upgrade().map(|inner| CoreComponent { inner })
     }
 }
 
-/// The core part of an ELF object
+/// The core part of an ELF object.
 ///
 /// This structure represents the core data of an ELF object, including
 /// its metadata, symbols, segments, and other essential information.
+/// It uses an [`Arc`] internally to manage the lifetime of the underlying data.
 pub struct CoreComponent<D = ()> {
-    /// Shared reference to the inner component data
+    /// Shared reference to the inner component data.
     pub(crate) inner: Arc<CoreComponentInner<D>>,
 }
 
 impl<D> Clone for CoreComponent<D> {
+    /// Clones the [`CoreComponent`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         CoreComponent {
             inner: Arc::clone(&self.inner),

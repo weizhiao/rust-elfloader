@@ -28,19 +28,27 @@ use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FIL
 use portable_atomic_util::Arc;
 
 impl<M: Mmap, H: Hook<()>> Loader<M, H, ()> {
-    /// Load a relocatable ELF file into memory
+    /// Loads a relocatable ELF file into memory.
     ///
-    /// This method loads a relocatable ELF file (typically a .o file) into memory
+    /// This method loads a relocatable ELF file (typically a `.o` file) into memory
     /// and prepares it for relocation. The file is not yet relocated after this
     /// operation.
     ///
     /// # Arguments
-    /// * `object` - The ELF object to load
-    /// * `lazy_bind` - Optional override for lazy binding behavior
+    /// * `object` - The ELF object to load.
     ///
     /// # Returns
-    /// * `Ok(ElfRelocatable<D>)` - The loaded relocatable ELF file
-    /// * `Err(Error)` - If loading fails
+    /// * `Ok(ElfRelocatable)` - The loaded relocatable ELF file.
+    /// * `Err(Error)` - If loading fails.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use elf_loader::{Loader, object::ElfBinary};
+    ///
+    /// let mut loader = Loader::new();
+    /// let bytes = &[]; // Relocatable ELF bytes
+    /// let rel = loader.load_relocatable(ElfBinary::new("liba.o", bytes)).unwrap();
+    /// ```
     pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
         self.load_rel(ehdr, object)
@@ -216,43 +224,44 @@ impl RelocatableBuilder {
     }
 }
 
-/// A relocatable ELF object
+/// A relocatable ELF object.
 ///
-/// This structure represents a relocatable ELF file (typically a .o file)
+/// This structure represents a relocatable ELF file (typically a `.o` file)
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
 pub struct ElfRelocatable {
-    /// Core component containing basic ELF information
+    /// Core component containing basic ELF information.
     pub(crate) core: CoreComponent<()>,
 
-    /// Static relocation information
+    /// Static relocation information.
     pub(crate) relocation: StaticRelocation,
 
-    /// PLT/GOT section information
+    /// PLT/GOT section information.
     pub(crate) pltgot: PltGotSection,
 
-    /// Memory protection function
+    /// Memory protection function.
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
-    /// Initialization function handler
+    /// Initialization function handler.
     pub(crate) init: FnHandler,
 
-    /// Initialization function array
+    /// Initialization function array.
     pub(crate) init_array: Option<&'static [fn()]>,
 }
 
 impl Deref for ElfRelocatable {
     type Target = CoreComponent<()>;
 
+    /// Dereferences to the underlying [`CoreComponent`].
     fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
 
 impl ElfRelocatable {
-    /// Create a builder for relocating the relocatable file
+    /// Creates a builder for relocating the relocatable file.
     ///
-    /// This method returns a `Relocator` that allows configuring the relocation
+    /// This method returns a [`Relocator`] that allows configuring the relocation
     /// process with fine-grained control, such as setting a custom unknown relocation
     /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), ()> {
@@ -261,7 +270,7 @@ impl ElfRelocatable {
 }
 
 impl Debug for ElfRelocatable {
-    /// Formats the ElfRelocatable for debugging purposes
+    /// Formats the [`ElfRelocatable`] for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfRelocatable")
             .field("core", &self.core)

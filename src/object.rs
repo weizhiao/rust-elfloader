@@ -86,7 +86,7 @@ pub struct ElfBinary<'bytes> {
 impl<'bytes> ElfBinary<'bytes> {
     /// Creates a new memory-based ELF object.
     ///
-    /// This constructor creates an [ElfBinary] instance from a byte slice
+    /// This constructor creates an [`ElfBinary`] instance from a byte slice
     /// containing the ELF data and a name for the object.
     ///
     /// # Arguments
@@ -95,12 +95,14 @@ impl<'bytes> ElfBinary<'bytes> {
     /// * `bytes` - A byte slice containing the complete ELF data.
     ///
     /// # Returns
-    /// A new [ElfBinary] instance.
+    /// A new [`ElfBinary`] instance.
     ///
     /// # Examples
-    /// ```rust,ignore
-    /// let elf_data = include_bytes!("my_library.so");
-    /// let elf_binary = ElfBinary::new("my_library.so", elf_data);
+    /// ```rust
+    /// use elf_loader::object::ElfBinary;
+    ///
+    /// let data = &[]; // In practice, this would be the bytes of an ELF file
+    /// let binary = ElfBinary::new("liba.so", data);
     /// ```
     pub fn new(name: &str, bytes: &'bytes [u8]) -> Self {
         Self {

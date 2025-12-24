@@ -7,11 +7,6 @@ use crate::{
 };
 use elf::abi::*;
 
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
-
 pub const EM_ARCH: u16 = EM_X86_64;
 pub const TLS_DTV_OFFSET: usize = 0;
 

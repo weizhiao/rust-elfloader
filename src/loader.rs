@@ -74,7 +74,9 @@ impl ElfBuf {
 }
 
 /// Context provided to hook functions during ELF loading.
-/// Contains information about the current program header being processed.
+///
+/// This struct contains information about the current program header being
+/// processed, the ELF segments, and user-defined data.
 pub struct HookContext<'a, D> {
     name: &'a CStr,
     phdr: &'a ElfPhdr,
@@ -83,7 +85,7 @@ pub struct HookContext<'a, D> {
 }
 
 impl<'a, D> HookContext<'a, D> {
-    /// Create a new HookContext.
+    /// Creates a new `HookContext`.
     pub(crate) fn new(
         name: &'a CStr,
         phdr: &'a ElfPhdr,
@@ -98,29 +100,59 @@ impl<'a, D> HookContext<'a, D> {
         }
     }
 
-    /// Get the name associated with this hook context.
+    /// Returns the name associated with this hook context.
+    ///
+    /// This is typically the name of the ELF object being loaded.
     pub fn name(&self) -> &'a CStr {
         self.name
     }
 
-    /// Get the program header for the current segment.
+    /// Returns the program header for the current segment being processed.
     pub fn phdr(&self) -> &'a ElfPhdr {
         self.phdr
     }
 
-    /// Get the ELF segments.
+    /// Returns the ELF segments that have been loaded or are being loaded.
     pub fn segments(&self) -> &'a ElfSegments {
         self.segments
     }
 
-    /// Get mutable access to user data for customization.
+    /// Returns mutable access to the user-defined data.
+    ///
+    /// This allows hooks to maintain state or pass information between calls.
     pub fn user_data_mut(&mut self) -> &mut D {
         self.user_data
     }
 }
 
-/// Hook trait used for processing program headers during load.
+/// Hook trait used for processing program headers during the loading process.
+///
+/// This trait allows users to intercept and perform custom actions when each
+/// program header is processed. It is particularly useful for handling
+/// custom segments or performing additional setup for specific segments.
+///
+/// # Examples
+/// ```rust
+/// use elf_loader::{Hook, HookContext, Result};
+///
+/// struct MyHook;
+///
+/// impl Hook for MyHook {
+///     fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, ()>) -> Result<()> {
+///         println!("Processing segment: {:?}", ctx.phdr());
+///         Ok(())
+///     }
+/// }
+/// ```
 pub trait Hook<D = ()> {
+    /// Executes the hook with the provided context.
+    ///
+    /// # Arguments
+    /// * `ctx` - The context containing information about the current segment.
+    ///
+    /// # Returns
+    /// * `Ok(())` if the hook executed successfully.
+    /// * `Err` if an error occurred during hook execution.
     fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, D>) -> Result<()>;
 }
 
@@ -141,7 +173,16 @@ impl Hook for () {
 
 pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 
-/// The elf object loader
+/// The ELF object loader.
+///
+/// `Loader` is responsible for reading ELF headers, program headers, and
+/// orchestrating the loading of ELF objects into memory. It supports
+/// customization through hooks and custom memory mapping implementations.
+///
+/// # Type Parameters
+/// * `M` - The memory mapping implementation (must implement `Mmap`).
+/// * `H` - The hook implementation (must implement `Hook`).
+/// * `D` - The type of user data passed to hooks.
 pub struct Loader<M, H, D = ()>
 where
     M: Mmap,
@@ -156,7 +197,9 @@ where
 }
 
 impl Loader<DefaultMmap, (), ()> {
-    /// Create a new loader with default DefaultMmap and no hook
+    /// Creates a new `Loader` with the default `DefaultMmap` and no hook.
+    ///
+    /// This is the simplest way to create a loader for standard use cases.
     pub fn new() -> Self {
         let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
             func.iter()
@@ -174,19 +217,34 @@ impl Loader<DefaultMmap, (), ()> {
 }
 
 impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
-    /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
+    /// Sets the initialization function handler.
+    ///
+    /// This handler is responsible for calling the initialization functions
+    /// (e.g., `.init` and `.init_array`) of the loaded ELF object.
+    ///
+    /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
+    /// as a non-standard extension.
     pub fn set_init(&mut self, init_fn: FnHandler) -> &mut Self {
         self.init_fn = init_fn;
         self
     }
 
-    /// Set the finalization function handler
+    /// Sets the finalization function handler.
+    ///
+    /// This handler is responsible for calling the finalization functions
+    /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
     pub fn set_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
         self.fini_fn = fini_fn;
         self
     }
 
-    /// Consume self and return一个新的Loader，允许替换为新的Hook类型
+    /// Consumes the current loader and returns a new one with the specified hook.
+    ///
+    /// This allows replacing the hook type and user data type.
+    ///
+    /// # Type Parameters
+    /// * `NewD` - The new user data type.
+    /// * `NewHook` - The new hook type.
     pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD>
     where
         NewD: Default,
@@ -201,7 +259,13 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
         }
     }
 
-    /// Consume self并返回一个新的Loader，允许替换为用户自定义的Mmap类型
+    /// Consumes the current loader and returns a new one with a custom `Mmap` implementation.
+    ///
+    /// This allows using a custom memory mapping strategy, which is useful for
+    /// bare-metal or specialized environments.
+    ///
+    /// # Type Parameters
+    /// * `NewMmap` - The new memory mapping implementation.
     pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D> {
         Loader {
             buf: self.buf,
@@ -212,12 +276,27 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
         }
     }
 
-    /// Read the elf header
+    /// Reads the ELF header from the given object.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to read from.
+    ///
+    /// # Returns
+    /// * `Ok(ElfHeader)` if the header was read and parsed successfully.
+    /// * `Err` if an error occurred.
     pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
         self.buf.prepare_ehdr(object)
     }
 
-    /// Read the program header table
+    /// Reads the program header table from the given object.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to read from.
+    /// * `ehdr` - The previously read ELF header.
+    ///
+    /// # Returns
+    /// * `Ok(&[ElfPhdr])` if the program headers were read successfully.
+    /// * `Err` if an error occurred.
     pub fn read_phdr(
         &mut self,
         object: &mut impl ElfObject,
