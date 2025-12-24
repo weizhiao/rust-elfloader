@@ -45,7 +45,7 @@ pub(crate) fn patch_plt_entry(
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // call 1f; 1: pop ebx; add ebx, _GLOBAL_OFFSET_TABLE_; call target@PLT; ret
+    // call 1f; 1: pop ebx; add ebx, _GLOBAL_OFFSET_TABLE_; jmp target@PLT
     let mut code = vec![0x90; 32];
     // call 1f (offset 5)
     code[0] = 0xe8;
@@ -58,10 +58,8 @@ pub(crate) fn generate_helper_code() -> Vec<u8> {
     // add ebx, imm32
     code[6] = 0x81;
     code[7] = 0xc3;
-    // call rel32
-    code[12] = 0xe8;
-    // ret
-    code[17] = 0xc3;
+    // jmp rel32
+    code[12] = 0xe9;
     code
 }
 
@@ -77,8 +75,8 @@ pub(crate) fn patch_helper(
     let got_off = (got_vaddr as i64 - (helper_vaddr + 5) as i64) as i32;
     text_data[helper_text_off + 8..helper_text_off + 12].copy_from_slice(&got_off.to_le_bytes());
 
-    // Patch PLT call
-    // call rel32 is at helper_vaddr + 12. Next instruction is at helper_vaddr + 17.
+    // Patch PLT jmp
+    // jmp rel32 is at helper_vaddr + 12. Next instruction is at helper_vaddr + 17.
     let rel_off = (target_plt_vaddr as i64 - (helper_vaddr + 17) as i64) as i32;
     text_data[helper_text_off + 13..helper_text_off + 17].copy_from_slice(&rel_off.to_le_bytes());
 }

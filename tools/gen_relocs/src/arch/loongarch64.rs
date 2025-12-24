@@ -88,20 +88,8 @@ pub(crate) fn patch_plt_entry(
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    let mut code = vec![0; 24];
-    // addi.d $sp, $sp, -16
-    code[0..4].copy_from_slice(&[0x63, 0xc0, 0xff, 0x02]);
-    // st.d $ra, $sp, 8
-    code[4..8].copy_from_slice(&[0x61, 0x20, 0xc0, 0x29]);
-    // bl 0 (Placeholder, patched later)
-    code[8..12].copy_from_slice(&[0x00, 0x00, 0x00, 0x50]);
-    // ld.d $ra, $sp, 8
-    code[12..16].copy_from_slice(&[0x61, 0x20, 0xc0, 0x28]);
-    // addi.d $sp, $sp, 16
-    code[16..20].copy_from_slice(&[0x63, 0x40, 0xc0, 0x02]);
-
-    code[20..24].copy_from_slice(&[0x20, 0x00, 0x00, 0x4c]);
-    code
+    // b <offset>
+    vec![0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00]
 }
 
 pub(crate) fn patch_helper(
@@ -110,11 +98,9 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // bl is at helper_vaddr + 8
-    // 计算 bl 的 offset (26位, 4字节对齐)
-    let off = (target_plt_vaddr as i64 - (helper_vaddr + 8) as i64) / 4;
-    let insn = 0x54000000 | encode_imm26(off as i32);
-    text_data[helper_text_off + 8..helper_text_off + 12].copy_from_slice(&insn.to_le_bytes());
+    let off = (target_plt_vaddr as i64 - helper_vaddr as i64) / 4;
+    let insn = 0x50000000 | encode_imm26(off as i32);
+    text_data[helper_text_off..helper_text_off + 4].copy_from_slice(&insn.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {

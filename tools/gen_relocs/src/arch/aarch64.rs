@@ -101,18 +101,8 @@ fn encode_add_imm12(rd: u32, rn: u32, imm: u32) -> u32 {
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    let mut code = vec![0; 16];
-
-    // 1. stp x29, x30, [sp, #-16]!
-    code[0..4].copy_from_slice(&[0xfd, 0x7b, 0xbf, 0xa9]);
-
-    // 3. ldp x29, x30, [sp], #16
-    code[8..12].copy_from_slice(&[0xfd, 0x7b, 0xc1, 0xa8]);
-
-    // 4. ret
-    code[12..16].copy_from_slice(&[0xc0, 0x03, 0x5f, 0xd6]);
-
-    code
+    // 一个简单的跳转指令，预留空间给 patch_helper 来填充
+    vec![0; 8]
 }
 
 pub(crate) fn patch_helper(
@@ -121,17 +111,16 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // bl 指令现在位于 helper 的第 2 条指令处 (offset + 4)
-    let bl_pc = helper_vaddr + 4;
+    let pc = helper_vaddr;
 
     // 计算相对偏移
-    let off = (target_plt_vaddr as i64 - bl_pc as i64) / 4;
+    let off = (target_plt_vaddr as i64 - pc as i64) / 4;
 
-    // 生成 bl 指令
-    let insn = 0x94000000 | ((off & 0x03ffffff) as u32);
+    // 生成 b 指令 (26-bit immediate)
+    // B: 0x14000000 | (imm26 & 0x03ffffff)
+    let insn = 0x14000000 | ((off & 0x03ffffff) as u32);
 
-    // 写入到 text_data 的对应位置 (注意 +4)
-    text_data[helper_text_off + 4..helper_text_off + 8].copy_from_slice(&insn.to_le_bytes());
+    text_data[helper_text_off..helper_text_off + 4].copy_from_slice(&insn.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {

@@ -122,15 +122,10 @@ fn encode_arm_imm(mut n: u32) -> Option<u32> {
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // push {r11, lr} (stmdb sp!, {r11, lr}) - 8 bytes for alignment
-    // bl <offset>
-    // pop {r11, lr} (ldmia sp!, {r11, lr})
-    // bx lr
-    let mut code = vec![0; 16];
-    code[0..4].copy_from_slice(&[0x00, 0x48, 0x2d, 0xe9]);
-    code[4..8].copy_from_slice(&[0x00, 0x00, 0x00, 0xeb]);
-    code[8..12].copy_from_slice(&[0x00, 0x48, 0xbd, 0xe8]);
-    code[12..16].copy_from_slice(&[0x1e, 0xff, 0x2f, 0xe1]);
+    // 一个简单的跳转指令
+    let mut code = vec![0; 4];
+    // b <offset> (Placeholder)
+    code[0..4].copy_from_slice(&[0x00, 0x00, 0x00, 0xea]);
     code
 }
 
@@ -140,10 +135,10 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // bl is at helper_vaddr + 4. PC = (helper_vaddr + 4) + 8 = helper_vaddr + 12
-    let off = (target_plt_vaddr as i64 - (helper_vaddr + 12) as i64) / 4;
-    let insn = 0xeb000000 | ((off & 0x00ffffff) as u32);
-    text_data[helper_text_off + 4..helper_text_off + 8].copy_from_slice(&insn.to_le_bytes());
+    // b is at helper_vaddr. PC = helper_vaddr + 8
+    let off = (target_plt_vaddr as i64 - (helper_vaddr + 8) as i64) / 4;
+    let insn = 0xea000000 | ((off & 0x00ffffff) as u32);
+    text_data[helper_text_off..helper_text_off + 4].copy_from_slice(&insn.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {

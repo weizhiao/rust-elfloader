@@ -66,10 +66,9 @@ pub(crate) fn patch_plt_entry(
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // For x86_64: E8 00 00 00 00 (call rel32, 5 bytes)
-    // C3 (ret, 1 byte)
+    // For x86_64: E9 00 00 00 00 (jmp rel32, 5 bytes)
     // We use 8 bytes for alignment
-    vec![0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3, 0x90, 0x90]
+    vec![0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90]
 }
 
 pub(crate) fn patch_helper(
@@ -78,12 +77,12 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // Update call rel32
-    // E8 <offset>
+    // Update jmp rel32
+    // E9 <offset>
     // offset = target - (current_rip)
     // current_rip = helper_vaddr + 5
     let rel_off = (target_plt_vaddr as i64 - (helper_vaddr + 5) as i64) as i32;
-    text_data[helper_text_off] = 0xE8;
+    text_data[helper_text_off] = 0xE9;
     text_data[helper_text_off + 1..helper_text_off + 5].copy_from_slice(&rel_off.to_le_bytes());
 }
 

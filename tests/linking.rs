@@ -38,11 +38,54 @@ fn get_arch() -> Arch {
         panic!("Unsupported architecture for dynamic linking test");
     }
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct F64x2(pub [f64; 2]);
 
+#[unsafe(no_mangle)]
 // External function and variables to be resolved
-extern "C" fn external_func() -> i32 {
-    42
+extern "C" fn external_func(
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    a5: i64,
+    a6: i64,
+    a7: i64,
+    a8: i64,
+    v1: F64x2,
+    f1: f64,
+    f2: f64,
+    f3: f64,
+    f4: f64,
+    f5: f64,
+    f6: f64,
+    f7: f64,
+) -> f64 {
+    (a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8) as f64
+        + (f1 + f2 + f3 + f4 + f5 + f6 + f7)
+        + v1.0[0]
+        + v1.0[1]
 }
+
+type ExternalFunc = extern "C" fn(
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    F64x2,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+) -> f64;
 
 static mut EXTERNAL_VAR: i32 = 100;
 
@@ -96,7 +139,7 @@ fn dynamic_linking() {
 
 #[test]
 fn dynamic_linking_with_lazy() {
-    //run_dynamic_linking(true);
+    run_dynamic_linking(true);
 }
 
 fn run_dynamic_linking(is_lazy: bool) {
@@ -185,17 +228,33 @@ fn run_dynamic_linking(is_lazy: bool) {
 
     println!("✓ Library loaded and relocated at 0x{:x}", relocated.base());
 
-    if is_lazy {
-        let helper_name = format!("{}@helper", EXTERNAL_FUNC_NAME);
-        unsafe {
-            let helper_func = relocated
-                .get::<fn() -> i32>(&helper_name)
-                .expect("Failed to get helper function");
-            let result = helper_func();
-            assert_eq!(result, 42, "Helper function returned wrong value");
-        }
-        println!("✓ Lazy binding verified via helper function");
+    let v_val = F64x2([9.9, 10.10]);
+
+    let result = external_func(
+        1, 2, 3, 4, 5, 6, 7, 8, v_val, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7,
+    );
+    let expected = (1 + 2 + 3 + 4 + 5 + 6 + 7 + 8) as f64
+        + (1.1 + 2.2 + 3.3 + 4.4 + 5.5 + 6.6 + 7.7)
+        + v_val.0[0]
+        + v_val.0[1];
+    assert!((result - expected).abs() < 0.0001);
+    println!("✓ Direct call verified");
+
+    let helper_name = format!("{}@helper", EXTERNAL_FUNC_NAME);
+    unsafe {
+        let helper_func: ExternalFunc = core::mem::transmute(
+            relocated
+                .get::<*const ()>(&helper_name)
+                .expect("Failed to get helper function")
+                .into_raw(),
+        );
+
+        let result = helper_func(
+            1, 2, 3, 4, 5, 6, 7, 8, v_val, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7,
+        );
+        assert!((result - expected).abs() < 0.0001);
     }
+    println!("✓ Binding verified via helper function with many arguments");
 
     // Verify relocation entries comprehensively
     let mut reloc_by_type: HashMap<u32, usize> = HashMap::new();

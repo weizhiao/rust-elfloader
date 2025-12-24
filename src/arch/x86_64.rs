@@ -48,7 +48,8 @@ pub extern "C" fn dl_runtime_resolve() {
     push r11
 
     // Save xmm registers (arguments can be passed in xmm0-xmm7)
-    sub rsp, 128
+    // We need 128 bytes for xmm0-xmm7 + 8 bytes padding to align stack to 16 bytes
+    sub rsp, 136
     movdqu [rsp + 0], xmm0
     movdqu [rsp + 16], xmm1
     movdqu [rsp + 32], xmm2
@@ -61,13 +62,14 @@ pub extern "C" fn dl_runtime_resolve() {
     // Arguments for dl_fixup(link_map, reloc_idx)
     // link_map was pushed by PLT0, reloc_idx was pushed by PLT entry
     // Stack layout now:
-    // [rsp + 0..128]  : xmm0-xmm7
-    // [rsp + 128..192]: r11, r10, r9, r8, rcx, rdx, rsi, rdi (8 * 8 = 64)
-    // [rsp + 192]     : link_map
-    // [rsp + 200]     : reloc_idx
-    // [rsp + 208]     : return address to caller
-    mov rdi, [rsp + 192]
-    mov rsi, [rsp + 200]
+    // [rsp + 0..127]  : xmm0-xmm7
+    // [rsp + 128..135]: padding
+    // [rsp + 136..199]: r11, r10, r9, r8, rcx, rdx, rsi, rdi (8 * 8 = 64)
+    // [rsp + 200]     : link_map
+    // [rsp + 208]     : reloc_idx
+    // [rsp + 216]     : return address to caller
+    mov rdi, [rsp + 200]
+    mov rsi, [rsp + 208]
 
     // Call the resolver
     call {0}
@@ -81,7 +83,7 @@ pub extern "C" fn dl_runtime_resolve() {
     movdqu xmm5, [rsp + 80]
     movdqu xmm6, [rsp + 96]
     movdqu xmm7, [rsp + 112]
-    add rsp, 128
+    add rsp, 136
 
     // Restore caller-saved registers
     pop r11

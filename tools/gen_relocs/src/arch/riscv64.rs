@@ -3,8 +3,6 @@ const REG_T0: u32 = 5;
 const REG_T1: u32 = 6;
 const REG_T2: u32 = 7;
 const REG_T3: u32 = 28;
-const REG_RA: u32 = 1;
-const REG_SP: u32 = 2;
 
 pub(crate) fn generate_plt0_code() -> Vec<u8> {
     // 现代 glibc PLT0 (32 bytes)
@@ -152,43 +150,18 @@ fn encode_rtype(op: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) 
 }
 
 pub(crate) fn generate_helper_code() -> Vec<u8> {
-    // 总共 7 条指令，28 字节
-    let mut code = vec![0; 28];
+    // 总共 2 条指令，8 字节
+    let mut code = vec![0; 8];
 
-    // 1. addi sp, sp, -16
-    // opcode=0x13, rd=2, rs1=2, imm=-16
-    let addi_sp_down = encode_itype(0x13, REG_SP, REG_SP, (-16i32) as u32);
-
-    // 2. sd ra, 8(sp)
-    // S-Type: opcode=0x23, funct3=3, rs1=sp(2), rs2=ra(1), imm=8
-    // hex: 0x00113423
-    let sd_ra = 0x00113423u32;
-
-    // 3. auipc t0, 0 (Placeholder)
+    // 1. auipc t0, 0 (Placeholder)
     let auipc = encode_utype(0x17, REG_T0, 0);
 
-    // 4. jalr ra, t0, 0 (Placeholder)
-    let jalr = encode_itype(0x67, REG_RA, REG_T0, 0);
-
-    // 5. ld ra, 8(sp)
-    // I-Type: opcode=0x03, funct3=3, rd=ra(1), rs1=sp(2), imm=8
-    // hex: 0x00813083
-    let ld_ra = 0x00813083u32;
-
-    // 6. addi sp, sp, 16
-    let addi_sp_up = encode_itype(0x13, REG_SP, REG_SP, 16);
-
-    // 7. ret (jr ra) => jalr x0, 0(ra)
-    let ret = 0x00008067u32;
+    // 2. jr t0 (jalr x0, t0, 0)
+    let jr = encode_itype(0x67, 0, REG_T0, 0);
 
     // 填入 Buffer
-    code[0..4].copy_from_slice(&addi_sp_down.to_le_bytes());
-    code[4..8].copy_from_slice(&sd_ra.to_le_bytes());
-    code[8..12].copy_from_slice(&auipc.to_le_bytes()); // Patch target
-    code[12..16].copy_from_slice(&jalr.to_le_bytes()); // Patch target
-    code[16..20].copy_from_slice(&ld_ra.to_le_bytes());
-    code[20..24].copy_from_slice(&addi_sp_up.to_le_bytes());
-    code[24..28].copy_from_slice(&ret.to_le_bytes());
+    code[0..4].copy_from_slice(&auipc.to_le_bytes());
+    code[4..8].copy_from_slice(&jr.to_le_bytes());
 
     code
 }
@@ -199,20 +172,17 @@ pub(crate) fn patch_helper(
     helper_vaddr: u64,
     target_plt_vaddr: u64,
 ) {
-    // 注意：auipc 指令现在位于 helper 的第 8 个字节处 (索引 2)
-    // 所以 auipc 的 PC 是 helper_vaddr + 8
-    let pc = helper_vaddr + 8;
+    let pc = helper_vaddr;
 
     let off = target_plt_vaddr as i64 - pc as i64;
     let hi = (off + 0x800) as u32 & 0xfffff000;
     let lo = (off as u32).wrapping_sub(hi) & 0xfff;
 
     let auipc = encode_utype(0x17, REG_T0, hi);
-    let jalr = encode_itype(0x67, REG_RA, REG_T0, lo);
+    let jr = encode_itype(0x67, 0, REG_T0, lo);
 
-    // 这里的偏移量也要相应调整：+8 和 +12
-    text_data[helper_text_off + 8..helper_text_off + 12].copy_from_slice(&auipc.to_le_bytes());
-    text_data[helper_text_off + 12..helper_text_off + 16].copy_from_slice(&jalr.to_le_bytes());
+    text_data[helper_text_off..helper_text_off + 4].copy_from_slice(&auipc.to_le_bytes());
+    text_data[helper_text_off + 4..helper_text_off + 8].copy_from_slice(&jr.to_le_bytes());
 }
 
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {
