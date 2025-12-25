@@ -117,7 +117,7 @@ use core::fmt::{Debug, Display};
 pub use elf::abi;
 pub use format::{
     DylibImage, ElfImage, ElfModule, ElfModuleRef, ExecImage, LoadedDylib, LoadedExec,
-    LoadedModule, Symbol,
+    LoadedModule, ObjectImage, Symbol,
 };
 pub use loader::{LoadHook, LoadHookContext, Loader};
 pub use reader::{ElfBinary, ElfFile, ElfReader};

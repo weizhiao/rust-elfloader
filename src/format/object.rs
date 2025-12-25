@@ -52,7 +52,7 @@ impl<M: Mmap, H: LoadHook<()>> Loader<M, H, ()> {
     /// ```
     pub fn load_object(&mut self, mut object: impl ElfReader) -> Result<ObjectImage> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
-        self.load_rel(ehdr, object)
+        self.load_object_impl(ehdr, object)
     }
 }
 
@@ -253,7 +253,7 @@ pub struct ObjectImage {
 impl Deref for ObjectImage {
     type Target = ElfModule<()>;
 
-    /// Dereferences to the underlying [`CoreComponent`].
+    /// Dereferences to the underlying [`ElfModule`].
     fn deref(&self) -> &Self::Target {
         &self.core
     }

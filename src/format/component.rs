@@ -31,9 +31,9 @@ use portable_atomic_util::{Arc, Weak};
 impl<D> Deref for LoadedModule<D> {
     type Target = ElfModule<D>;
 
-    /// Dereferences to the underlying CoreComponent
+    /// Dereferences to the underlying ElfModule
     ///
-    /// This allows direct access to the CoreComponent fields through the Relocated wrapper.
+    /// This allows direct access to the ElfModule fields through the Relocated wrapper.
     fn deref(&self) -> &Self::Target {
         &self.core
     }
@@ -47,12 +47,12 @@ impl<D> Deref for LoadedModule<D> {
 /// function or global variable. It provides safe access to the symbol
 /// while maintaining proper lifetime information.
 ///
-/// The type parameter `T` represents the type of the symbol (e.g., a function
-/// signature or a variable type).
+/// The lifetime parameter `'lib` ensures the symbol cannot outlive the
+/// library it came from.
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
     /// Raw pointer to the symbol data.
-    pub(crate) ptr: *mut (),
+    ptr: *mut (),
 
     /// Phantom data to maintain lifetime information.
     pd: PhantomData<&'lib T>,
@@ -91,11 +91,11 @@ unsafe impl<T: Send> Send for Symbol<'_, T> {}
 // Safety: Symbol can be shared between threads if T can
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-/// A loaded and relocated ELF module.
+/// A loaded ELF module with its dependencies.
 ///
-/// This structure represents an ELF module that has been loaded into memory
-/// and relocated. It maintains references to its dependencies to ensure
-/// proper lifetime management.
+/// This structure represents an ELF module that has been loaded into memory,
+/// along with its dependencies. It maintains references to its dependencies
+/// to ensure proper lifetime management and symbol resolution.
 #[derive(Debug)]
 pub struct LoadedModule<D> {
     /// The core component containing the actual ELF data.
@@ -167,13 +167,13 @@ impl<D> LoadedModule<D> {
     /// ELF object can be prematurely deallocated, which can cause serious problems.
     ///
     /// # Returns
-    /// A reference to the CoreComponent
+    /// A reference to the ElfModule
     #[inline]
     pub unsafe fn core_ref(&self) -> &ElfModule<D> {
         &self.core
     }
 
-    /// Creates a new Relocated instance without validation
+    /// Creates a new LoadedModule instance without validation
     ///
     /// # Safety
     /// The caller needs to ensure that the parameters passed in come
@@ -188,7 +188,7 @@ impl<D> LoadedModule<D> {
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
-    /// A new Relocated instance
+    /// A new LoadedModule instance
     #[inline]
     pub unsafe fn new_unchecked(
         name: CString,
@@ -352,7 +352,7 @@ impl ElfPhdrs {
     }
 }
 
-/// Inner structure for CoreComponent
+/// Inner structure for ElfModule
 pub(crate) struct ModuleInner<D = ()> {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
@@ -394,23 +394,23 @@ impl<D> Drop for ModuleInner<D> {
     }
 }
 
-/// A non-owning reference to a [`CoreComponent`].
+/// A non-owning reference to a [`ElfModule`].
 ///
-/// `CoreComponentRef` holds a weak reference to the managed allocation of a
-/// [`CoreComponent`]. It can be used to avoid circular dependencies or to
+/// `ElfModuleRef` holds a weak reference to the managed allocation of a
+/// [`ElfModule`]. It can be used to avoid circular dependencies or to
 /// check if the component is still alive.
 #[derive(Clone)]
 pub struct ElfModuleRef<D = ()> {
-    /// Weak reference to the [`CoreComponentInner`].
+    /// Weak reference to the [`ModuleInner`].
     inner: Weak<ModuleInner<D>>,
 }
 
 impl<D> ElfModuleRef<D> {
-    /// Attempts to upgrade the weak pointer to an [`CoreComponent`].
+    /// Attempts to upgrade the weak pointer to an [`ElfModule`].
     ///
     /// # Returns
-    /// * `Some(CoreComponent)` - If the component is still alive and the upgrade is successful.
-    /// * `None` - If the [`CoreComponent`] has been dropped.
+    /// * `Some(ElfModule)` - If the component is still alive and the upgrade is successful.
+    /// * `None` - If the [`ElfModule`] has been dropped.
     pub fn upgrade(&self) -> Option<ElfModule<D>> {
         self.inner.upgrade().map(|inner| ElfModule { inner })
     }
@@ -420,14 +420,15 @@ impl<D> ElfModuleRef<D> {
 ///
 /// This structure represents the core data of an ELF object, including
 /// its metadata, symbols, segments, and other essential information.
-/// It uses an [`Arc`] internally to manage the lifetime of the underlying data.
+/// It uses an [`Arc`] internally to manage the lifetime of the underlying data
+/// and enable shared ownership.
 pub struct ElfModule<D = ()> {
     /// Shared reference to the inner component data.
     pub(crate) inner: Arc<ModuleInner<D>>,
 }
 
 impl<D> Clone for ElfModule<D> {
-    /// Clones the [`CoreComponent`], incrementing the internal reference count.
+    /// Clones the [`ElfModule`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfModule {
             inner: Arc::clone(&self.inner),
@@ -451,9 +452,9 @@ impl<D> ElfModule<D> {
         D: 'static,
         LazyS: SymbolLookup + Send + Sync + 'static,
     {
-        // 因为在完成重定位前，只有unsafe的方法可以拿到CoreComponent的引用，所以这里认为是安全的
+        // 因为在完成重定位前，只有unsafe的方法可以拿到ElfModule的引用，所以这里认为是安全的
         // LazyScope 会被长期存储用于延迟绑定符号查询，因此需要 Send + Sync + 'static 约束
-        // 注意：D 的生命周期由 CoreComponentInner<D> 保证
+        // 注意：D 的生命周期由 ModuleInner<D> 保证
         unsafe {
             let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut ModuleInner<D>);
             // 在relocate接口处保证了lazy_scope的声明周期，因此这里直接转换
@@ -470,7 +471,7 @@ impl<D> ElfModule<D> {
     /// Creates a new Weak pointer to this allocation
     ///
     /// # Returns
-    /// A CoreComponentRef that holds a weak reference to this component
+    /// An ElfModuleRef that holds a weak reference to this component
     #[inline]
     pub fn downgrade(&self) -> ElfModuleRef<D> {
         ElfModuleRef {
@@ -611,7 +612,7 @@ impl<D> ElfModule<D> {
         &self.inner.segments
     }
 
-    /// Creates a CoreComponent from raw data
+    /// Creates an ElfModule from raw data
     ///
     /// # Arguments
     /// * `name` - The name of the ELF file
@@ -622,7 +623,7 @@ impl<D> ElfModule<D> {
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
-    /// A new CoreComponent instance
+    /// A new ElfModule instance
     fn from_raw(
         name: CString,
         base: usize,
@@ -656,7 +657,7 @@ impl<D> ElfModule<D> {
 }
 
 impl<D> Debug for ElfModule<D> {
-    /// Formats the CoreComponent for debugging purposes
+    /// Formats the ElfModule for debugging purposes
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Dylib")
             .field("name", &self.inner.name)

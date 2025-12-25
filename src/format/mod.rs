@@ -17,7 +17,7 @@ mod dynamic;
 mod object;
 
 pub(crate) use component::ModuleInner;
-pub(crate) use dynamic::{DynamicBuilder, DynamicComponent};
+pub(crate) use dynamic::{DynamicBuilder, DynamicImage};
 pub(crate) use object::ObjectBuilder;
 
 pub use component::{ElfModule, ElfModuleRef, LoadedModule};
@@ -76,7 +76,7 @@ impl<D: 'static> ElfImage<D> {
 }
 
 impl<D> LoadedElf<D> {
-    /// Converts this RelocatedElf into a RelocatedDylib if it is one
+    /// Converts this LoadedElf into a LoadedDylib if it is one
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
@@ -89,7 +89,7 @@ impl<D> LoadedElf<D> {
         }
     }
 
-    /// Converts this RelocatedElf into a RelocatedExec if it is one
+    /// Converts this LoadedElf into a LoadedExec if it is one
     ///
     /// # Returns
     /// * `Some(exec)` - If this is an Exec variant
@@ -102,7 +102,7 @@ impl<D> LoadedElf<D> {
         }
     }
 
-    /// Gets a reference to the RelocatedDylib if this is one
+    /// Gets a reference to the LoadedDylib if this is one
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
@@ -119,12 +119,12 @@ impl<D> LoadedElf<D> {
 impl<D> Deref for ElfImage<D> {
     type Target = ElfModule<D>;
 
-    /// Dereferences to the underlying CoreComponent
+    /// Dereferences to the underlying ElfModule
     ///
     /// This allows direct access to common fields shared by all ELF file types.
     ///
     /// # Panics
-    /// Panics if called on a Relocatable variant, as relocatable files always use `CoreComponent<()>`.
+    /// Panics if called on a Relocatable variant, as relocatable files always use `ElfModule<()>`.
     fn deref(&self) -> &Self::Target {
         match self {
             ElfImage::Dylib(elf_dylib) => elf_dylib.core_ref(),
@@ -271,7 +271,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
             Ok(ElfImage::Dylib(self.load_dylib(object)?))
         } else if ehdr.e_type == elf::abi::ET_REL {
             // Relocatable files don't use user_data, so we call load_rel directly
-            Ok(ElfImage::Object(self.load_rel(ehdr, object)?))
+            Ok(ElfImage::Object(self.load_object_impl(ehdr, object)?))
         } else {
             Ok(ElfImage::Exec(self.load_exec(object)?))
         }

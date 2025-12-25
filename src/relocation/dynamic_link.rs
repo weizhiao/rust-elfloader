@@ -2,7 +2,7 @@
 use crate::{
     ElfModuleRef, LoadedDylib, Result,
     arch::*,
-    format::{DynamicComponent, LoadedModule, ModuleInner},
+    format::{DynamicImage, LoadedModule, ModuleInner},
     relocation::{
         RelocContext, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
         find_symbol_addr, likely, reloc_error, unlikely,
@@ -55,7 +55,7 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
     RelocValue::new(ifunc())
 }
 
-impl<D> DynamicComponent<D> {
+impl<D> DynamicImage<D> {
     pub(crate) fn relocate_impl<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[LoadedModule<D>],
@@ -120,7 +120,7 @@ impl<D> DynamicComponent<D> {
 
 /// Perform relocations on an ELF object
 fn relocate_impl<D, PreS, PostS, LazyS, PreH, PostH>(
-    elf: DynamicComponent<D>,
+    elf: DynamicImage<D>,
     scope: &[LoadedModule<D>],
     pre_find: &PreS,
     post_find: &PostS,
@@ -224,7 +224,7 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-impl<D> DynamicComponent<D> {
+impl<D> DynamicImage<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreS, PostS, LazyS, PreH, PostH>(
         &self,

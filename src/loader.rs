@@ -2,7 +2,7 @@ use crate::{
     ElfReader, Result,
     arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
     ehdr::ElfHeader,
-    format::{DynamicBuilder, DynamicComponent, ObjectBuilder, ObjectImage},
+    format::{DynamicBuilder, DynamicImage, ObjectBuilder, ObjectImage},
     mmap::Mmap,
     os::DefaultMmap,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
@@ -134,7 +134,7 @@ impl<'a, D> LoadHookContext<'a, D> {
 ///
 /// struct MyHook;
 ///
-/// impl LoadHook for MyHook {
+/// impl LoadHook<()> for MyHook {
 ///     fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
 ///         println!("Processing segment: {:?}", ctx.phdr());
 ///         Ok(())
@@ -221,7 +221,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     ///
     /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
     /// as a non-standard extension.
-    pub fn set_init(&mut self, init_fn: FnHandler) -> &mut Self {
+    pub fn with_init(&mut self, init_fn: FnHandler) -> &mut Self {
         self.init_fn = init_fn;
         self
     }
@@ -230,7 +230,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     ///
     /// This handler is responsible for calling the finalization functions
     /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
-    pub fn set_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
+    pub fn with_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
         self.fini_fn = fini_fn;
         self
     }
@@ -303,11 +303,11 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     }
 
     /// Load a dynamic ELF object
-    pub(crate) fn load_dynamic<'loader>(
-        &'loader mut self,
+    pub(crate) fn load_dynamic_impl(
+        &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfReader,
-    ) -> Result<DynamicComponent<D>> {
+    ) -> Result<DynamicImage<D>> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
@@ -326,7 +326,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     }
 
     /// Load a relocatable ELF object
-    pub(crate) fn load_rel(
+    pub(crate) fn load_object_impl(
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfReader,

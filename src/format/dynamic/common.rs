@@ -3,7 +3,7 @@ use crate::{
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
-    format::component::{ModuleInner, ElfPhdrs, ElfType},
+    format::component::{ElfPhdrs, ElfType, ModuleInner},
     loader::FnHandler,
     mmap::Mmap,
     relocation::DynamicRelocation,
@@ -341,7 +341,7 @@ impl<D> DerefMut for LazyParse<D> {
 /// ELF objects, whether they are dynamic libraries or executables.
 /// It contains basic information like entry point, name, and program headers,
 /// as well as lazily parsed data required for relocation and symbol lookup.
-pub struct DynamicComponent<D>
+pub struct DynamicImage<D>
 where
     D: 'static,
 {
@@ -357,7 +357,7 @@ where
     data: LazyParse<D>,
 }
 
-impl<D> DynamicComponent<D> {
+impl<D> DynamicImage<D> {
     /// Gets the entry point of the ELF object.
     ///
     /// # Returns
@@ -370,7 +370,7 @@ impl<D> DynamicComponent<D> {
     /// Gets the core component reference of the ELF object.
     ///
     /// # Returns
-    /// A reference to the [`CoreComponent`].
+    /// A reference to the [`ElfModule`].
     #[inline]
     pub fn core_ref(&self) -> &ElfModule<D> {
         &self.data.core
@@ -379,7 +379,7 @@ impl<D> DynamicComponent<D> {
     /// Gets the core component of the ELF object.
     ///
     /// # Returns
-    /// A cloned [`CoreComponent`].
+    /// A cloned [`ElfModule`].
     #[inline]
     pub fn core(&self) -> ElfModule<D> {
         self.data.core.clone()
@@ -388,7 +388,7 @@ impl<D> DynamicComponent<D> {
     /// Converts this object into its core component.
     ///
     /// # Returns
-    /// The [`CoreComponent`].
+    /// The [`ElfModule`].
     #[inline]
     pub fn into_core(self) -> ElfModule<D> {
         self.data.force();
@@ -593,7 +593,7 @@ where
     /// Create a new DynamicBuilder
     ///
     /// # Arguments
-    /// * `hook` - Optional hook function for processing program headers
+    /// * `hook` - Hook function for processing program headers
     /// * `segments` - Memory segments of the ELF file
     /// * `name` - Name of the ELF file
     /// * `ehdr` - ELF header
@@ -601,7 +601,7 @@ where
     /// * `fini_fn` - Finalization function handler
     ///
     /// # Returns
-    /// A new RelocatedBuilder instance
+    /// A new DynamicBuilder instance
     pub(crate) fn new(
         hook: &'hook H,
         segments: ElfSegments,
@@ -720,7 +720,7 @@ where
     /// # Returns
     /// * `Ok(RelocatedCommonPart)` - The built relocated ELF object
     /// * `Err(Error)` - If building fails
-    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicComponent<D>> {
+    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicImage<D>> {
         // Determine if this is a dynamic library
         let elf_type = if self.ehdr.is_dylib() {
             ElfType::Dylib
@@ -737,7 +737,7 @@ where
         let phdrs = self.create_phdrs(phdrs);
 
         // Build and return the relocated common part
-        Ok(DynamicComponent {
+        Ok(DynamicImage {
             entry: self.ehdr.e_entry as usize
                 + if elf_type.is_dylib() {
                     self.segments.base()

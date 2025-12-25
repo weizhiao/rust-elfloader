@@ -6,7 +6,7 @@
 
 use crate::{
     LoadHook, Loader, Result,
-    format::{LoadedModule, dynamic::common::DynamicComponent},
+    format::{LoadedModule, dynamic::common::DynamicImage},
     mmap::Mmap,
     parse_ehdr_error,
     reader::ElfReader,
@@ -25,11 +25,11 @@ where
     D: 'static,
 {
     /// The common part containing basic ELF object information.
-    inner: DynamicComponent<D>,
+    inner: DynamicImage<D>,
 }
 
 impl<D> Deref for DylibImage<D> {
-    type Target = DynamicComponent<D>;
+    type Target = DynamicImage<D>;
 
     /// Dereferences to the underlying [`DynamicComponent`].
     ///
@@ -144,7 +144,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
         }
 
         // Load the relocated common part
-        let inner = self.load_dynamic(ehdr, object)?;
+        let inner = self.load_dynamic_impl(ehdr, object)?;
 
         // Wrap in ElfDylib and return
         Ok(DylibImage { inner })
