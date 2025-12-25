@@ -63,7 +63,7 @@ macro_rules! riscv32_dl_runtime_resolve {
                 // 执行真正的函数
                 jr t1
                 ",
-                sym crate::relocation::dynamic_link::dl_fixup,
+                sym crate::relocation::dl_fixup,
             )
         }
     };

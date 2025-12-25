@@ -1,8 +1,8 @@
 use crate::{
-    ElfObject, Result,
+    ElfReader, Result,
     arch::{ElfShdr, PLT_ENTRY, PLT_ENTRY_SIZE, Shdr, StaticRelocator},
     mmap::{MapFlags, Mmap, ProtFlags},
-    relocation::{RelocValue, static_link::StaticReloc},
+    relocation::{RelocValue, StaticReloc},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -80,7 +80,7 @@ impl SegmentBuilder for ShdrSegments {
 
 impl ShdrSegments {
     /// Create a new ShdrSegments instance from section headers
-    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfObject) -> Self {
+    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Self {
         // Create section units for different memory protection types
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
 
@@ -167,7 +167,7 @@ pub(crate) enum PltEntry<'plt> {
 }
 
 impl PltGotSection {
-    fn count_needed_entries(shdrs: &[ElfShdr], object: &mut impl ElfObject) -> (usize, usize) {
+    fn count_needed_entries(shdrs: &[ElfShdr], object: &mut impl ElfReader) -> (usize, usize) {
         let mut got_set = HashSet::new();
         let mut plt_set = HashSet::new();
 

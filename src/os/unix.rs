@@ -1,7 +1,7 @@
 use crate::{
     Error, Result, io_error,
     mmap::{MapFlags, Mmap, ProtFlags},
-    object::ElfObject,
+    reader::ElfReader,
 };
 use alloc::{ffi::CString, string::ToString};
 use core::{
@@ -176,7 +176,7 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
     }
 }
 
-impl ElfObject for RawFile {
+impl ElfReader for RawFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         lseek(self.fd as i32, offset)?;
         read_exact(self.fd as i32, buf)?;

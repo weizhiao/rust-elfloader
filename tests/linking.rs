@@ -1,9 +1,8 @@
 use elf_loader::{
-    Loader,
+    ElfBinary, Loader,
     arch::{
         REL_COPY, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC,
     },
-    object::ElfBinary,
 };
 use gen_elf::{Arch, DylibWriter, ElfWriterConfig, ObjectWriter, RelocEntry, SymbolDesc};
 use std::collections::HashMap;
@@ -404,7 +403,7 @@ fn static_linking() {
     // Load the relocatable object
     let mut loader = Loader::new();
     let obj = loader
-        .load_relocatable(elf_binary)
+        .load_object(elf_binary)
         .expect("Failed to load relocatable object");
     println!("Relocatable object loaded");
 

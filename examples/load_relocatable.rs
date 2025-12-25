@@ -1,5 +1,5 @@
 use core::str;
-use elf_loader::{Loader, object::ElfFile};
+use elf_loader::{ElfFile, Loader};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,14 +19,14 @@ fn main() {
     let mut loader = Loader::new();
     let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
-        .load_relocatable(object)
+        .load_object(object)
         .unwrap()
         .relocator()
         .pre_find(pre_find.clone())
         .relocate()
         .unwrap();
     let b = loader
-        .load_relocatable(ElfFile::from_path("target/b.o").unwrap())
+        .load_object(ElfFile::from_path("target/b.o").unwrap())
         .unwrap()
         .relocator()
         .pre_find(pre_find.clone())
@@ -34,7 +34,7 @@ fn main() {
         .relocate()
         .unwrap();
     let c = loader
-        .load_relocatable(ElfFile::from_path("target/c.o").unwrap())
+        .load_object(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocator()
         .pre_find(pre_find.clone())

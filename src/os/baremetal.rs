@@ -1,7 +1,6 @@
 use crate::{
-    Result,
+    ElfReader, Result,
     mmap::{MapFlags, Mmap, ProtFlags},
-    object::ElfObject,
     segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
@@ -81,7 +80,7 @@ impl RawFile {
     }
 }
 
-impl ElfObject for RawFile {
+impl ElfReader for RawFile {
     fn file_name(&self) -> &core::ffi::CStr {
         todo!()
     }

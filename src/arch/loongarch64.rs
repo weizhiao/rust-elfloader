@@ -84,7 +84,7 @@ pub extern "C" fn dl_runtime_resolve() {
 
         jr      $t2
 	",
-        sym crate::relocation::dynamic_link::dl_fixup,
+        sym crate::relocation::dl_fixup,
     )
 }
 

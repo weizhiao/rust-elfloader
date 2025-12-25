@@ -1,23 +1,15 @@
-//! Relocated ELF file handling
-//!
-//! This module provides functionality for working with ELF files that have
-//! been loaded and relocated in memory. It includes support for both dynamic
-//! libraries (shared objects) and executables.
-
 use crate::{
-    CoreComponent, Result,
-    arch::{Dyn, ElfPhdr},
+    ElfModule, LoadHook, LoadHookContext, Result, SymbolLookup,
+    arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
-    format::{CoreComponentInner, DynamicComponent, ElfPhdrs, ElfType},
-    loader::{FnHandler, Hook, HookContext},
+    format::component::{ModuleInner, ElfPhdrs, ElfType},
+    loader::FnHandler,
     mmap::Mmap,
-    relocation::dynamic_link::DynamicRelocation,
+    relocation::DynamicRelocation,
     segment::{ELFRelro, ElfSegments},
     symbol::SymbolTable,
 };
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core::{
     cell::Cell,
@@ -28,16 +20,23 @@ use core::{
     sync::atomic::AtomicBool,
 };
 use delegate::delegate;
-use elf::abi::PT_LOAD;
-use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_PHDR};
+use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR};
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-pub use dylib::{ElfDylib, RelocatedDylib};
-pub use exec::{ElfExec, RelocatedExec};
-
-pub(crate) mod dylib;
-pub(crate) mod exec;
+pub(crate) struct DynamicInfo {
+    pub(crate) dynamic: NonNull<Dyn>,
+    #[allow(dead_code)]
+    pub(crate) pltrel: Option<NonNull<ElfRelType>>,
+    pub(crate) phdrs: ElfPhdrs,
+    pub(crate) needed_libs: Box<[&'static str]>,
+    /// Lazy binding scope for symbol resolution during lazy binding
+    /// Stored as trait object for type erasure of different SymbolLookup implementations
+    pub(crate) lazy_scope: Option<Arc<dyn SymbolLookup>>,
+}
 
 /// Extra data associated with ELF objects during relocation
 ///
@@ -72,7 +71,7 @@ struct ElfExtraData {
 /// during the relocation process.
 struct LazyData<D> {
     /// Core component containing the basic ELF object information
-    core: CoreComponent<D>,
+    core: ElfModule<D>,
 
     /// Extra data needed for relocation
     extra: ElfExtraData,
@@ -191,12 +190,12 @@ impl<D> State<D> {
                                 .runpath_off
                                 .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
                         },
-                        core: CoreComponent {
-                            inner: Arc::new(CoreComponentInner {
+                        core: ElfModule {
+                            inner: Arc::new(ModuleInner {
                                 is_init: AtomicBool::new(false),
                                 name,
                                 symbols: Some(symbols),
-                                dynamic_info: Some(DynamicComponent {
+                                dynamic_info: Some(DynamicInfo {
                                     dynamic: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                                     pltrel: NonNull::new(
                                         dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
@@ -221,8 +220,8 @@ impl<D> State<D> {
 
                     // Create minimal lazy data structure
                     LazyData {
-                        core: CoreComponent {
-                            inner: Arc::new(CoreComponentInner {
+                        core: ElfModule {
+                            inner: Arc::new(ModuleInner {
                                 is_init: AtomicBool::new(false),
                                 name,
                                 symbols: None,
@@ -342,7 +341,7 @@ impl<D> DerefMut for LazyParse<D> {
 /// ELF objects, whether they are dynamic libraries or executables.
 /// It contains basic information like entry point, name, and program headers,
 /// as well as lazily parsed data required for relocation and symbol lookup.
-pub struct RelocatedCommonPart<D>
+pub struct DynamicComponent<D>
 where
     D: 'static,
 {
@@ -358,7 +357,7 @@ where
     data: LazyParse<D>,
 }
 
-impl<D> RelocatedCommonPart<D> {
+impl<D> DynamicComponent<D> {
     /// Gets the entry point of the ELF object.
     ///
     /// # Returns
@@ -373,7 +372,7 @@ impl<D> RelocatedCommonPart<D> {
     /// # Returns
     /// A reference to the [`CoreComponent`].
     #[inline]
-    pub fn core_ref(&self) -> &CoreComponent<D> {
+    pub fn core_ref(&self) -> &ElfModule<D> {
         &self.data.core
     }
 
@@ -382,7 +381,7 @@ impl<D> RelocatedCommonPart<D> {
     /// # Returns
     /// A cloned [`CoreComponent`].
     #[inline]
-    pub fn core(&self) -> CoreComponent<D> {
+    pub fn core(&self) -> ElfModule<D> {
         self.data.core.clone()
     }
 
@@ -391,7 +390,7 @@ impl<D> RelocatedCommonPart<D> {
     /// # Returns
     /// The [`CoreComponent`].
     #[inline]
-    pub fn into_core(self) -> CoreComponent<D> {
+    pub fn into_core(self) -> ElfModule<D> {
         self.data.force();
         match self.data.state.into_inner() {
             State::Empty | State::Uninit { .. } => unreachable!(),
@@ -545,9 +544,9 @@ impl<D> RelocatedCommonPart<D> {
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final RelocatedCommonPart object.
-pub(crate) struct RelocatedBuilder<'hook, H, M: Mmap, D = ()>
+pub(crate) struct DynamicBuilder<'hook, H, M: Mmap, D = ()>
 where
-    H: Hook<D>,
+    H: LoadHook<D>,
     D: Default,
 {
     /// Hook function for processing program headers (always present)
@@ -587,11 +586,11 @@ where
     _marker: PhantomData<M>,
 }
 
-impl<'hook, H, M: Mmap, D: Default> RelocatedBuilder<'hook, H, M, D>
+impl<'hook, H, M: Mmap, D: Default> DynamicBuilder<'hook, H, M, D>
 where
-    H: Hook<D>,
+    H: LoadHook<D>,
 {
-    /// Create a new RelocatedBuilder
+    /// Create a new DynamicBuilder
     ///
     /// # Arguments
     /// * `hook` - Optional hook function for processing program headers
@@ -640,7 +639,7 @@ where
     /// * `Ok(())` - If parsing succeeds
     /// * `Err(Error)` - If parsing fails
     fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
-        let mut ctx = HookContext::new(&self.name, phdr, &self.segments, &mut self.user_data);
+        let mut ctx = LoadHookContext::new(&self.name, phdr, &self.segments, &mut self.user_data);
         self.hook.call(&mut ctx)?;
 
         // Process different program header types
@@ -721,7 +720,7 @@ where
     /// # Returns
     /// * `Ok(RelocatedCommonPart)` - The built relocated ELF object
     /// * `Err(Error)` - If building fails
-    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<RelocatedCommonPart<D>> {
+    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicComponent<D>> {
         // Determine if this is a dynamic library
         let elf_type = if self.ehdr.is_dylib() {
             ElfType::Dylib
@@ -738,7 +737,7 @@ where
         let phdrs = self.create_phdrs(phdrs);
 
         // Build and return the relocated common part
-        Ok(RelocatedCommonPart {
+        Ok(DynamicComponent {
             entry: self.ehdr.e_entry as usize
                 + if elf_type.is_dylib() {
                     self.segments.base()

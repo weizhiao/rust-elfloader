@@ -1,8 +1,6 @@
 use crate::{
     arch::ElfRelType,
-    relocation::{
-        RelocValue, SymbolLookup, find_symbol_addr, reloc_error, static_link::StaticReloc,
-    },
+    relocation::{RelocValue, StaticReloc, SymbolLookup, find_symbol_addr, reloc_error},
     segment::shdr::{GotEntry, PltEntry, PltGotSection},
 };
 use elf::abi::*;
@@ -98,7 +96,7 @@ pub extern "C" fn dl_runtime_resolve() {
     // Jump to the resolved function
     jmp rax
     ",
-        sym crate::relocation::dynamic_link::dl_fixup,
+        sym crate::relocation::dl_fixup,
     )
 }
 
@@ -126,10 +124,10 @@ pub fn rel_type_to_str(r_type: usize) -> &'static str {
 
 impl StaticReloc for X86_64Relocator {
     fn relocate<PreS, PostS>(
-        core: &crate::CoreComponent<()>,
+        core: &crate::format::ElfModule<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[crate::format::Relocated<()>],
+        scope: &[crate::format::LoadedModule<()>],
         pre_find: &PreS,
         post_find: &PostS,
     ) -> crate::Result<()>

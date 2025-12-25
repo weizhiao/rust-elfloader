@@ -11,13 +11,13 @@
 #[macro_export]
 macro_rules! load_dylib {
     ($name:expr) => {
-        $crate::object::ElfFile::from_path($name).and_then(|file| {
+        $crate::ElfFile::from_path($name).and_then(|file| {
             let mut loader = $crate::Loader::new();
             loader.load_dylib(file)
         })
     };
     ($name:expr, $bytes:expr) => {
-        $crate::Loader::new().load_dylib($crate::object::ElfBinary::new($name, $bytes))
+        $crate::Loader::new().load_dylib($crate::ElfBinary::new($name, $bytes))
     };
 }
 
@@ -34,13 +34,13 @@ macro_rules! load_dylib {
 #[macro_export]
 macro_rules! load_exec {
     ($name:expr) => {
-        $crate::object::ElfFile::from_path($name).and_then(|file| {
+        $crate::ElfFile::from_path($name).and_then(|file| {
             let mut loader = $crate::Loader::new();
             loader.load_exec(file)
         })
     };
     ($name:expr, $bytes:expr) => {
-        $crate::Loader::new().load_exec($crate::object::ElfBinary::new($name, $bytes))
+        $crate::Loader::new().load_exec($crate::ElfBinary::new($name, $bytes))
     };
 }
 
@@ -57,12 +57,12 @@ macro_rules! load_exec {
 #[macro_export]
 macro_rules! load {
     ($name:expr) => {
-        $crate::object::ElfFile::from_path($name).and_then(|file| {
+        $crate::ElfFile::from_path($name).and_then(|file| {
             let mut loader = $crate::Loader::new();
             loader.load(file)
         })
     };
     ($name:expr, $bytes:expr) => {
-        $crate::Loader::new().load($crate::object::ElfBinary::new($name, $bytes))
+        $crate::Loader::new().load($crate::ElfBinary::new($name, $bytes))
     };
 }

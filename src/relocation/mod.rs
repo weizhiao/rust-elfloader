@@ -1,7 +1,6 @@
 use crate::{
-    CoreComponent, Error, Result,
+    ElfModule, Error, LoadedModule, Result,
     arch::{ElfRelType, ElfSymbol},
-    format::Relocated,
     relocate_error,
     symbol::{SymbolInfo, SymbolTable},
 };
@@ -17,8 +16,11 @@ use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-pub(crate) mod dynamic_link;
-pub(crate) mod static_link;
+mod dynamic_link;
+mod static_link;
+
+pub(crate) use dynamic_link::{DynamicRelocation, dl_fixup};
+pub(crate) use static_link::{StaticReloc, StaticRelocation};
 
 /// A trait for looking up symbols during relocation.
 ///
@@ -47,12 +49,12 @@ pub(crate) mod static_link;
 /// use std::collections::HashMap;
 ///
 /// struct MyResolver {
-///     symbols: HashMap<String, usize>,
+///     symbols: HashMap<String, *const ()>,
 /// }
 ///
 /// impl SymbolLookup for MyResolver {
 ///     fn lookup(&self, name: &str) -> Option<*const ()> {
-///         self.symbols.get(name).map(|&addr| addr as *const ())
+///         self.symbols.get(name).copied()
 ///     }
 /// }
 /// ```
@@ -97,12 +99,12 @@ impl SymbolLookup for () {
 /// # Examples
 ///
 /// ```rust
-/// use elf_loader::{RelocationHandler, RelocHandleContext, Result};
+/// use elf_loader::{RelocationHandler, RelocationContext, Result};
 ///
 /// struct MyHandler;
 ///
 /// impl RelocationHandler for MyHandler {
-///     fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+///     fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
 ///         let rel = ctx.rel();
 ///         // Custom logic to handle specific relocation types or symbols
 ///         None // Fallthrough to default behavior
@@ -120,24 +122,24 @@ pub trait RelocationHandler {
     /// * `Some(Ok(Some(idx)))` - The relocation was handled successfully, and the library at `scope[idx]` was used.
     /// * `Some(Err(e))` - The relocation was handled but failed with an error.
     /// * `None` - The relocation was not handled by this handler (fallthrough to default behavior).
-    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>>;
+    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
-    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
-    fn handle<D>(&mut self, ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
     }
 }
 
 /// Context for relocation operations
-struct RelocationContext<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
-    scope: &'a [Relocated<D>],
+struct RelocContext<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+    scope: &'a [LoadedModule<D>],
     pre_find: &'find PreS,
     post_find: &'find PostS,
     pre_handler: &'a mut PreH,
@@ -146,13 +148,13 @@ struct RelocationContext<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized
 }
 
 impl<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
-    RelocationContext<'a, 'find, D, PreS, PostS, PreH, PostH>
+    RelocContext<'a, 'find, D, PreS, PostS, PreH, PostH>
 where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     #[inline]
-    fn handle_pre(&mut self, hctx: &RelocHandleContext<'_, D>) -> Result<bool> {
+    fn handle_pre(&mut self, hctx: &RelocationContext<'_, D>) -> Result<bool> {
         let opt = self.pre_handler.handle(hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -164,7 +166,7 @@ where
     }
 
     #[inline]
-    fn handle_post(&mut self, hctx: &RelocHandleContext<'_, D>) -> Result<bool> {
+    fn handle_post(&mut self, hctx: &RelocationContext<'_, D>) -> Result<bool> {
         let opt = self.post_handler.handle(hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -178,16 +180,16 @@ where
 
 /// Context passed to `RelocationHandler::handle` containing the relocation
 /// entry, the library where the relocation appears and the current scope.
-pub struct RelocHandleContext<'a, D> {
+pub struct RelocationContext<'a, D> {
     rel: &'a ElfRelType,
-    lib: &'a CoreComponent<D>,
-    scope: &'a [Relocated<D>],
+    lib: &'a ElfModule<D>,
+    scope: &'a [LoadedModule<D>],
 }
 
-impl<'a, D> RelocHandleContext<'a, D> {
-    /// Construct a new `RelocHandleContext`.
+impl<'a, D> RelocationContext<'a, D> {
+    /// Construct a new `RelocationContext`.
     #[inline]
-    fn new(rel: &'a ElfRelType, lib: &'a CoreComponent<D>, scope: &'a [Relocated<D>]) -> Self {
+    fn new(rel: &'a ElfRelType, lib: &'a ElfModule<D>, scope: &'a [LoadedModule<D>]) -> Self {
         Self { rel, lib, scope }
     }
 
@@ -199,13 +201,13 @@ impl<'a, D> RelocHandleContext<'a, D> {
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &CoreComponent<D> {
+    pub fn lib(&self) -> &ElfModule<D> {
         self.lib
     }
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &[Relocated<D>] {
+    pub fn scope(&self) -> &[LoadedModule<D>] {
         self.scope
     }
 
@@ -219,7 +221,7 @@ impl<'a, D> RelocHandleContext<'a, D> {
 }
 
 impl RelocationHandler for () {
-    fn handle<D>(&mut self, _ctx: &RelocHandleContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&mut self, _ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         None
     }
 }
@@ -232,7 +234,7 @@ pub trait Relocatable<D = ()>: Sized {
     /// Execute the relocation process
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated<D>],
+        scope: &[LoadedModule<D>],
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: PreH,
@@ -257,7 +259,7 @@ pub trait Relocatable<D = ()>: Sized {
 ///
 /// # Examples
 /// ```no_run
-/// use elf_loader::{Loader, object::ElfBinary};
+/// use elf_loader::{Loader, ElfBinary};
 ///
 /// let mut loader = Loader::new();
 /// let bytes = &[]; // ELF file bytes
@@ -273,7 +275,7 @@ pub trait Relocatable<D = ()>: Sized {
 /// ```
 pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
     object: T,
-    scope: Vec<Relocated<D>>,
+    scope: Vec<LoadedModule<D>>,
     pre_find: PreS,
     post_find: PostS,
     pre_handler: PreH,
@@ -397,7 +399,7 @@ where
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: core::borrow::Borrow<Relocated<D>>,
+        R: core::borrow::Borrow<LoadedModule<D>>,
     {
         self.scope = scope.into_iter().map(|r| r.borrow().clone()).collect();
         self
@@ -601,7 +603,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
 
 pub struct SymDef<'lib, D> {
     pub sym: Option<&'lib ElfSymbol>,
-    pub lib: &'lib CoreComponent<D>,
+    pub lib: &'lib ElfModule<D>,
 }
 
 impl<'temp, D> SymDef<'temp, D> {
@@ -629,7 +631,7 @@ impl<'temp, D> SymDef<'temp, D> {
 pub(crate) fn reloc_error<D, E: core::fmt::Display>(
     rel: &ElfRelType,
     err: E,
-    lib: &CoreComponent<D>,
+    lib: &ElfModule<D>,
 ) -> Error {
     let r_type_str = rel.r_type_str();
     let r_sym = rel.r_symbol();
@@ -651,10 +653,7 @@ pub(crate) fn reloc_error<D, E: core::fmt::Display>(
     }
 }
 
-fn find_weak<'lib, D>(
-    lib: &'lib CoreComponent<D>,
-    dynsym: &'lib ElfSymbol,
-) -> Option<SymDef<'lib, D>> {
+fn find_weak<'lib, D>(lib: &'lib ElfModule<D>, dynsym: &'lib ElfSymbol) -> Option<SymDef<'lib, D>> {
     // 弱符号 + WEAK 用 0 填充rela offset
     if dynsym.is_weak() && dynsym.is_undef() {
         assert!(dynsym.st_value() == 0);
@@ -673,9 +672,9 @@ fn find_weak<'lib, D>(
 pub(crate) fn find_symbol_addr<PreS, PostS, D>(
     pre_find: &PreS,
     post_find: &PostS,
-    core: &CoreComponent<D>,
+    core: &ElfModule<D>,
     symtab: &SymbolTable,
-    scope: &[Relocated<D>],
+    scope: &[LoadedModule<D>],
     r_sym: usize,
 ) -> Option<(RelocValue<usize>, Option<usize>)>
 where
@@ -708,8 +707,8 @@ where
 }
 
 fn find_symdef_impl<'lib, D>(
-    core: &'lib CoreComponent<D>,
-    scope: &'lib [Relocated<D>],
+    core: &'lib ElfModule<D>,
+    scope: &'lib [LoadedModule<D>],
     sym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
 ) -> Option<(SymDef<'lib, D>, Option<usize>)> {

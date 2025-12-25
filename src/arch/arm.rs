@@ -42,7 +42,7 @@ pub extern "C" fn dl_runtime_resolve() {
         pop {{r0, r1, r2, r3, r4, lr}}
         bx ip
         ",
-        sym crate::relocation::dynamic_link::dl_fixup,
+        sym crate::relocation::dl_fixup,
     )
 }
 
@@ -65,7 +65,7 @@ pub extern "C" fn dl_runtime_resolve() {
         pop {{r0, r1, r2, r3, r4, lr}}
         bx ip
         ",
-        sym crate::relocation::dynamic_link::dl_fixup,
+        sym crate::relocation::dl_fixup,
     )
 }
 

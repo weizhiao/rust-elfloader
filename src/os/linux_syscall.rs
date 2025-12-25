@@ -1,4 +1,4 @@
-use crate::object::ElfObject;
+use crate::ElfReader;
 use crate::{Error, io_error};
 use crate::{
     Result,
@@ -228,7 +228,7 @@ impl Drop for RawFile {
     }
 }
 
-impl ElfObject for RawFile {
+impl ElfReader for RawFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         const SEEK_START: u32 = 0;
         unsafe {

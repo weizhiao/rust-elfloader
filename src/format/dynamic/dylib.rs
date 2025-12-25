@@ -4,13 +4,12 @@
 //! (shared objects) that have been loaded but not yet relocated. It includes
 //! support for synchronous loading of dynamic libraries.
 
-use super::RelocatedCommonPart;
 use crate::{
-    Hook, Loader, Result,
-    format::Relocated,
+    LoadHook, Loader, Result,
+    format::{LoadedModule, dynamic::common::DynamicComponent},
     mmap::Mmap,
-    object::ElfObject,
     parse_ehdr_error,
+    reader::ElfReader,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
 use core::{fmt::Debug, ops::Deref};
@@ -21,28 +20,28 @@ use core::{fmt::Debug, ops::Deref};
 /// loaded into memory but has not yet undergone relocation. It contains all
 /// the necessary information to perform relocation and prepare the library
 /// for execution.
-pub struct ElfDylib<D>
+pub struct DylibImage<D>
 where
     D: 'static,
 {
     /// The common part containing basic ELF object information.
-    inner: RelocatedCommonPart<D>,
+    inner: DynamicComponent<D>,
 }
 
-impl<D> Deref for ElfDylib<D> {
-    type Target = RelocatedCommonPart<D>;
+impl<D> Deref for DylibImage<D> {
+    type Target = DynamicComponent<D>;
 
-    /// Dereferences to the underlying [`RelocatedCommonPart`].
+    /// Dereferences to the underlying [`DynamicComponent`].
     ///
     /// This implementation allows direct access to the common ELF object
-    /// fields through the [`ElfDylib`] wrapper.
+    /// fields through the [`DylibImage`] wrapper.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D> Debug for ElfDylib<D> {
-    /// Formats the [`ElfDylib`] for debugging purposes.
+impl<D> Debug for DylibImage<D> {
+    /// Formats the [`DylibImage`] for debugging purposes.
     ///
     /// This implementation provides a debug representation that includes
     /// the library name and its dependencies.
@@ -54,12 +53,12 @@ impl<D> Debug for ElfDylib<D> {
     }
 }
 
-impl<D> Relocatable<D> for ElfDylib<D> {
-    type Output = Relocated<D>;
+impl<D> Relocatable<D> for DylibImage<D> {
+    type Output = LoadedModule<D>;
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated<D>],
+        scope: &[LoadedModule<D>],
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: PreH,
@@ -89,7 +88,7 @@ impl<D> Relocatable<D> for ElfDylib<D> {
     }
 }
 
-impl<D> ElfDylib<D> {
+impl<D> DylibImage<D> {
     /// Returns a mutable reference to the user-defined data associated with this ELF object.
     ///
     /// This method provides access to the user-defined data associated
@@ -113,7 +112,7 @@ impl<D> ElfDylib<D> {
     }
 }
 
-impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
+impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
     /// Loads a dynamic library into memory.
     ///
     /// This method loads a dynamic library (shared object) file into memory
@@ -124,18 +123,18 @@ impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
     /// * `object` - The ELF object to load as a dynamic library.
     ///
     /// # Returns
-    /// * `Ok(ElfDylib)` - The loaded dynamic library.
+    /// * `Ok(DylibImage)` - The loaded dynamic library.
     /// * `Err(Error)` - If loading fails.
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, object::ElfBinary};
+    /// use elf_loader::{Loader, ElfBinary};
     ///
     /// let mut loader = Loader::new();
     /// let bytes = &[]; // ELF file bytes
     /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
     /// ```
-    pub fn load_dylib(&mut self, mut object: impl ElfObject) -> Result<ElfDylib<D>> {
+    pub fn load_dylib(&mut self, mut object: impl ElfReader) -> Result<DylibImage<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -145,10 +144,10 @@ impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
         }
 
         // Load the relocated common part
-        let inner = self.load_relocated(ehdr, object)?;
+        let inner = self.load_dynamic(ehdr, object)?;
 
         // Wrap in ElfDylib and return
-        Ok(ElfDylib { inner })
+        Ok(DylibImage { inner })
     }
 }
 
@@ -156,4 +155,4 @@ impl<M: Mmap, H: Hook<D>, D: Default> Loader<M, H, D> {
 ///
 /// This type represents a dynamic library that has been loaded and relocated
 /// in memory, making it ready for symbol resolution and execution.
-pub type RelocatedDylib<D> = Relocated<D>;
+pub type LoadedDylib<D> = LoadedModule<D>;

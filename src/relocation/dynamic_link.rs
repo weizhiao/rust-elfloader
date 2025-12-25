@@ -1,10 +1,10 @@
 //! Relocation of elf objects
 use crate::{
-    CoreComponentRef, RelocatedDylib, Result,
+    ElfModuleRef, LoadedDylib, Result,
     arch::*,
-    format::{CoreComponentInner, Relocated, relocated::RelocatedCommonPart},
+    format::{DynamicComponent, LoadedModule, ModuleInner},
     relocation::{
-        RelocHandleContext, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
+        RelocContext, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
         find_symbol_addr, likely, reloc_error, unlikely,
     },
 };
@@ -23,7 +23,7 @@ where
     S: SymbolLookup,
 {
     /// Weak references to the local libraries for symbol lookup
-    libs: Vec<CoreComponentRef<D>>,
+    libs: Vec<ElfModuleRef<D>>,
     custom_scope: Option<S>,
 }
 
@@ -38,7 +38,7 @@ impl<D, S: SymbolLookup> SymbolLookup for LazyScope<D, S> {
         // Then try the local libraries
         self.libs.iter().find_map(|lib| unsafe {
             let core = lib.upgrade()?;
-            RelocatedDylib::from_core(core)
+            LoadedDylib::from_core(core)
                 .get::<()>(name)
                 .map(|sym| sym.into_raw())
         })
@@ -55,10 +55,10 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
     RelocValue::new(ifunc())
 }
 
-impl<D> RelocatedCommonPart<D> {
+impl<D> DynamicComponent<D> {
     pub(crate) fn relocate_impl<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated<D>],
+        scope: &[LoadedModule<D>],
         pre_find: &PreS,
         post_find: &PostS,
         mut pre_handler: PreH,
@@ -66,7 +66,7 @@ impl<D> RelocatedCommonPart<D> {
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
         use_scope_as_lazy: bool,
-    ) -> Result<(Relocated<D>, usize)>
+    ) -> Result<(LoadedModule<D>, usize)>
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
@@ -79,7 +79,7 @@ impl<D> RelocatedCommonPart<D> {
         if self.relocation().is_empty() {
             let entry = self.entry();
             let core = self.into_core();
-            let relocated = unsafe { Relocated::from_core(core) };
+            let relocated = unsafe { LoadedModule::from_core(core) };
             return Ok((relocated, entry));
         }
 
@@ -120,15 +120,15 @@ impl<D> RelocatedCommonPart<D> {
 
 /// Perform relocations on an ELF object
 fn relocate_impl<D, PreS, PostS, LazyS, PreH, PostH>(
-    elf: RelocatedCommonPart<D>,
-    scope: &[Relocated<D>],
+    elf: DynamicComponent<D>,
+    scope: &[LoadedModule<D>],
     pre_find: &PreS,
     post_find: &PostS,
     pre_handler: &mut PreH,
     post_handler: &mut PostH,
     is_lazy: bool,
     lazy_scope: Option<LazyS>,
-) -> Result<Relocated<D>>
+) -> Result<LoadedModule<D>>
 where
     PreS: SymbolLookup + ?Sized,
     PostS: SymbolLookup + ?Sized,
@@ -136,7 +136,7 @@ where
     PreH: RelocationHandler + ?Sized,
     PostH: RelocationHandler + ?Sized,
 {
-    let mut ctx = RelocationContext {
+    let mut ctx = RelocContext {
         scope,
         pre_find,
         post_find,
@@ -148,18 +148,17 @@ where
         .relocate_dynrel(&mut ctx)?
         .relocate_pltrel(is_lazy, lazy_scope, &mut ctx)?
         .finish();
-    let deps: Vec<Relocated<D>> = ctx
+    let deps: Vec<LoadedModule<D>> = ctx
         .dependency_flags
         .iter()
         .enumerate()
         .filter_map(|(i, &flag)| if flag { Some(scope[i].clone()) } else { None })
         .collect();
-    Ok(unsafe { Relocated::from_core_deps(elf.into_core(), deps) })
+    Ok(unsafe { LoadedModule::from_core_deps(elf.into_core(), deps) })
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
-#[allow(dead_code)]
-pub unsafe extern "C" fn dl_fixup(dylib: &CoreComponentInner, rela_idx: usize) -> usize {
+pub(crate) unsafe extern "C" fn dl_fixup(dylib: &ModuleInner, rela_idx: usize) -> usize {
     // Get the relocation entry for this function call
     let rela = unsafe {
         &*dylib
@@ -225,13 +224,13 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-impl<D> RelocatedCommonPart<D> {
+impl<D> DynamicComponent<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreS, PostS, LazyS, PreH, PostH>(
         &self,
         is_lazy: bool,
         lazy_scope: Option<LazyS>,
-        ctx: &mut RelocationContext<'_, '_, D, PreS, PostS, PreH, PostH>,
+        ctx: &mut RelocContext<'_, '_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
@@ -251,7 +250,7 @@ impl<D> RelocatedCommonPart<D> {
 
         // Process PLT relocations
         for rel in reloc.pltrel {
-            let hctx = RelocHandleContext::new(rel, core, scope);
+            let hctx = RelocationContext::new(rel, core, scope);
             if !ctx.handle_pre(&hctx)? {
                 continue;
             }
@@ -375,7 +374,7 @@ impl<D> RelocatedCommonPart<D> {
     /// Perform dynamic relocations (non-PLT, non-relative)
     fn relocate_dynrel<PreS, PostS, PreH, PostH>(
         &self,
-        ctx: &mut RelocationContext<'_, '_, D, PreS, PostS, PreH, PostH>,
+        ctx: &mut RelocContext<'_, '_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
@@ -401,7 +400,7 @@ impl<D> RelocatedCommonPart<D> {
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
-            let hctx = RelocHandleContext::new(rel, core, scope);
+            let hctx = RelocationContext::new(rel, core, scope);
             if !ctx.handle_pre(&hctx)? {
                 continue;
             }

@@ -8,11 +8,9 @@
 use crate::{
     arch::{ElfShdr, ElfSymbol},
     dynamic::ElfDynamic,
-    hash::HashTable,
+    hash::{HashTable, PreCompute},
 };
 use core::ffi::CStr;
-
-pub use crate::hash::PreCompute;
 
 /// ELF string table wrapper
 ///
@@ -257,7 +255,7 @@ impl SymbolTable {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    pub fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
+    fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
         self.hashtab.lookup(self, symbol, precompute)
     }
 
@@ -276,7 +274,7 @@ impl SymbolTable {
     /// * `Some(symbol)` - A reference to the found symbol that meets relocation requirements
     /// * `None` - If no suitable symbol was found
     #[inline]
-    pub fn lookup_filter(
+    pub(crate) fn lookup_filter(
         &self,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,

@@ -19,12 +19,12 @@ cfg_if::cfg_if! {
             0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // (padding)
         ];
 
-        impl crate::relocation::static_link::StaticReloc for DummyRelocator {
+        impl crate::relocation::StaticReloc for DummyRelocator {
             fn relocate<PreS, PostS>(
-                _core: &crate::CoreComponent,
+                _core: &crate::ElfModule,
                 _rel_type: &ElfRelType,
                 _pltgot: &mut crate::segment::shdr::PltGotSection,
-                _scope: &[crate::Relocated<()>],
+                _scope: &[crate::LoadedModule<()>],
                 _pre_find: &PreS,
                 _post_find: &PostS,
             ) -> crate::Result<()>

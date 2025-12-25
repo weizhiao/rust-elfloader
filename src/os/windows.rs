@@ -1,7 +1,6 @@
 use crate::{
-    Error, Result, io_error,
+    ElfReader, Error, Result, io_error,
     mmap::{MapFlags, Mmap, ProtFlags},
-    object::ElfObject,
 };
 use alloc::{ffi::CString, format, vec::Vec};
 use core::{
@@ -330,7 +329,7 @@ pub(crate) fn virtual_free(addr: usize, len: usize) -> Result<()> {
     Ok(())
 }
 
-impl ElfObject for RawFile {
+impl ElfReader for RawFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         win_seek(self.fd as HANDLE, offset)?;
         win_read_exact(self.fd as HANDLE, buf)?;

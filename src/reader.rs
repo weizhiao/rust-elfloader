@@ -9,7 +9,7 @@ use crate::{Result, os::RawFile};
 use alloc::ffi::CString;
 use core::ffi::CStr;
 
-/// A trait representing an ELF object that can be read from.
+/// A trait representing a source of ELF data that can be read from.
 ///
 /// This trait provides a uniform interface for accessing ELF data regardless
 /// of its storage medium (memory, file, etc.). Implementors of this trait
@@ -19,7 +19,7 @@ use core::ffi::CStr;
 /// while providing efficient access to the ELF data. This allows the ELF
 /// loader to work with various data sources without needing to know the
 /// specifics of how the data is stored or accessed.
-pub trait ElfObject {
+pub trait ElfReader {
     /// Returns the name of the ELF object.
     ///
     /// This is typically the file path or a descriptive name for the object.
@@ -99,7 +99,7 @@ impl<'bytes> ElfBinary<'bytes> {
     ///
     /// # Examples
     /// ```rust
-    /// use elf_loader::object::ElfBinary;
+    /// use elf_loader::ElfBinary;
     ///
     /// let data = &[]; // In practice, this would be the bytes of an ELF file
     /// let binary = ElfBinary::new("liba.so", data);
@@ -112,7 +112,7 @@ impl<'bytes> ElfBinary<'bytes> {
     }
 }
 
-impl<'bytes> ElfObject for ElfBinary<'bytes> {
+impl<'bytes> ElfReader for ElfBinary<'bytes> {
     /// Returns the name of the ELF binary.
     ///
     /// # Returns
@@ -202,7 +202,7 @@ impl ElfFile {
     }
 }
 
-impl ElfObject for ElfFile {
+impl ElfReader for ElfFile {
     /// Returns the name of the ELF file.
     ///
     /// # Returns

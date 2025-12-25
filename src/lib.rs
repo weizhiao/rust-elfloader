@@ -103,8 +103,8 @@ mod hash;
 mod loader;
 mod macros;
 pub mod mmap;
-pub mod object;
 mod os;
+mod reader;
 mod relocation;
 pub mod segment;
 mod symbol;
@@ -113,14 +113,15 @@ mod version;
 
 use alloc::borrow::Cow;
 use core::fmt::{Debug, Display};
-use object::*;
 
 pub use elf::abi;
-pub use format::relocatable::ElfRelocatable;
-pub use format::relocated::{ElfDylib, ElfExec, RelocatedDylib, RelocatedExec};
-pub use format::{CoreComponent, CoreComponentRef, Elf, Relocated, Symbol};
-pub use loader::{Hook, HookContext, Loader};
-pub use relocation::{RelocHandleContext, RelocationHandler, SymbolLookup};
+pub use format::{
+    DylibImage, ElfImage, ElfModule, ElfModuleRef, ExecImage, LoadedDylib, LoadedExec,
+    LoadedModule, Symbol,
+};
+pub use loader::{LoadHook, LoadHookContext, Loader};
+pub use reader::{ElfBinary, ElfFile, ElfReader};
+pub use relocation::{RelocationContext, RelocationHandler, SymbolLookup};
 
 /// Error types used throughout the `elf_loader` library.
 ///

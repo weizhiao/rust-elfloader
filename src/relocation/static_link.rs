@@ -1,7 +1,7 @@
 use crate::{
-    CoreComponent, Result,
+    ElfModule, Result,
     arch::{ElfRelType, StaticRelocator},
-    format::{Relocated, relocatable::ElfRelocatable},
+    format::{LoadedModule, ObjectImage},
     relocation::SymbolLookup,
     segment::shdr::PltGotSection,
 };
@@ -19,13 +19,13 @@ impl StaticRelocation {
     }
 }
 
-impl ElfRelocatable {
+impl ObjectImage {
     pub(crate) fn relocate_impl<PreS, PostS>(
         mut self,
-        scope: &[Relocated<()>],
+        scope: &[LoadedModule<()>],
         pre_find: &PreS,
         post_find: &PostS,
-    ) -> Result<Relocated<()>>
+    ) -> Result<LoadedModule<()>>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -44,16 +44,16 @@ impl ElfRelocatable {
         }
         (self.mprotect)()?;
         (self.init)(None, self.init_array);
-        Ok(unsafe { Relocated::from_core(self.core) })
+        Ok(unsafe { LoadedModule::from_core(self.core) })
     }
 }
 
 pub(crate) trait StaticReloc {
     fn relocate<PreS, PostS>(
-        core: &CoreComponent<()>,
+        core: &ElfModule<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[Relocated<()>],
+        scope: &[LoadedModule<()>],
         pre_find: &PreS,
         post_find: &PostS,
     ) -> Result<()>

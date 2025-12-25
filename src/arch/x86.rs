@@ -70,7 +70,7 @@ pub extern "C" fn dl_runtime_resolve() {
     // 弹出解析后的地址并跳转
     ret
     ",
-        sym crate::relocation::dynamic_link::dl_fixup,
+        sym crate::relocation::dl_fixup,
     )
 }
 

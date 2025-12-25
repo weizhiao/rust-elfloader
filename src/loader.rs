@@ -1,11 +1,8 @@
 use crate::{
-    ElfObject, Result,
+    ElfReader, Result,
     arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
     ehdr::ElfHeader,
-    format::{
-        relocatable::{ElfRelocatable, RelocatableBuilder},
-        relocated::{RelocatedBuilder, RelocatedCommonPart},
-    },
+    format::{DynamicBuilder, DynamicComponent, ObjectBuilder, ObjectImage},
     mmap::Mmap,
     os::DefaultMmap,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
@@ -29,7 +26,7 @@ impl ElfBuf {
         ElfBuf { buf }
     }
 
-    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
+    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
         object.read(&mut self.buf[..EHDR_SIZE], 0)?;
         ElfHeader::new(&self.buf).cloned()
     }
@@ -37,7 +34,7 @@ impl ElfBuf {
     pub(crate) fn prepare_phdrs(
         &mut self,
         ehdr: &ElfHeader,
-        object: &mut impl ElfObject,
+        object: &mut impl ElfReader,
     ) -> Result<&[ElfPhdr]> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
         let size = phdr_end - phdr_start;
@@ -56,7 +53,7 @@ impl ElfBuf {
     pub(crate) fn prepare_shdrs_mut(
         &mut self,
         ehdr: &ElfHeader,
-        object: &mut impl ElfObject,
+        object: &mut impl ElfReader,
     ) -> Result<&mut [ElfShdr]> {
         let (shdr_start, shdr_end) = ehdr.shdr_range();
         let size = shdr_end - shdr_start;
@@ -77,15 +74,15 @@ impl ElfBuf {
 ///
 /// This struct contains information about the current program header being
 /// processed, the ELF segments, and user-defined data.
-pub struct HookContext<'a, D> {
+pub struct LoadHookContext<'a, D> {
     name: &'a CStr,
     phdr: &'a ElfPhdr,
     segments: &'a ElfSegments,
     user_data: &'a mut D,
 }
 
-impl<'a, D> HookContext<'a, D> {
-    /// Creates a new `HookContext`.
+impl<'a, D> LoadHookContext<'a, D> {
+    /// Creates a new `LoadHookContext`.
     pub(crate) fn new(
         name: &'a CStr,
         phdr: &'a ElfPhdr,
@@ -133,18 +130,18 @@ impl<'a, D> HookContext<'a, D> {
 ///
 /// # Examples
 /// ```rust
-/// use elf_loader::{Hook, HookContext, Result};
+/// use elf_loader::{LoadHook, LoadHookContext, Result};
 ///
 /// struct MyHook;
 ///
-/// impl Hook for MyHook {
-///     fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, ()>) -> Result<()> {
+/// impl LoadHook for MyHook {
+///     fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
 ///         println!("Processing segment: {:?}", ctx.phdr());
 ///         Ok(())
 ///     }
 /// }
 /// ```
-pub trait Hook<D = ()> {
+pub trait LoadHook<D = ()> {
     /// Executes the hook with the provided context.
     ///
     /// # Arguments
@@ -153,20 +150,20 @@ pub trait Hook<D = ()> {
     /// # Returns
     /// * `Ok(())` if the hook executed successfully.
     /// * `Err` if an error occurred during hook execution.
-    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, D>) -> Result<()>;
+    fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()>;
 }
 
-impl<F, D> Hook<D> for F
+impl<F, D> LoadHook<D> for F
 where
-    F: for<'a> Fn(&'a mut HookContext<'a, D>) -> Result<()>,
+    F: for<'a> Fn(&'a mut LoadHookContext<'a, D>) -> Result<()>,
 {
-    fn call<'a>(&'a self, ctx: &'a mut HookContext<'a, D>) -> Result<()> {
+    fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
         (self)(ctx)
     }
 }
 
-impl Hook for () {
-    fn call<'a>(&'a self, _ctx: &'a mut HookContext<'a, ()>) -> Result<()> {
+impl LoadHook for () {
+    fn call<'a>(&'a self, _ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
         Ok(())
     }
 }
@@ -181,12 +178,12 @@ pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 ///
 /// # Type Parameters
 /// * `M` - The memory mapping implementation (must implement `Mmap`).
-/// * `H` - The hook implementation (must implement `Hook`).
+/// * `H` - The hook implementation (must implement `LoadHook`).
 /// * `D` - The type of user data passed to hooks.
 pub struct Loader<M, H, D = ()>
 where
     M: Mmap,
-    H: Hook<D>,
+    H: LoadHook<D>,
     D: Default + 'static,
 {
     pub(crate) buf: ElfBuf,
@@ -216,7 +213,7 @@ impl Loader<DefaultMmap, (), ()> {
     }
 }
 
-impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
+impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// Sets the initialization function handler.
     ///
     /// This handler is responsible for calling the initialization functions
@@ -248,7 +245,7 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
     pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD>
     where
         NewD: Default,
-        NewHook: Hook<NewD>,
+        NewHook: LoadHook<NewD>,
     {
         Loader {
             buf: self.buf,
@@ -284,7 +281,7 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
     /// # Returns
     /// * `Ok(ElfHeader)` if the header was read and parsed successfully.
     /// * `Err` if an error occurred.
-    pub fn read_ehdr(&mut self, object: &mut impl ElfObject) -> Result<ElfHeader> {
+    pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
         self.buf.prepare_ehdr(object)
     }
 
@@ -299,25 +296,25 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
     /// * `Err` if an error occurred.
     pub fn read_phdr(
         &mut self,
-        object: &mut impl ElfObject,
+        object: &mut impl ElfReader,
         ehdr: &ElfHeader,
     ) -> Result<&[ElfPhdr]> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
-    /// Load a relocated ELF object
-    pub(crate) fn load_relocated<'loader>(
+    /// Load a dynamic ELF object
+    pub(crate) fn load_dynamic<'loader>(
         &'loader mut self,
         ehdr: ElfHeader,
-        mut object: impl ElfObject,
-    ) -> Result<RelocatedCommonPart<D>> {
+        mut object: impl ElfReader,
+    ) -> Result<DynamicComponent<D>> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let builder: RelocatedBuilder<'_, H, M, D> = RelocatedBuilder::new(
+        let builder: DynamicBuilder<'_, H, M, D> = DynamicBuilder::new(
             &self.hook,
             segments,
             object.file_name().to_owned(),
@@ -332,8 +329,8 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
     pub(crate) fn load_rel(
         &mut self,
         ehdr: ElfHeader,
-        mut object: impl ElfObject,
-    ) -> Result<ElfRelocatable> {
+        mut object: impl ElfReader,
+    ) -> Result<ObjectImage> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
@@ -344,7 +341,7 @@ impl<M: Mmap, H: Hook<D>, D: Default + 'static> Loader<M, H, D> {
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
-        let builder = RelocatableBuilder::new(
+        let builder = ObjectBuilder::new(
             object.file_name().to_owned(),
             shdrs,
             init_fn,

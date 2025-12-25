@@ -7,15 +7,16 @@
 use core::{fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
 
 use crate::{
-    CoreComponent, Hook, Loader, Result,
+    ElfModule, LoadHook, Loader, Result,
     arch::{ElfRelType, ElfShdr, ElfSymbol},
-    format::{CoreComponentInner, ElfType, Relocated},
+    format::{
+        LoadedModule,
+        component::{ElfType, ModuleInner},
+    },
     loader::FnHandler,
     mmap::Mmap,
-    object::ElfObject,
-    relocation::{
-        Relocatable, RelocationHandler, Relocator, SymbolLookup, static_link::StaticRelocation,
-    },
+    reader::ElfReader,
+    relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
     segment::{ElfSegments, shdr::PltGotSection},
     symbol::SymbolTable,
 };
@@ -27,8 +28,8 @@ use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FIL
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-impl<M: Mmap, H: Hook<()>> Loader<M, H, ()> {
-    /// Loads a relocatable ELF file into memory.
+impl<M: Mmap, H: LoadHook<()>> Loader<M, H, ()> {
+    /// Loads a object ELF file into memory.
     ///
     /// This method loads a relocatable ELF file (typically a `.o` file) into memory
     /// and prepares it for relocation. The file is not yet relocated after this
@@ -43,13 +44,13 @@ impl<M: Mmap, H: Hook<()>> Loader<M, H, ()> {
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, object::ElfBinary};
+    /// use elf_loader::{Loader, ElfBinary};
     ///
     /// let mut loader = Loader::new();
     /// let bytes = &[]; // Relocatable ELF bytes
-    /// let rel = loader.load_relocatable(ElfBinary::new("liba.o", bytes)).unwrap();
+    /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_relocatable(&mut self, mut object: impl ElfObject) -> Result<ElfRelocatable> {
+    pub fn load_object(&mut self, mut object: impl ElfReader) -> Result<ObjectImage> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
         self.load_rel(ehdr, object)
     }
@@ -60,7 +61,7 @@ impl<M: Mmap, H: Hook<()>> Loader<M, H, ()> {
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocatable ELF file before
 /// building the final ElfRelocatable object.
-pub(crate) struct RelocatableBuilder {
+pub(crate) struct ObjectBuilder {
     /// Name of the ELF file
     name: CString,
 
@@ -89,7 +90,7 @@ pub(crate) struct RelocatableBuilder {
     pltgot: PltGotSection,
 }
 
-impl RelocatableBuilder {
+impl ObjectBuilder {
     /// Create a new RelocatableBuilder
     ///
     /// This method initializes a new RelocatableBuilder with the provided
@@ -195,9 +196,9 @@ impl RelocatableBuilder {
     ///
     /// # Returns
     /// An ElfRelocatable instance ready for relocation
-    pub(crate) fn build(self) -> ElfRelocatable {
+    pub(crate) fn build(self) -> ObjectImage {
         // Create the inner component structure
-        let inner = CoreComponentInner {
+        let inner = ModuleInner {
             is_init: AtomicBool::new(false),
             name: self.name,
             symbols: self.symtab,
@@ -211,8 +212,8 @@ impl RelocatableBuilder {
         };
 
         // Construct and return the ElfRelocatable object
-        ElfRelocatable {
-            core: CoreComponent {
+        ObjectImage {
+            core: ElfModule {
                 inner: Arc::new(inner),
             },
             pltgot: self.pltgot,
@@ -229,9 +230,9 @@ impl RelocatableBuilder {
 /// This structure represents a relocatable ELF file (typically a `.o` file)
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
-pub struct ElfRelocatable {
+pub struct ObjectImage {
     /// Core component containing basic ELF information.
-    pub(crate) core: CoreComponent<()>,
+    pub(crate) core: ElfModule<()>,
 
     /// Static relocation information.
     pub(crate) relocation: StaticRelocation,
@@ -249,8 +250,8 @@ pub struct ElfRelocatable {
     pub(crate) init_array: Option<&'static [fn()]>,
 }
 
-impl Deref for ElfRelocatable {
-    type Target = CoreComponent<()>;
+impl Deref for ObjectImage {
+    type Target = ElfModule<()>;
 
     /// Dereferences to the underlying [`CoreComponent`].
     fn deref(&self) -> &Self::Target {
@@ -258,7 +259,7 @@ impl Deref for ElfRelocatable {
     }
 }
 
-impl ElfRelocatable {
+impl ObjectImage {
     /// Creates a builder for relocating the relocatable file.
     ///
     /// This method returns a [`Relocator`] that allows configuring the relocation
@@ -269,7 +270,7 @@ impl ElfRelocatable {
     }
 }
 
-impl Debug for ElfRelocatable {
+impl Debug for ObjectImage {
     /// Formats the [`ElfRelocatable`] for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfRelocatable")
@@ -278,12 +279,12 @@ impl Debug for ElfRelocatable {
     }
 }
 
-impl Relocatable<()> for ElfRelocatable {
-    type Output = Relocated<()>;
+impl Relocatable<()> for ObjectImage {
+    type Output = LoadedModule<()>;
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[Relocated<()>],
+        scope: &[LoadedModule<()>],
         pre_find: &PreS,
         post_find: &PostS,
         _pre_handler: PreH,
@@ -302,3 +303,5 @@ impl Relocatable<()> for ElfRelocatable {
         self.relocate_impl(scope, pre_find, post_find)
     }
 }
+
+pub type LoadedObject<D> = LoadedModule<D>;

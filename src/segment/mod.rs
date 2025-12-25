@@ -8,7 +8,7 @@ pub(crate) mod phdr;
 pub(crate) mod shdr;
 
 use super::mmap::{self, Mmap, ProtFlags};
-use crate::{Result, arch::Phdr, mmap::MapFlags, object::ElfObject, relocation::RelocValue};
+use crate::{Result, arch::Phdr, mmap::MapFlags, reader::ElfReader, relocation::RelocValue};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
@@ -125,7 +125,7 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If mapping succeeds
     /// * `Err(Error)` - If mapping fails
-    fn mmap_segment<M: Mmap>(&mut self, object: &mut impl ElfObject) -> Result<()> {
+    fn mmap_segment<M: Mmap>(&mut self, object: &mut impl ElfReader) -> Result<()> {
         let mut need_copy = false;
         let len = self.len;
         let addr = self.addr.absolute_addr();
@@ -182,7 +182,7 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If copying succeeds
     /// * `Err(Error)` - If copying fails
-    fn copy_data(&self, object: &mut impl ElfObject) -> Result<()> {
+    fn copy_data(&self, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
             let ptr = self.addr.absolute_addr() as *mut u8;
             for info in self.map_info.iter() {
@@ -313,7 +313,7 @@ pub(crate) trait SegmentBuilder {
     /// # Returns
     /// * `Ok(ElfSegments)` - The loaded segments
     /// * `Err(Error)` - If loading fails
-    fn load_segments<M: Mmap>(&mut self, object: &mut impl ElfObject) -> Result<ElfSegments> {
+    fn load_segments<M: Mmap>(&mut self, object: &mut impl ElfReader) -> Result<ElfSegments> {
         // Create the address space for segments
         let space = self.create_space::<M>()?;
         self.create_segments()?;
