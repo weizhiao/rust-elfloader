@@ -10,7 +10,7 @@ use crate::{
     reader::ElfReader,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
-use core::{fmt::Debug, marker::PhantomData, ops::Deref};
+use core::fmt::Debug;
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
 mod component;
@@ -21,35 +21,37 @@ pub(crate) use component::ModuleInner;
 pub(crate) use image::{DynamicImage, ImageBuilder, StaticImage};
 pub(crate) use object::ObjectBuilder;
 
-pub use component::{ElfModule, ElfModuleRef, LoadedModule};
+pub use component::{ElfModule, ElfModuleRef, LoadedModule, Symbol};
 pub use image::{DylibImage, ExecImage, LoadedDylib, LoadedExec};
 pub use object::{LoadedObject, ObjectImage};
 
-/// An unrelocated ELF file.
+/// A mapped but unrelocated ELF image.
 ///
-/// This enum represents an ELF file that has been loaded into memory but
-/// has not yet undergone relocation. It can be either a dynamic library,
+/// This enum represents an ELF file that has been loaded into memory (mapped)
+/// but has not yet undergone the relocation process. It can be a dynamic library,
 /// an executable, or a relocatable object file.
 #[derive(Debug)]
 pub enum ElfImage<D>
 where
     D: 'static,
 {
-    /// A dynamic library (shared object, `.so`).
+    /// A dynamic library (shared object, typically `.so`).
     Dylib(DylibImage<D>),
 
-    /// An executable file.
+    /// An executable file (typically a PIE or non-PIE executable).
     Exec(ExecImage<D>),
 
-    /// A relocatable object file (`.o`).
+    /// A relocatable object file (typically `.o`).
     Object(ObjectImage),
 }
 
-/// An ELF file that has been relocated and is ready for execution.
+/// A fully relocated and ready-to-use ELF module.
 ///
-/// This enum represents an ELF file that has been loaded and relocated.
-/// It maintains dependency information to ensure that required libraries
-/// are not deallocated while this ELF is still in use.
+/// This enum represents an ELF file that has been loaded, mapped, and had all
+/// its relocations resolved. It is now ready for symbol lookup or execution.
+///
+/// It maintains internal reference counts to its dependencies to ensure
+/// memory safety during its lifetime.
 #[derive(Debug, Clone)]
 pub enum LoadedElf<D> {
     /// A relocated dynamic library.
@@ -58,19 +60,26 @@ pub enum LoadedElf<D> {
     /// A relocated executable.
     Exec(LoadedExec<D>),
 
-    /// A relocated relocatable file.
+    /// A relocated object file.
     Object(LoadedObject<()>),
 }
 
 impl<D: 'static> ElfImage<D> {
     /// Creates a builder for relocating the ELF file.
     ///
-    /// This method returns a [`Relocator`] that allows configuring the relocation
-    /// process with fine-grained control, such as:
-    /// * Providing custom symbol resolution strategies.
-    /// * Handling unknown relocations.
-    /// * Configuring lazy or eager binding.
-    /// * Specifying the symbol resolution scope.
+    /// # Examples
+    /// ```no_run
+    /// use elf_loader::{Loader, ElfBinary};
+    ///
+    /// let mut loader = Loader::new();
+    /// let bytes = &[]; // ELF file bytes
+    /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
+    ///
+    /// let relocated = lib.relocator()
+    ///     .lazy(true)
+    ///     .relocate()
+    ///     .unwrap();
+    /// ```
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
@@ -129,7 +138,6 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
         post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
-        use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         D: 'static,
@@ -150,7 +158,6 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
                     post_handler,
                     lazy,
                     lazy_scope,
-                    use_scope_as_lazy,
                 )?;
                 Ok(LoadedElf::Dylib(relocated))
             }
@@ -164,7 +171,6 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
                     post_handler,
                     lazy,
                     lazy_scope,
-                    use_scope_as_lazy,
                 )?;
                 Ok(LoadedElf::Exec(relocated))
             }
@@ -178,65 +184,12 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
                     post_handler,
                     lazy,
                     None::<LazyS>, // ElfRelocatable always uses LazyScope<(), ()>, so pass None
-                    use_scope_as_lazy,
                 )?;
                 Ok(LoadedElf::Object(relocated))
             }
         }
     }
 }
-
-/// A symbol from an ELF object
-///
-/// A symbol loaded from an ELF file.
-///
-/// This structure represents a symbol loaded from an ELF file, such as a
-/// function or global variable. It provides safe access to the symbol
-/// while maintaining proper lifetime information.
-///
-/// The type parameter `T` represents the type of the symbol (e.g., a function
-/// signature or a variable type).
-#[derive(Debug, Clone)]
-pub struct Symbol<'lib, T: 'lib> {
-    /// Raw pointer to the symbol data.
-    pub(crate) ptr: *mut (),
-
-    /// Phantom data to maintain lifetime information.
-    pd: PhantomData<&'lib T>,
-}
-
-impl<'lib, T> Deref for Symbol<'lib, T> {
-    type Target = T;
-
-    /// Dereferences to the underlying symbol type.
-    ///
-    /// This allows direct use of the symbol as if it were of type `T`.
-    ///
-    /// # Returns
-    /// A reference to the symbol of type `T`.
-    fn deref(&self) -> &T {
-        unsafe { &*(&self.ptr as *const *mut _ as *const T) }
-    }
-}
-
-impl<'lib, T> Symbol<'lib, T> {
-    /// Consumes the symbol and returns the raw pointer
-    ///
-    /// This method converts the symbol into a raw pointer, transferring
-    /// ownership to the caller.
-    ///
-    /// # Returns
-    /// A raw pointer to the symbol data
-    pub fn into_raw(self) -> *const () {
-        self.ptr
-    }
-}
-
-// Safety: Symbol can be sent between threads if T can
-unsafe impl<T: Send> Send for Symbol<'_, T> {}
-
-// Safety: Symbol can be shared between threads if T can
-unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
 impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// Load an ELF file into memory

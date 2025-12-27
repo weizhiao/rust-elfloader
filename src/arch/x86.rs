@@ -27,7 +27,7 @@ pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
     // 保存调用者保存的寄存器
@@ -75,7 +75,7 @@ pub extern "C" fn dl_runtime_resolve() {
 }
 
 /// Map x86 relocation type to human readable name
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_386_32 => "R_386_32",
         R_386_GLOB_DAT => "R_386_GLOB_DAT",

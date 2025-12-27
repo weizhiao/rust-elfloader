@@ -273,45 +273,46 @@ impl SubAssign<usize> for ElfDynamicHashTab {
     }
 }
 
-/// Information in the dynamic section after mapping to the real address
+/// Information from the ELF dynamic section.
 pub struct ElfDynamic {
+    /// Pointer to the dynamic section.
     pub dyn_ptr: *const Dyn,
-    /// DT_GNU_HASH or DT_HASH
+    /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
-    /// DT_SYMTAB - Symbol table address
+    /// Symbol table address.
     pub symtab: usize,
-    /// DT_STRTAB - String table address
+    /// String table address.
     pub strtab: usize,
-    /// DT_FLAGS and DT_FLAGS_1 - Indicates if all symbols should be bound immediately
+    /// Whether to bind symbols immediately.
     pub bind_now: bool,
-    /// DT_PLTGOT - Global Offset Table
+    /// Global Offset Table address.
     pub got_plt: Option<NonNull<usize>>,
-    /// DT_INIT - Initialization function
+    /// Initialization function.
     pub init_fn: Option<fn()>,
-    /// DT_INIT_ARRAY - Initialization function array
+    /// Initialization function array.
     pub init_array_fn: Option<&'static [fn()]>,
-    /// DT_FINI - Finalization function
+    /// Finalization function.
     pub fini_fn: Option<fn()>,
-    /// DT_FINI_ARRAY - Finalization function array
+    /// Finalization function array.
     pub fini_array_fn: Option<&'static [fn()]>,
-    /// DT_JMPREL - PLT relocation entries
+    /// PLT relocation entries.
     pub pltrel: Option<&'static [ElfRelType]>,
-    /// DT_RELA or DT_REL - Relocation entries
+    /// Dynamic relocation entries.
     pub dynrel: Option<&'static [ElfRelType]>,
-    /// DT_RELR - RELR relocation entries (for relative relocations)
+    /// RELR relocation entries.
     pub relr: Option<&'static [ElfRelr]>,
-    /// DT_RELACOUNT or DT_RELCOUNT - Count of RELATIVE relocations
+    /// Count of relative relocations.
     pub rel_count: Option<NonZeroUsize>,
-    /// DT_NEEDED - Required libraries (dependencies)
+    /// Required libraries.
     pub needed_libs: Vec<NonZeroUsize>,
-    /// DT_VERSYM - Symbol version information
+    /// Symbol version index.
     pub version_idx: Option<NonZeroUsize>,
-    /// DT_VERNEED and DT_VERNEEDNUM - Version needed information
+    /// Version needed information.
     pub verneed: Option<(NonZeroUsize, NonZeroUsize)>,
-    /// DT_VERDEF and DT_VERDEFNUM - Version definition information
+    /// Version definition information.
     pub verdef: Option<(NonZeroUsize, NonZeroUsize)>,
-    /// DT_RPATH - Runtime library search path
+    /// Runtime library search path.
     pub rpath_off: Option<NonZeroUsize>,
-    /// DT_RUNPATH - Runtime library search path (overrides RPATH)
+    /// Runtime library search path (overrides RPATH).
     pub runpath_off: Option<NonZeroUsize>,
 }

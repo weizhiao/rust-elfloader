@@ -13,9 +13,8 @@ use crate::{
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{ffi::CString, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{
-    ffi::CStr,
     fmt::Debug,
     marker::PhantomData,
     ops::Deref,
@@ -39,31 +38,26 @@ impl<D> Deref for LoadedModule<D> {
     }
 }
 
-/// A symbol from ELF object
+/// A typed symbol retrieved from a loaded ELF module.
 ///
-/// A symbol loaded from an ELF file.
-///
-/// This structure represents a symbol loaded from an ELF file, such as a
-/// function or global variable. It provides safe access to the symbol
-/// while maintaining proper lifetime information.
-///
-/// The lifetime parameter `'lib` ensures the symbol cannot outlive the
-/// library it came from.
+/// `Symbol` provides safe access to a function or variable within a loaded library.
+/// It carries a lifetime marker `'lib` to ensure that the symbol cannot outlive
+/// the library it was loaded from, preventing use-after-free errors.
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
-    /// Raw pointer to the symbol data.
+    /// Raw pointer to the symbol's memory location.
     ptr: *mut (),
 
-    /// Phantom data to maintain lifetime information.
+    /// Phantom data to bind the symbol's lifetime to the source library.
     pd: PhantomData<&'lib T>,
 }
 
 impl<'lib, T> Deref for Symbol<'lib, T> {
     type Target = T;
 
-    /// Dereferences to the underlying symbol type.
+    /// Accesses the underlying symbol as a reference to type `T`.
     ///
-    /// This allows direct use of the symbol as if it were of type `T`.
+    /// This allows calling functions or accessing variables directly.
     ///
     /// # Returns
     /// A reference to the symbol of type `T`.
@@ -73,13 +67,10 @@ impl<'lib, T> Deref for Symbol<'lib, T> {
 }
 
 impl<'lib, T> Symbol<'lib, T> {
-    /// Consumes the symbol and returns the raw pointer
-    ///
-    /// This method converts the symbol into a raw pointer, transferring
-    /// ownership to the caller.
+    /// Consumes the `Symbol` and returns its raw memory address.
     ///
     /// # Returns
-    /// A raw pointer to the symbol data
+    /// A raw pointer to the symbol data.
     pub fn into_raw(self) -> *const () {
         self.ptr
     }
@@ -91,21 +82,23 @@ unsafe impl<T: Send> Send for Symbol<'_, T> {}
 // Safety: Symbol can be shared between threads if T can
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-/// A loaded ELF module with its dependencies.
+/// A fully loaded and relocated ELF module.
 ///
-/// This structure represents an ELF module that has been loaded into memory,
-/// along with its dependencies. It maintains references to its dependencies
-/// to ensure proper lifetime management and symbol resolution.
+/// This structure represents an ELF object (executable, shared library, or relocatable object)
+/// that has been mapped into memory and had its relocations performed.
+///
+/// It maintains an `Arc` reference to its dependencies to ensure that required
+/// libraries remain in memory as long as this module is alive.
 #[derive(Debug)]
 pub struct LoadedModule<D> {
-    /// The core component containing the actual ELF data.
+    /// The core ELF module data and metadata.
     pub(crate) core: ElfModule<D>,
-    /// The dependencies of the ELF object.
+    /// Shared references to the libraries this module depends on.
     pub(crate) deps: Arc<[LoadedModule<D>]>,
 }
 
 impl<D> Clone for LoadedModule<D> {
-    /// Clones the [`LoadedModule`] object, incrementing the reference count of its dependencies.
+    /// Clones the [`LoadedModule`], incrementing the reference count of its core and dependencies.
     fn clone(&self) -> Self {
         LoadedModule {
             core: self.core.clone(),
@@ -115,18 +108,13 @@ impl<D> Clone for LoadedModule<D> {
 }
 
 impl<D> LoadedModule<D> {
-    /// Creates a [`LoadedModule`] instance from a [`ElfModule`].
+    /// Wraps an [`ElfModule`] into a [`LoadedModule`] with no dependencies.
     ///
     /// # Safety
-    /// This function is unsafe because it assumes the ELF object has been
-    /// properly relocated, which is not verified here. Additionally, it
-    /// creates an empty dependency list, which may not be correct for all objects.
+    /// The caller must ensure the ELF object has been properly relocated.
     ///
     /// # Arguments
     /// * `core` - The [`ElfModule`] to wrap.
-    ///
-    /// # Returns
-    /// A new [`LoadedModule`] instance.
     #[inline]
     pub unsafe fn from_core(core: ElfModule<D>) -> Self {
         LoadedModule {
@@ -135,23 +123,19 @@ impl<D> LoadedModule<D> {
         }
     }
 
-    /// Returns the dependencies of the ELF object.
+    /// Returns a slice of the libraries this module depends on.
     pub fn deps(&self) -> &[LoadedModule<D>] {
         &self.deps
     }
 
-    /// Creates a [`LoadedModule`] instance from a [`ElfModule`] and its dependencies.
+    /// Creates a [`LoadedModule`] from an [`ElfModule`] and its explicit dependencies.
     ///
     /// # Safety
-    /// This function is unsafe because it assumes the ELF object has been
-    /// properly relocated, which is not verified here.
+    /// The caller must ensure the ELF object has been properly relocated.
     ///
     /// # Arguments
     /// * `core` - The [`ElfModule`] to wrap.
-    /// * `deps` - The dependencies of the ELF object.
-    ///
-    /// # Returns
-    /// A new [`LoadedModule`] instance.
+    /// * `deps` - A vector of dependencies.
     #[inline]
     pub unsafe fn from_core_deps(core: ElfModule<D>, deps: Vec<LoadedModule<D>>) -> Self {
         LoadedModule {
@@ -191,7 +175,7 @@ impl<D> LoadedModule<D> {
     /// A new LoadedModule instance
     #[inline]
     pub unsafe fn new_unchecked(
-        name: CString,
+        name: String,
         base: usize,
         dynamic: ElfDynamic,
         phdrs: &'static [ElfPhdr],
@@ -338,8 +322,8 @@ pub(crate) struct ModuleInner<D = ()> {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
-    /// File name of the ELF object
-    pub(crate) name: CString,
+    /// File short name of the ELF object
+    pub(crate) name: String,
 
     /// ELF symbols table
     pub(crate) symtab: SymbolTable,
@@ -491,27 +475,7 @@ impl<D> ElfModule<D> {
     /// The name of the ELF object as a string slice
     #[inline]
     pub fn name(&self) -> &str {
-        self.inner.name.to_str().unwrap()
-    }
-
-    /// Gets the C-style name of the ELF object
-    ///
-    /// # Returns
-    /// The name of the ELF object as a C string
-    #[inline]
-    pub fn cname(&self) -> &CStr {
         &self.inner.name
-    }
-
-    /// Gets the short name of the ELF object
-    ///
-    /// This method returns just the filename portion without any path components.
-    ///
-    /// # Returns
-    /// The short name (filename only) of the ELF object
-    #[inline]
-    pub fn shortname(&self) -> &str {
-        self.name().split('/').next_back().unwrap()
     }
 
     /// Gets the base address of the ELF object
@@ -576,7 +540,7 @@ impl<D> ElfModule<D> {
     /// # Returns
     /// A new ElfModule instance
     fn from_raw(
-        name: CString,
+        name: String,
         base: usize,
         dynamic: ElfDynamic,
         phdrs: &'static [ElfPhdr],

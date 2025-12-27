@@ -1,3 +1,18 @@
+//! ELF relocation processing module.
+//!
+//! This module handles the relocation of ELF objects, resolving symbol references
+//! and applying address fixups. It supports both static and dynamic linking scenarios.
+//!
+//! Key concepts:
+//! - **Symbol Lookup**: Finding addresses of external symbols.
+//! - **Relocation Handlers**: Custom logic for handling specific relocation types.
+//! - **Lazy Binding**: Deferred symbol resolution for performance.
+//! - **Scope**: The set of loaded modules available for symbol resolution.
+//!
+//! # Safety
+//! Relocation involves direct memory manipulation. Ensure proper bounds checking
+//! and avoid corrupting memory during address calculations.
+
 use crate::{
     ElfModule, Error, LoadedModule, Result,
     arch::{ElfRelType, ElfSymbol},
@@ -24,35 +39,35 @@ pub(crate) use static_link::{StaticReloc, StaticRelocation};
 
 /// A trait for looking up symbols during relocation.
 ///
-/// This trait allows for flexible symbol resolution strategies, supporting
-/// both closures and complex structs with state. It is used to find the
-/// addresses of external symbols that the ELF object depends on.
+/// Implement this trait to provide custom symbol resolution strategies.
+/// The relocator will use this to find addresses of external symbols that
+/// the ELF object depends on.
 ///
 /// # Examples
 ///
-/// Using a closure:
+/// Using a closure for simple lookups:
 /// ```rust
 /// use elf_loader::SymbolLookup;
 ///
 /// let lookup = |name: &str| {
-///     if name == "my_func" {
-///         Some(0x1234 as *const ())
-///     } else {
-///         None
+///     match name {
+///         "malloc" => Some(0x1234 as *const ()),
+///         "free" => Some(0x5678 as *const ()),
+///         _ => None,
 ///     }
 /// };
 /// ```
 ///
-/// Using a custom struct:
+/// Using a struct for complex resolution:
 /// ```rust
 /// use elf_loader::SymbolLookup;
 /// use std::collections::HashMap;
 ///
-/// struct MyResolver {
+/// struct SymbolResolver {
 ///     symbols: HashMap<String, *const ()>,
 /// }
 ///
-/// impl SymbolLookup for MyResolver {
+/// impl SymbolLookup for SymbolResolver {
 ///     fn lookup(&self, name: &str) -> Option<*const ()> {
 ///         self.symbols.get(name).copied()
 ///     }
@@ -62,11 +77,11 @@ pub trait SymbolLookup {
     /// Finds the address of a symbol by its name.
     ///
     /// # Arguments
-    /// * `name` - The name of the symbol to look up.
+    /// * `name` - The symbol name to resolve.
     ///
     /// # Returns
-    /// * `Some(*const ())` - The address of the symbol if found.
-    /// * `None` - If the symbol was not found.
+    /// * `Some(ptr)` - The symbol's address if found.
+    /// * `None` - Symbol not found.
     fn lookup(&self, name: &str) -> Option<*const ()>;
 }
 
@@ -93,21 +108,27 @@ impl SymbolLookup for () {
 
 /// A trait for handling unknown or custom relocations.
 ///
-/// This trait allows users to provide custom logic for relocations that are
-/// not handled by the default relocator or for intercepting relocations.
+/// Implement this to provide custom logic for relocations not handled by default,
+/// or to intercept and modify standard relocations.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use elf_loader::{RelocationHandler, RelocationContext, Result};
 ///
-/// struct MyHandler;
+/// struct CustomHandler;
 ///
-/// impl RelocationHandler for MyHandler {
+/// impl RelocationHandler for CustomHandler {
 ///     fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
 ///         let rel = ctx.rel();
-///         // Custom logic to handle specific relocation types or symbols
-///         None // Fallthrough to default behavior
+///         // Handle specific relocation types
+///         match rel.r_type() {
+///             0x1234 => {
+///                 // Custom relocation logic
+///                 Some(Ok(None)) // Handled successfully
+///             }
+///             _ => None, // Fall through to default
+///         }
 ///     }
 /// }
 /// ```
@@ -115,13 +136,13 @@ pub trait RelocationHandler {
     /// Handles a relocation.
     ///
     /// # Arguments
-    /// * `ctx` - The context containing information about the relocation.
+    /// * `ctx` - Context containing relocation details and scope.
     ///
     /// # Returns
-    /// * `Some(Ok(None))` - The relocation was handled successfully.
-    /// * `Some(Ok(Some(idx)))` - The relocation was handled successfully, and the library at `scope[idx]` was used.
-    /// * `Some(Err(e))` - The relocation was handled but failed with an error.
-    /// * `None` - The relocation was not handled by this handler (fallthrough to default behavior).
+    /// * `Some(Ok(None))` - Handled successfully, no library dependency.
+    /// * `Some(Ok(Some(idx)))` - Handled successfully, used library at `scope[idx]`.
+    /// * `Some(Err(e))` - Handled but failed with error.
+    /// * `None` - Not handled, fall through to default behavior.
     fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
 }
 
@@ -137,7 +158,7 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
     }
 }
 
-/// Context for relocation operations
+/// Internal context for managing relocation state and handlers.
 struct RelocContext<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
     scope: &'a [LoadedModule<D>],
     pre_find: &'find PreS,
@@ -178,8 +199,10 @@ where
     }
 }
 
-/// Context passed to `RelocationHandler::handle` containing the relocation
-/// entry, the library where the relocation appears and the current scope.
+/// Context passed to `RelocationHandler::handle` containing relocation details.
+///
+/// This struct provides access to the relocation entry, the module being relocated,
+/// and the current symbol resolution scope.
 pub struct RelocationContext<'a, D> {
     rel: &'a ElfRelType,
     lib: &'a ElfModule<D>,
@@ -226,12 +249,28 @@ impl RelocationHandler for () {
     }
 }
 
-/// A trait for objects that can be relocated
+/// A trait for objects that can be relocated.
+///
+/// Types implementing this trait can undergo symbol resolution and address fixup.
+/// The relocation process resolves external symbol references and applies necessary
+/// address adjustments to make the object executable.
 pub trait Relocatable<D = ()>: Sized {
-    /// The type of the relocated object
+    /// The type of the relocated object.
     type Output;
 
-    /// Execute the relocation process
+    /// Execute the relocation process with the given configuration.
+    ///
+    /// # Arguments
+    /// * `scope` - Loaded modules available for symbol resolution.
+    /// * `pre_find` - Primary symbol lookup strategy.
+    /// * `post_find` - Fallback symbol lookup strategy.
+    /// * `pre_handler` - Handler called before default relocation logic.
+    /// * `post_handler` - Handler called after default logic if not handled.
+    /// * `lazy` - Whether to enable lazy binding.
+    /// * `lazy_scope` - Symbol lookup for lazy binding.
+    ///
+    /// # Returns
+    /// The relocated object on success.
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
         scope: &[LoadedModule<D>],
@@ -241,7 +280,6 @@ pub trait Relocatable<D = ()>: Sized {
         post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
-        use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
@@ -253,9 +291,8 @@ pub trait Relocatable<D = ()>: Sized {
 
 /// A builder for configuring and executing the relocation process.
 ///
-/// `Relocator` provides a fluent interface for setting up symbol resolution
-/// strategies, relocation handlers, and binding behaviors before performing
-/// the actual relocation of an ELF object.
+/// `Relocator` provides a fluent interface for setting up symbol resolution,
+/// relocation handlers, and binding behaviors before relocating an ELF object.
 ///
 /// # Examples
 /// ```no_run
@@ -267,7 +304,11 @@ pub trait Relocatable<D = ()>: Sized {
 ///
 /// let relocated = lib.relocator()
 ///     .pre_find_fn(|name| {
-///         if name == "malloc" { Some(0x1234 as *const ()) } else { None }
+///         match name {
+///             "malloc" => Some(0x1234 as *const ()),
+///             "free" => Some(0x5678 as *const ()),
+///             _ => None,
+///         }
 ///     })
 ///     .lazy(true)
 ///     .relocate()
@@ -282,7 +323,6 @@ pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
     post_handler: PostH,
     lazy: Option<bool>,
     lazy_scope: Option<LazyS>,
-    use_scope_as_lazy: bool,
 }
 
 impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
@@ -297,7 +337,6 @@ impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
             post_handler: (),
             lazy: None,
             lazy_scope: None,
-            use_scope_as_lazy: false,
         }
     }
 }
@@ -313,8 +352,8 @@ where
 {
     /// Sets the preferred symbol lookup strategy.
     ///
-    /// Symbols will be searched using this strategy before checking the
-    /// default scope or fallback strategies.
+    /// Symbols will be searched using this strategy first, before checking
+    /// the default scope or fallback strategies.
     pub fn pre_find<S2>(self, pre_find: S2) -> Relocator<T, S2, PostS, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
@@ -328,7 +367,6 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
@@ -346,7 +384,6 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
@@ -367,7 +404,6 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
@@ -388,14 +424,13 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
     /// Sets the scope of relocated libraries for symbol resolution.
     ///
     /// The relocator will search for symbols in these libraries in the order
-    /// they are provided.
+    /// they are provided. This defines the dependency resolution scope.
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -424,7 +459,6 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
@@ -448,14 +482,14 @@ where
             post_handler: handler,
             lazy: self.lazy,
             lazy_scope: self.lazy_scope,
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
     }
 
     /// Enables or disables lazy binding.
     ///
-    /// If enabled, some relocations (typically PLT entries) will be resolved
-    /// on-demand when the function is first called.
+    /// When enabled, some relocations (typically PLT entries) will be resolved
+    /// on-demand when the function is first called, improving startup time.
+    /// When disabled, all relocations are resolved immediately.
     pub fn lazy(mut self, lazy: bool) -> Self {
         self.lazy = Some(lazy);
         self
@@ -478,23 +512,17 @@ where
             post_handler: self.post_handler,
             lazy: self.lazy,
             lazy_scope: Some(scope),
-            use_scope_as_lazy: self.use_scope_as_lazy,
         }
-    }
-
-    /// Uses the provided scope as the lazy scope for symbol resolution.
-    pub fn use_scope_as_lazy(mut self) -> Self {
-        self.use_scope_as_lazy = true;
-        self
     }
 
     /// Executes the relocation process.
     ///
     /// This method consumes the relocator and returns the relocated ELF object.
+    /// All configured symbol lookups, handlers, and options are applied.
     ///
     /// # Returns
-    /// * `Ok(T::Output)` - The relocated ELF object.
-    /// * `Err(Error)` - If relocation fails.
+    /// * `Ok(T::Output)` - The successfully relocated ELF object.
+    /// * `Err(Error)` - If relocation fails for any reason.
     pub fn relocate(self) -> Result<T::Output>
     where
         D: 'static,
@@ -507,13 +535,14 @@ where
             self.post_handler,
             self.lazy,
             self.lazy_scope,
-            self.use_scope_as_lazy,
         )
     }
 }
 
-/// A trait for handling unknown relocations
-
+/// A wrapper type for relocation values, providing type safety and arithmetic operations.
+///
+/// This type represents computed addresses or offsets used in relocations.
+/// It supports addition and subtraction for address calculations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub(crate) struct RelocValue<T>(pub T);
@@ -601,13 +630,21 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
     }
 }
 
+/// A symbol definition found during relocation.
+///
+/// Contains the symbol information and the module where it was found.
+/// Used to compute the final address of a symbol.
 pub struct SymDef<'lib, D> {
     pub sym: Option<&'lib ElfSymbol>,
     pub lib: &'lib ElfModule<D>,
 }
 
 impl<'temp, D> SymDef<'temp, D> {
-    // 获取符号的真实地址(base + st_value)
+    /// Computes the real address of the symbol (base + st_value).
+    ///
+    /// For regular symbols, returns base + st_value.
+    /// For IFUNC symbols, calls the resolver function and returns its result.
+    /// For undefined weak symbols, returns null.
     pub fn convert(self) -> *const () {
         if likely(self.sym.is_some()) {
             let base = self.lib.base();
@@ -627,6 +664,9 @@ impl<'temp, D> SymDef<'temp, D> {
     }
 }
 
+/// Creates a detailed relocation error message.
+///
+/// Formats an error with relocation type, symbol name (if any), and module information.
 #[cold]
 pub(crate) fn reloc_error<D, E: core::fmt::Display>(
     rel: &ElfRelType,
@@ -638,14 +678,14 @@ pub(crate) fn reloc_error<D, E: core::fmt::Display>(
     if r_sym == 0 {
         relocate_error(format!(
             "file: {}, relocation type: {}, no symbol, error: {}",
-            lib.shortname(),
+            lib.name(),
             r_type_str,
             err
         ))
     } else {
         relocate_error(format!(
             "file: {}, relocation type: {}, symbol name: {}, error: {}",
-            lib.shortname(),
+            lib.name(),
             r_type_str,
             lib.symtab().symbol_idx(r_sym).1.name(),
             err
@@ -668,6 +708,10 @@ fn find_weak<'lib, D>(lib: &'lib ElfModule<D>, dynsym: &'lib ElfSymbol) -> Optio
     }
 }
 
+/// Finds the address of a symbol using the configured lookup strategies.
+///
+/// Searches in order: pre_find, scope, post_find.
+/// Returns the resolved address and optionally the library index used.
 #[inline]
 pub(crate) fn find_symbol_addr<PreS, PostS, D>(
     pre_find: &PreS,

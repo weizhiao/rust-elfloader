@@ -198,7 +198,6 @@ fn run_dynamic_linking(is_lazy: bool) {
 
     let relocated = if is_lazy {
         relocator
-            .use_scope_as_lazy()
             .lazy_scope(symbol_lookup.clone())
             .relocate()
     } else {

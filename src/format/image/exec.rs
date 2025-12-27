@@ -12,7 +12,7 @@ use crate::{
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
     segment::ElfSegments,
 };
-use alloc::ffi::CString;
+use alloc::string::String;
 use core::fmt::Debug;
 use elf::abi::PT_DYNAMIC;
 
@@ -36,7 +36,7 @@ impl<D> Debug for StaticImage<D> {
 
 impl<D> StaticImage<D> {
     pub fn name(&self) -> &str {
-        self.inner.name.to_str().unwrap()
+        &self.inner.name
     }
 
     pub fn entry(&self) -> usize {
@@ -46,7 +46,7 @@ impl<D> StaticImage<D> {
 
 pub(crate) struct StaticImageInner<D> {
     /// File name of the ELF object
-    pub(crate) name: CString,
+    pub(crate) name: String,
 
     pub(crate) entry: usize,
 
@@ -69,7 +69,6 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
         post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
-        use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
@@ -79,8 +78,9 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
         PostH: RelocationHandler,
     {
         match self {
-            ExecImage::Dynamic(dynamic_image) => {
-                let (inner, entry) = dynamic_image.relocate_impl(
+            ExecImage::Dynamic(image) => {
+                let entry = image.entry();
+                let inner = image.relocate_impl(
                     scope,
                     pre_find,
                     post_find,
@@ -88,16 +88,15 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
                     post_handler,
                     lazy,
                     lazy_scope,
-                    use_scope_as_lazy,
                 )?;
                 Ok(LoadedExec {
                     entry,
                     inner: LoadedExecInner::Dynamic(inner),
                 })
             }
-            ExecImage::Static(mini_module) => Ok(LoadedExec {
-                entry: mini_module.entry(),
-                inner: LoadedExecInner::Static(mini_module),
+            ExecImage::Static(image) => Ok(LoadedExec {
+                entry: image.entry(),
+                inner: LoadedExecInner::Static(image),
             }),
         }
     }
@@ -132,10 +131,6 @@ impl<D> Debug for ExecImage<D> {
 
 impl<D: 'static> ExecImage<D> {
     /// Creates a builder for relocating the executable.
-    ///
-    /// This method returns a [`Relocator`] that allows configuring the relocation
-    /// process with fine-grained control, such as setting a custom unknown relocation
-    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }

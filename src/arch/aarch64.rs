@@ -17,7 +17,7 @@ pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
     // ==========================================
@@ -105,7 +105,7 @@ pub extern "C" fn dl_runtime_resolve() {
 }
 
 /// Map aarch64 relocation type to human readable name
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_AARCH64_NONE => "R_AARCH64_NONE",
         R_AARCH64_ABS64 => "R_AARCH64_ABS64",

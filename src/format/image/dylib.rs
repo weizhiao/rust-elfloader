@@ -31,8 +31,6 @@ where
 impl<D> Deref for DylibImage<D> {
     type Target = DynamicImage<D>;
 
-    /// Dereferences to the underlying [`DynamicComponent`].
-    ///
     /// This implementation allows direct access to the common ELF object
     /// fields through the [`DylibImage`] wrapper.
     fn deref(&self) -> &Self::Target {
@@ -65,7 +63,6 @@ impl<D> Relocatable<D> for DylibImage<D> {
         post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
-        use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
@@ -74,7 +71,7 @@ impl<D> Relocatable<D> for DylibImage<D> {
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
-        let (relocated, _) = self.inner.relocate_impl(
+        let relocated = self.inner.relocate_impl(
             scope,
             pre_find,
             post_find,
@@ -82,7 +79,6 @@ impl<D> Relocatable<D> for DylibImage<D> {
             post_handler,
             lazy,
             lazy_scope,
-            use_scope_as_lazy,
         )?;
         Ok(relocated)
     }
@@ -103,10 +99,6 @@ impl<D> DylibImage<D> {
     }
 
     /// Creates a builder for relocating the dynamic library.
-    ///
-    /// This method returns a [`Relocator`] that allows configuring the relocation
-    /// process with fine-grained control, such as setting a custom unknown relocation
-    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }

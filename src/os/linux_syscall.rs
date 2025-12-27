@@ -6,8 +6,6 @@ use crate::{
 };
 use alloc::borrow::ToOwned;
 use alloc::ffi::CString;
-// ToString import removed — not used
-use core::ffi::CStr;
 use core::str::FromStr;
 use core::{
     ffi::{c_int, c_void},
@@ -245,8 +243,8 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &CStr {
-        &self.name
+    fn file_name(&self) -> &str {
+        self.name.to_str().unwrap()
     }
 
     fn as_fd(&self) -> Option<isize> {

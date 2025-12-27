@@ -29,7 +29,7 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 ];
 
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
     // Save caller-saved registers
@@ -103,7 +103,7 @@ pub extern "C" fn dl_runtime_resolve() {
 pub(crate) struct X86_64Relocator;
 
 /// Map x86_64 relocation type value to human readable name.
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_X86_64_NONE => "R_X86_64_NONE",
         R_X86_64_64 => "R_X86_64_64",

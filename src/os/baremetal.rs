@@ -81,7 +81,7 @@ impl RawFile {
 }
 
 impl ElfReader for RawFile {
-    fn file_name(&self) -> &core::ffi::CStr {
+    fn file_name(&self) -> &str {
         todo!()
     }
 

@@ -122,10 +122,9 @@ pub use format::{
 pub use loader::{LoadHook, LoadHookContext, Loader};
 pub use mmap::Mmap;
 pub use reader::{ElfBinary, ElfFile, ElfReader};
-pub use relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup};
+pub use relocation::{RelocationContext, RelocationHandler, SymbolLookup};
 
 /// Error types used throughout the `elf_loader` library.
-///
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
 #[derive(Debug)]

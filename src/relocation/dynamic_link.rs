@@ -65,8 +65,7 @@ impl<D> DynamicImage<D> {
         mut post_handler: PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
-        use_scope_as_lazy: bool,
-    ) -> Result<(LoadedModule<D>, usize)>
+    ) -> Result<LoadedModule<D>>
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
@@ -77,84 +76,58 @@ impl<D> DynamicImage<D> {
     {
         // Optimization: check if relocation is empty
         if self.relocation().is_empty() {
-            let entry = self.entry();
             let core = self.into_module();
             let relocated = unsafe { LoadedModule::from_core(core) };
-            return Ok((relocated, entry));
+            return Ok(relocated);
         }
 
         let is_lazy = lazy.unwrap_or(self.is_lazy());
-        let entry = self.entry();
+        let mut ctx = RelocContext {
+            scope,
+            pre_find,
+            post_find,
+            pre_handler: &mut pre_handler,
+            post_handler: &mut post_handler,
+            dependency_flags: alloc::vec![false; scope.len()],
+        };
 
-        let lazy_scope = if is_lazy {
-            if use_scope_as_lazy {
-                let libs = scope.iter().map(|lib| lib.downgrade()).collect();
+        self.relocate_relative().relocate_dynrel(&mut ctx)?;
+
+        let deps = {
+            let needed_libs = self.needed_libs();
+
+            let lazy_scope = if is_lazy {
+                let libs = if lazy_scope.is_none() {
+                    scope
+                        .iter()
+                        .filter(|lib| needed_libs.contains(&lib.name()))
+                        .map(|lib| lib.downgrade())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 Some(LazyScope {
                     libs,
                     custom_scope: lazy_scope,
                 })
             } else {
-                Some(LazyScope {
-                    libs: Vec::new(),
-                    custom_scope: lazy_scope,
+                None
+            };
+
+            self.relocate_pltrel(is_lazy, lazy_scope, &mut ctx)?
+                .finish();
+
+            scope
+                .iter()
+                .zip(ctx.dependency_flags)
+                .filter_map(|(module, flag)| {
+                    (flag || needed_libs.contains(&module.name())).then(|| module.clone())
                 })
-            }
-        } else {
-            None
+                .collect::<Vec<_>>()
         };
 
-        let relocated = relocate_impl(
-            self,
-            scope,
-            pre_find,
-            post_find,
-            &mut pre_handler,
-            &mut post_handler,
-            is_lazy,
-            lazy_scope,
-        )?;
-
-        Ok((relocated, entry))
+        Ok(unsafe { LoadedModule::from_core_deps(self.into_module(), deps) })
     }
-}
-
-/// Perform relocations on an ELF object
-fn relocate_impl<D, PreS, PostS, LazyS, PreH, PostH>(
-    elf: DynamicImage<D>,
-    scope: &[LoadedModule<D>],
-    pre_find: &PreS,
-    post_find: &PostS,
-    pre_handler: &mut PreH,
-    post_handler: &mut PostH,
-    is_lazy: bool,
-    lazy_scope: Option<LazyS>,
-) -> Result<LoadedModule<D>>
-where
-    PreS: SymbolLookup + ?Sized,
-    PostS: SymbolLookup + ?Sized,
-    LazyS: SymbolLookup + Send + Sync + 'static,
-    PreH: RelocationHandler + ?Sized,
-    PostH: RelocationHandler + ?Sized,
-{
-    let mut ctx = RelocContext {
-        scope,
-        pre_find,
-        post_find,
-        pre_handler,
-        post_handler,
-        dependency_flags: alloc::vec![false; scope.len()],
-    };
-    elf.relocate_relative()
-        .relocate_dynrel(&mut ctx)?
-        .relocate_pltrel(is_lazy, lazy_scope, &mut ctx)?
-        .finish();
-    let deps: Vec<LoadedModule<D>> = ctx
-        .dependency_flags
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &flag)| if flag { Some(scope[i].clone()) } else { None })
-        .collect();
-    Ok(unsafe { LoadedModule::from_core_deps(elf.into_module(), deps) })
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
@@ -304,7 +277,7 @@ impl<D> DynamicImage<D> {
             // Ensure lazy scope is available
             assert!(
                 reloc.pltrel.is_empty() || lazy_scope.is_some(),
-                "{}: lazy scope is not set, please call `use_scope_as_lazy()` or provide a lazy scope",
+                "{}: lazy scope is not set",
                 core.name()
             );
 

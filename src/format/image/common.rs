@@ -13,7 +13,7 @@ use crate::{
     segment::{ELFRelro, ElfSegments},
     symbol::SymbolTable,
 };
-use alloc::{boxed::Box, ffi::CString, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     cell::Cell,
     ffi::{CStr, c_char},
@@ -121,7 +121,7 @@ enum State<D> {
         fini_handler: FnHandler,
 
         /// Name of the ELF file
-        name: CString,
+        name: String,
 
         /// Pointer to the dynamic section
         dynamic_ptr: NonNull<Dyn>,
@@ -341,7 +341,7 @@ where
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Name of the ELF file.
-    name: &'static CStr,
+    name: &'static str,
     /// Program headers.
     phdrs: ElfPhdrs,
     /// Data parsed lazily.
@@ -428,27 +428,7 @@ impl<D> DynamicImage<D> {
     /// A string slice containing the ELF object name
     #[inline]
     pub fn name(&self) -> &str {
-        self.name.to_str().unwrap()
-    }
-
-    /// Gets the C-style name of the ELF object
-    ///
-    /// # Returns
-    /// A CStr reference containing the ELF object name
-    #[inline]
-    pub fn cname(&self) -> &CStr {
-        self.name
-    }
-
-    /// Gets the short name of the ELF object
-    ///
-    /// This method returns just the filename portion without any path components.
-    ///
-    /// # Returns
-    /// A string slice containing just the filename
-    #[inline]
-    pub fn shortname(&self) -> &str {
-        self.name().split('/').next_back().unwrap()
+        &self.name
     }
 
     /// Gets the program headers of the ELF object
@@ -567,7 +547,7 @@ where
     phdr_mmap: Option<&'static [ElfPhdr]>,
 
     /// Name of the ELF file
-    name: CString,
+    name: String,
 
     /// ELF header
     ehdr: ElfHeader,
@@ -616,7 +596,7 @@ where
     pub(crate) fn new(
         hook: &'hook H,
         segments: ElfSegments,
-        name: CString,
+        name: String,
         ehdr: ElfHeader,
         init_fn: FnHandler,
         fini_fn: FnHandler,
@@ -760,7 +740,7 @@ where
             interp: self
                 .interp
                 .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
-            name: unsafe { core::mem::transmute::<&CStr, &CStr>(self.name.as_c_str()) },
+            name: unsafe { core::mem::transmute::<&str, &str>(&self.name) },
             phdrs: phdrs.clone(),
             data: LazyParse {
                 state: Cell::new(State::Uninit {

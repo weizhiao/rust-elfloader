@@ -122,40 +122,52 @@ pub const DT_RELR: i64 = 36;
 /// This element holds the size, in bytes, of the DT_RELR relocation entry.
 pub const DT_RELRENT: i64 = 37;
 
+/// ELF RELR relocation entry.
 #[repr(transparent)]
 pub struct ElfRelr {
     relr: Relr,
 }
 
 impl ElfRelr {
+    /// Returns the value of the relocation entry.
     #[inline]
     pub fn value(&self) -> usize {
         self.relr as usize
     }
 }
 
+/// ELF RELA relocation entry.
+///
+/// # Examples
+/// ```rust
+/// use elf_loader::arch::ElfRela;
+/// // Access relocation info from a RELA entry
+/// ```
 #[repr(transparent)]
 pub struct ElfRela {
     rela: Rela,
 }
 
 impl ElfRela {
+    /// Returns the relocation type.
     #[inline]
     pub fn r_type(&self) -> usize {
         self.rela.r_info as usize & REL_MASK
     }
 
+    /// Returns the symbol index.
     #[inline]
     pub fn r_symbol(&self) -> usize {
         self.rela.r_info as usize >> REL_BIT
     }
 
+    /// Returns the relocation offset.
     #[inline]
     pub fn r_offset(&self) -> usize {
         self.rela.r_offset as usize
     }
 
-    /// base is not used during execution. The base parameter is added only for the sake of interface consistency
+    /// Returns the relocation addend.
     #[inline]
     pub fn r_addend(&self, _base: usize) -> isize {
         self.rela.r_addend as isize
@@ -167,27 +179,32 @@ impl ElfRela {
     }
 }
 
+/// ELF REL relocation entry.
 #[repr(transparent)]
 pub struct ElfRel {
     rel: Rel,
 }
 
 impl ElfRel {
+    /// Returns the relocation type.
     #[inline]
     pub fn r_type(&self) -> usize {
         self.rel.r_info as usize & REL_MASK
     }
 
+    /// Returns the symbol index.
     #[inline]
     pub fn r_symbol(&self) -> usize {
         self.rel.r_info as usize >> REL_BIT
     }
 
+    /// Returns the relocation offset.
     #[inline]
     pub fn r_offset(&self) -> usize {
         self.rel.r_offset as usize
     }
 
+    /// Returns the relocation addend.
     #[inline]
     pub fn r_addend(&self, base: usize) -> isize {
         let ptr = (self.r_offset() + base) as *mut usize;
@@ -207,63 +224,73 @@ pub struct ElfSymbol {
 }
 
 impl ElfSymbol {
+    /// Returns the symbol value.
     #[inline]
     pub fn st_value(&self) -> usize {
         self.sym.st_value as usize
     }
 
-    /// STB_* define constants for the ELF Symbol's st_bind (encoded in the st_info field)
+    /// Returns the symbol binding.
     #[inline]
     pub fn st_bind(&self) -> u8 {
         self.sym.st_info >> 4
     }
 
-    /// STT_* define constants for the ELF Symbol's st_type (encoded in the st_info field).
+    /// Returns the symbol type.
     #[inline]
     pub fn st_type(&self) -> u8 {
         self.sym.st_info & 0xf
     }
 
+    /// Returns the section index.
     #[inline]
     pub fn st_shndx(&self) -> usize {
         self.sym.st_shndx as usize
     }
 
+    /// Returns the symbol name index.
     #[inline]
     pub fn st_name(&self) -> usize {
         self.sym.st_name as usize
     }
 
+    /// Returns the symbol size.
     #[inline]
     pub fn st_size(&self) -> usize {
         self.sym.st_size as usize
     }
 
+    /// Returns the symbol visibility.
     #[inline]
     pub fn st_other(&self) -> u8 {
         self.sym.st_other
     }
 
+    /// Returns true if the symbol is undefined.
     #[inline]
     pub fn is_undef(&self) -> bool {
         self.st_shndx() == SHN_UNDEF as usize
     }
 
+    /// Returns true if the symbol has a valid binding.
     #[inline]
     pub fn is_ok_bind(&self) -> bool {
         (1 << self.st_bind()) & OK_BINDS != 0
     }
 
+    /// Returns true if the symbol has a valid type.
     #[inline]
     pub fn is_ok_type(&self) -> bool {
         (1 << self.st_type()) & OK_TYPES != 0
     }
 
+    /// Returns true if the symbol is local.
     #[inline]
     pub fn is_local(&self) -> bool {
         self.st_bind() == STB_LOCAL
     }
 
+    /// Returns true if the symbol is weak.
     #[inline]
     pub fn is_weak(&self) -> bool {
         self.st_bind() == STB_WEAK
@@ -275,12 +302,14 @@ impl ElfSymbol {
     }
 }
 
+/// ELF program header.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfPhdr {
     phdr: Phdr,
 }
 
+/// ELF section header.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfShdr {

@@ -76,52 +76,37 @@ impl ElfStringTable {
     }
 }
 
-/// Symbol table of an ELF file
-///
-/// This structure represents the symbol table of an ELF file, including
-/// the hash table for efficient symbol lookup, the symbol table itself,
-/// and the associated string table for symbol names.
+/// Symbol table of an ELF file.
 pub struct SymbolTable {
-    /// Hash table for efficient symbol lookup (.gnu.hash or .hash)
+    /// Hash table for efficient symbol lookup.
     pub(crate) hashtab: HashTable,
 
-    /// Pointer to the symbol table (.dynsym)
+    /// Pointer to the symbol table.
     pub(crate) symtab: *const ElfSymbol,
 
-    /// String table for symbol names (.dynstr)
+    /// String table for symbol names.
     pub(crate) strtab: ElfStringTable,
 
-    /// Optional symbol version information (.gnu.version)
+    /// Optional symbol version information.
     #[cfg(feature = "version")]
     pub(crate) version: Option<super::version::ELFVersion>,
 }
 
-/// Symbol-specific information
-///
-/// This structure holds information about a specific symbol, including
-/// its name and optional version information. It is used as input for
-/// symbol lookup operations.
+/// Information about a specific symbol.
 pub struct SymbolInfo<'symtab> {
-    /// The symbol name as a string slice
+    /// The symbol name.
     name: &'symtab str,
 
-    /// The symbol name as a C-style string (cached for efficiency)
+    /// The symbol name as a C-style string.
     cname: Option<&'symtab CStr>,
 
-    /// Optional symbol version information
+    /// Optional symbol version information.
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'symtab>>,
 }
 
 impl<'symtab> SymbolInfo<'symtab> {
-    /// Create a new SymbolInfo instance from a symbol name and optional version
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name as a string slice
-    /// * `version` - Optional version information as a string slice
-    ///
-    /// # Returns
-    /// A new SymbolInfo instance
+    /// Creates a new `SymbolInfo` from a name and optional version.
     #[allow(unused_variables)]
     pub fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
         SymbolInfo {
@@ -132,28 +117,19 @@ impl<'symtab> SymbolInfo<'symtab> {
         }
     }
 
-    /// Get the name of the symbol
-    ///
-    /// # Returns
-    /// The symbol name as a string slice
+    /// Returns the name of the symbol.
     #[inline]
     pub fn name(&self) -> &str {
         self.name
     }
 
-    /// Get the C-style name of the symbol
-    ///
-    /// # Returns
-    /// An optional reference to the C-style string representation of the symbol name
+    /// Returns the C-style name of the symbol.
     #[inline]
     pub fn cname(&self) -> Option<&CStr> {
         self.cname
     }
 
-    /// Get the version information for the symbol (when version feature is enabled)
-    ///
-    /// # Returns
-    /// An optional reference to the symbol version information
+    /// Returns the symbol version information.
     #[cfg(feature = "version")]
     pub(crate) fn version(&self) -> Option<&super::version::SymbolVersion<'symtab>> {
         self.version.as_ref()

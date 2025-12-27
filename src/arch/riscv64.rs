@@ -21,7 +21,7 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 macro_rules! riscv64_dl_runtime_resolve {
     ($save_fprs:expr, $restore_fprs:expr) => {
         #[unsafe(naked)]
-        pub extern "C" fn dl_runtime_resolve() {
+        pub(crate) extern "C" fn dl_runtime_resolve() {
             core::arch::naked_asm!(
                 "
                 // 保存整数参数寄存器
@@ -120,7 +120,7 @@ riscv64_dl_runtime_resolve!(
 riscv64_dl_runtime_resolve!("", "");
 
 /// Map riscv64 relocation types to human readable names
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_RISCV_NONE => "R_RISCV_NONE",
         R_RISCV_64 => "R_RISCV_64",

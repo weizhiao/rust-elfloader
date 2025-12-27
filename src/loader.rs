@@ -8,7 +8,7 @@ use crate::{
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
-use core::{ffi::CStr, marker::PhantomData};
+use core::marker::PhantomData;
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
@@ -71,20 +71,16 @@ impl ElfBuf {
 }
 
 /// Context provided to hook functions during ELF loading.
-///
-/// This struct contains information about the current program header being
-/// processed, the ELF segments, and user-defined data.
 pub struct LoadHookContext<'a, D> {
-    name: &'a CStr,
+    name: &'a str,
     phdr: &'a ElfPhdr,
     segments: &'a ElfSegments,
     user_data: &'a mut D,
 }
 
 impl<'a, D> LoadHookContext<'a, D> {
-    /// Creates a new `LoadHookContext`.
     pub(crate) fn new(
-        name: &'a CStr,
+        name: &'a str,
         phdr: &'a ElfPhdr,
         segments: &'a ElfSegments,
         user_data: &'a mut D,
@@ -97,36 +93,28 @@ impl<'a, D> LoadHookContext<'a, D> {
         }
     }
 
-    /// Returns the name associated with this hook context.
-    ///
-    /// This is typically the name of the ELF object being loaded.
-    pub fn name(&self) -> &'a CStr {
+    /// Returns the name of the ELF object being loaded.
+    pub fn name(&self) -> &str {
         self.name
     }
 
-    /// Returns the program header for the current segment being processed.
-    pub fn phdr(&self) -> &'a ElfPhdr {
+    /// Returns the program header for the current segment.
+    pub fn phdr(&self) -> &ElfPhdr {
         self.phdr
     }
 
-    /// Returns the ELF segments that have been loaded or are being loaded.
-    pub fn segments(&self) -> &'a ElfSegments {
+    /// Returns the ELF segments.
+    pub fn segments(&self) -> &ElfSegments {
         self.segments
     }
 
     /// Returns mutable access to the user-defined data.
-    ///
-    /// This allows hooks to maintain state or pass information between calls.
     pub fn user_data_mut(&mut self) -> &mut D {
         self.user_data
     }
 }
 
-/// Hook trait used for processing program headers during the loading process.
-///
-/// This trait allows users to intercept and perform custom actions when each
-/// program header is processed. It is particularly useful for handling
-/// custom segments or performing additional setup for specific segments.
+/// Hook trait for processing program headers during loading.
 ///
 /// # Examples
 /// ```rust
@@ -143,13 +131,6 @@ impl<'a, D> LoadHookContext<'a, D> {
 /// ```
 pub trait LoadHook<D = ()> {
     /// Executes the hook with the provided context.
-    ///
-    /// # Arguments
-    /// * `ctx` - The context containing information about the current segment.
-    ///
-    /// # Returns
-    /// * `Ok(())` if the hook executed successfully.
-    /// * `Err` if an error occurred during hook execution.
     fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()>;
 }
 
@@ -172,14 +153,16 @@ pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 
 /// The ELF object loader.
 ///
-/// `Loader` is responsible for reading ELF headers, program headers, and
-/// orchestrating the loading of ELF objects into memory. It supports
-/// customization through hooks and custom memory mapping implementations.
+/// `Loader` is responsible for orchestrating the loading of ELF objects into memory.
 ///
-/// # Type Parameters
-/// * `M` - The memory mapping implementation (must implement `Mmap`).
-/// * `H` - The hook implementation (must implement `LoadHook`).
-/// * `D` - The type of user data passed to hooks.
+/// # Examples
+/// ```no_run
+/// use elf_loader::{Loader, ElfBinary};
+///
+/// let mut loader = Loader::new();
+/// let bytes = std::fs::read("liba.so").unwrap();
+/// let lib = loader.load_dylib(ElfBinary::new("liba.so", &bytes)).unwrap();
+/// ```
 pub struct Loader<M, H, D = ()>
 where
     M: Mmap,
@@ -194,9 +177,7 @@ where
 }
 
 impl Loader<DefaultMmap, (), ()> {
-    /// Creates a new `Loader` with the default `DefaultMmap` and no hook.
-    ///
-    /// This is the simplest way to create a loader for standard use cases.
+    /// Creates a new `Loader` with default settings.
     pub fn new() -> Self {
         let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
             func.iter()
@@ -256,13 +237,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         }
     }
 
-    /// Consumes the current loader and returns a new one with a custom `Mmap` implementation.
-    ///
-    /// This allows using a custom memory mapping strategy, which is useful for
-    /// bare-metal or specialized environments.
-    ///
-    /// # Type Parameters
-    /// * `NewMmap` - The new memory mapping implementation.
+    /// Returns a new loader with a custom `Mmap` implementation.
     pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D> {
         Loader {
             buf: self.buf,
@@ -273,27 +248,12 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         }
     }
 
-    /// Reads the ELF header from the given object.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to read from.
-    ///
-    /// # Returns
-    /// * `Ok(ElfHeader)` if the header was read and parsed successfully.
-    /// * `Err` if an error occurred.
+    /// Reads the ELF header.
     pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
         self.buf.prepare_ehdr(object)
     }
 
-    /// Reads the program header table from the given object.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to read from.
-    /// * `ehdr` - The previously read ELF header.
-    ///
-    /// # Returns
-    /// * `Ok(&[ElfPhdr])` if the program headers were read successfully.
-    /// * `Err` if an error occurred.
+    /// Reads the program header table.
     pub fn read_phdr(
         &mut self,
         object: &mut impl ElfReader,
@@ -318,7 +278,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
             hook,
             segments,
-            object.file_name().to_owned(),
+            object.shortname().to_owned(),
             ehdr,
             init_fn,
             fini_fn,
@@ -342,7 +302,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
             hook,
             segments,
-            object.file_name().to_owned(),
+            object.shortname().to_owned(),
             ehdr,
             init_fn,
             fini_fn,
@@ -367,7 +327,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
             Ok(())
         });
         let builder = ObjectBuilder::new(
-            object.file_name().to_owned(),
+            object.shortname().to_owned(),
             shdrs,
             init_fn,
             fini_fn,

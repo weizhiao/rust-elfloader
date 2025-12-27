@@ -28,7 +28,7 @@ pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
         addi.d  $sp, $sp, -224
@@ -89,7 +89,7 @@ pub extern "C" fn dl_runtime_resolve() {
 }
 
 /// Map loongarch64 relocation types to human readable names
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_LARCH_64 => "R_LARCH_64",
         R_LARCH_RELATIVE => "R_LARCH_RELATIVE",

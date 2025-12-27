@@ -23,7 +23,7 @@ use crate::{
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
-use alloc::{boxed::Box, ffi::CString, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
@@ -63,7 +63,7 @@ impl<M: Mmap, H: LoadHook<()>> Loader<M, H, ()> {
 /// building the final ElfRelocatable object.
 pub(crate) struct ObjectBuilder {
     /// Name of the ELF file
-    name: CString,
+    name: String,
 
     /// Symbol table for the ELF file
     symtab: SymbolTable,
@@ -108,7 +108,7 @@ impl ObjectBuilder {
     /// # Returns
     /// A new RelocatableBuilder instance
     pub(crate) fn new(
-        name: CString,
+        name: String,
         shdrs: &mut [ElfShdr],
         init_fn: FnHandler,
         fini_fn: FnHandler,
@@ -261,17 +261,12 @@ impl Deref for ObjectImage {
 
 impl ObjectImage {
     /// Creates a builder for relocating the relocatable file.
-    ///
-    /// This method returns a [`Relocator`] that allows configuring the relocation
-    /// process with fine-grained control, such as setting a custom unknown relocation
-    /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), ()> {
         Relocator::new(self)
     }
 }
 
 impl Debug for ObjectImage {
-    /// Formats the [`ElfRelocatable`] for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfRelocatable")
             .field("core", &self.core)
@@ -291,7 +286,6 @@ impl Relocatable<()> for ObjectImage {
         _post_handler: PostH,
         _lazy: Option<bool>,
         _lazy_scope: Option<LazyS>,
-        _use_scope_as_lazy: bool,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,

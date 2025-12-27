@@ -2,7 +2,17 @@
 //!
 //! This module provides traits and implementations for memory mapping operations
 //! required by the ELF loader. It abstracts platform-specific memory management
-//! operations to provide a unified interface.
+//! to offer a unified interface for mapping, unmapping, and protecting memory regions.
+//!
+//! Key concepts:
+//! - **Memory Mapping**: Allows files or data to be mapped directly into memory.
+//! - **Protection Flags**: Control read, write, and execute permissions.
+//! - **Mapping Flags**: Specify how the mapping behaves (e.g., private, fixed address).
+//!
+//! # Safety
+//! Memory mapping involves direct manipulation of the process's address space.
+//! Incorrect usage can cause crashes, data corruption, or security issues.
+//! Always ensure proper bounds checking and permission handling.
 
 pub use crate::os::DefaultMmap;
 
@@ -15,85 +25,54 @@ use core::{
 
 bitflags! {
     #[derive(Clone, Copy, Debug, Default)]
-    /// Memory protection flags for memory mapping operations.
+    /// Memory protection flags for controlling access permissions.
     ///
-    /// These flags control the access permissions for mapped memory regions.
-    /// They can be combined using bitwise operations to specify multiple
-    /// permissions simultaneously.
+    /// These flags determine what operations can be performed on a mapped memory region.
+    /// They can be combined using bitwise OR operations.
     pub struct ProtFlags: c_int {
-        /// No access permissions. Pages cannot be accessed.
-        /// Attempts to read, write, or execute will result in a protection fault.
+        /// No access allowed. Useful for reserving address space.
         const PROT_NONE = 0;
 
-        /// Read permission. Pages can be read from.
-        /// This is the most basic permission typically required for executable code
-        /// and read-only data.
+        /// Allow reading from the memory region.
         const PROT_READ = 1;
 
-        /// Write permission. Pages can be written to.
-        /// Required for data sections that need to be modified at runtime,
-        /// such as the Global Offset Table (GOT) in position-independent code.
+        /// Allow writing to the memory region.
         const PROT_WRITE = 2;
 
-        /// Execute permission. Pages can be executed as code.
-        /// Required for code sections and the Procedure Linkage Table (PLT).
-        /// Note that some systems implement W^X (write XOR execute) security policies
-        /// that prevent pages from having both write and execute permissions simultaneously.
+        /// Allow executing code in the memory region.
         const PROT_EXEC = 4;
     }
 }
 
 bitflags! {
     #[derive(Clone, Copy)]
-    /// Mapping flags that control the behavior of memory mapping operations.
+    /// Memory mapping configuration flags.
     ///
-    /// These flags determine how the mapping is created and managed by the system.
-    /// They control aspects such as sharing, fixed positioning, and backing storage.
+    /// These flags control how memory mappings are created and behave.
+    /// They specify sharing behavior, address placement, and mapping type.
     pub struct MapFlags: c_int {
-        /// Create a private copy-on-write mapping.
-        ///
-        /// Changes to the mapping are private to the process and do not affect
-        /// the underlying file or other processes. Mutually exclusive with `MAP_SHARED`.
-        /// This is typically used for executable code and read-only data.
+        /// Create a private copy-on-write mapping. Changes are not visible to other processes.
         const MAP_PRIVATE = 2;
 
-        /// Place the mapping at exactly the specified address.
-        ///
-        /// The mapping will be created at the exact address provided, replacing
-        /// any existing mappings. If the address is not available, the operation
-        /// will fail. This is essential for ELF loading where segments need to
-        /// be placed at specific virtual addresses.
+        /// Place the mapping at exactly the specified address. Fails if the address is already in use.
         const MAP_FIXED = 16;
 
-        /// Create an anonymous mapping not backed by any file.
-        ///
-        /// The mapping is initialized to zero and is not associated with any file.
-        /// This is used for allocating memory that doesn't correspond to file content,
-        /// such as BSS sections or heap memory.
+        /// Create an anonymous mapping not backed by any file. Used for allocating memory.
         const MAP_ANONYMOUS = 32;
     }
 }
 
-/// A trait representing low-level memory mapping operations.
+/// A trait for low-level memory mapping operations.
 ///
-/// This trait encapsulates the functionality for memory-mapped file I/O and
-/// anonymous memory mapping. It provides unsafe methods to map, unmap, and
-/// protect memory regions, as well as to create anonymous memory mappings.
-///
-/// The trait is designed to abstract platform-specific memory management
-/// operations, allowing the ELF loader to work across different operating
-/// systems and environments.
+/// This trait provides a unified interface for memory-mapped I/O and anonymous memory allocation.
+/// It abstracts platform-specific details, allowing the ELF loader to work across different systems.
 ///
 /// # Safety
-/// All methods in this trait are unsafe because they directly manipulate
-/// the virtual address space of the process. Incorrect usage can lead to
-/// memory corruption, segmentation faults, or security vulnerabilities.
+/// All methods are unsafe because they manipulate the process's virtual address space.
+/// Improper use can cause memory corruption, crashes, or security vulnerabilities.
+/// Implementors must ensure thread-safety and proper error handling.
 ///
-/// # Examples
-/// To use this trait, implement it for a specific type that represents a
-/// memory mapping facility. The implementations would handle the
-/// platform-specific details of memory management.
-///
+/// # Example
 /// ```rust,ignore
 /// struct MyMmap;
 ///
@@ -108,50 +87,36 @@ bitflags! {
 ///         need_copy: &mut bool,
 ///     ) -> Result<NonNull<c_void>> {
 ///         // Platform-specific implementation
+///         todo!()
 ///     }
-///     
-///     // ... other methods
+///
+///     // Implement other required methods...
 /// }
 /// ```
 pub trait Mmap {
-    /// Maps a file or bytes into memory at the specified address.
+    /// Maps a file or creates an anonymous mapping into memory.
     ///
-    /// This function creates a mapping between a file (or anonymous memory)
-    /// and the process's virtual address space. The mapping can be configured
-    /// with various protection and mapping flags.
+    /// This method creates a memory mapping, either backed by a file (if `fd` is provided)
+    /// or anonymous (if `fd` is `None`). The mapping can be used for efficient file I/O
+    /// or dynamic memory allocation.
     ///
     /// # Arguments
-    /// * `addr` - An optional starting address for the mapping.
-    ///   - If `Some(address)`, the system attempts to create the mapping at that address
-    ///   - If `None`, the system chooses a suitable address
-    ///   Note: The address is always aligned to page size (typically 4096 bytes).
-    /// * `len` - The length of the memory region to map in bytes.
-    ///   Will be rounded up to the nearest page size boundary.
-    /// * `prot` - The protection options for the mapping (e.g., readable, writable, executable).
-    ///   See [ProtFlags] for available options.
-    /// * `flags` - The flags controlling the details of the mapping (e.g., shared, private).
-    ///   See [MapFlags] for available options.
-    /// * `offset` - The byte offset within the file where the mapping begins.
-    ///   Must be a multiple of the page size.
-    /// * `fd` - An optional file descriptor for file-backed mappings.
-    ///   - If `Some(fd)`, the mapping is backed by the file associated with the descriptor
-    ///   - If `None`, the mapping is anonymous (not backed by any file)
-    /// * `need_copy` - A mutable boolean that indicates whether the caller needs to
-    ///   manually copy data to the mapped region.
-    ///   - Set to `false` if the mmap function can handle segment copying internally
-    ///   - Set to `true` if the caller must manually copy data to the mapped region
+    /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
+    /// * `len` - Size of the mapping in bytes (rounded up to page size).
+    /// * `prot` - Memory protection flags (read, write, execute permissions).
+    /// * `flags` - Mapping configuration (private, fixed address, anonymous).
+    /// * `offset` - File offset for file-backed mappings (must be page-aligned).
+    /// * `fd` - File descriptor for file-backed mappings, or `None` for anonymous.
+    /// * `need_copy` - Set to `true` if the implementation needs to copy data.
     ///
     /// # Returns
-    /// * `Ok(NonNull<c_void>)` - A non-null pointer to the mapped memory region
-    /// * `Err` - If the mapping operation fails
+    /// A pointer to the mapped memory region on success.
     ///
     /// # Safety
-    /// This function is unsafe because it directly manipulates the process's
-    /// virtual address space. The caller must ensure:
-    /// - The provided file descriptor is valid (if provided)
-    /// - The offset is properly aligned
-    /// - The memory region does not conflict with existing mappings (unless using MAP_FIXED)
-    /// - Proper synchronization if the mapping is shared between threads or processes
+    /// This function manipulates the process's address space. Ensure:
+    /// - `addr` is page-aligned if specified.
+    /// - `len` and `offset` are valid and don't cause overflow.
+    /// - File descriptors are valid and accessible.
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,
@@ -162,31 +127,22 @@ pub trait Mmap {
         need_copy: &mut bool,
     ) -> Result<NonNull<c_void>>;
 
-    /// Creates a new anonymous mapping with the specified protection and flags.
+    /// Creates an anonymous memory mapping.
     ///
-    /// This function creates a mapping that is not backed by any file. The
-    /// mapping is initialized to zero and can be used for dynamic memory allocation.
+    /// Allocates a region of memory not backed by any file, useful for dynamic memory
+    /// allocation or creating private data areas.
     ///
     /// # Arguments
-    /// * `addr` - The starting address for the mapping.
-    ///   - If non-zero, the system attempts to create the mapping at that address
-    ///   - If zero, the system chooses a suitable address
-    /// * `len` - The length of the memory region to map in bytes.
-    ///   Will be rounded up to the nearest page size boundary.
-    /// * `prot` - The protection options for the mapping.
-    ///   See [ProtFlags] for available options.
-    /// * `flags` - The flags controlling the details of the mapping.
-    ///   See [MapFlags] for available options.
-    ///   Note: MAP_ANONYMOUS is implicitly added to these flags.
+    /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
+    /// * `len` - Size of the mapping in bytes.
+    /// * `prot` - Initial memory protection flags.
+    /// * `flags` - Mapping configuration flags.
     ///
     /// # Returns
-    /// * `Ok(NonNull<c_void>)` - A non-null pointer to the mapped memory region
-    /// * `Err` - If the mapping operation fails
+    /// A pointer to the allocated memory region on success.
     ///
     /// # Safety
-    /// This function is unsafe because it directly manipulates the process's
-    /// virtual address space. The caller must ensure proper use of the
-    /// returned memory region.
+    /// Manipulates address space. Ensure `addr` is valid and page-aligned if specified.
     unsafe fn mmap_anonymous(
         addr: usize,
         len: usize,
@@ -194,99 +150,63 @@ pub trait Mmap {
         flags: MapFlags,
     ) -> Result<NonNull<c_void>>;
 
-    /// Releases a previously mapped memory region.
+    /// Unmaps a memory region, releasing the associated resources.
     ///
-    /// This function unmaps a previously created memory mapping, making the
-    /// memory region available for future allocations. After this call,
-    /// accessing the memory region results in undefined behavior.
+    /// Removes a memory mapping created by `mmap` or `mmap_anonymous`.
+    /// After unmapping, accessing the memory region will cause a segmentation fault.
     ///
     /// # Arguments
-    /// * `addr` - A non-null pointer to the start of the memory region to unmap.
-    ///   Must be the exact address returned by a previous mapping operation.
-    /// * `len` - The length of the memory region to unmap in bytes.
-    ///   Should match the length specified in the original mapping operation.
-    ///
-    /// # Returns
-    /// * `Ok(())` - If the unmapping operation succeeds
-    /// * `Err` - If the unmapping operation fails
+    /// * `addr` - Pointer to the start of the region to unmap (must be page-aligned).
+    /// * `len` - Size of the region in bytes.
     ///
     /// # Safety
-    /// This function is unsafe because it invalidates the memory region.
-    /// The caller must ensure:
-    /// - No pointers into the unmapped region are used after this call
-    /// - The address and length match a previous mapping operation
-    /// - No other threads are accessing the region during the operation
+    /// Ensure `addr` and `len` match the original mapping. Do not access the region after unmapping.
     unsafe fn munmap(addr: NonNull<c_void>, len: usize) -> Result<()>;
 
     /// Changes the protection of a memory region.
     ///
-    /// This function alters the protection options for a mapped memory region.
-    /// It can be used to make a region readable, writable, executable, or any
-    /// combination thereof.
-    ///
-    /// This is commonly used in ELF loading for RELRO (RELocation Read-Only)
-    /// protection, where certain sections are made read-only after relocations
-    /// have been applied.
+    /// Modifies the access permissions (read, write, execute) for an existing memory mapping.
+    /// Commonly used for RELRO (RELocation Read-Only) protection in ELF loading, where
+    /// sections are made read-only after relocations are applied.
     ///
     /// # Arguments
-    /// * `addr` - A non-null pointer to the start of the memory region to protect.
-    ///   Must be page-aligned.
-    /// * `len` - The length of the memory region to protect in bytes.
-    ///   Will be rounded up to the nearest page size boundary.
-    /// * `prot` - The new protection options for the mapping.
-    ///   See [ProtFlags] for available options.
+    /// * `addr` - Pointer to the start of the region (must be page-aligned).
+    /// * `len` - Size of the region in bytes (rounded up to page boundary).
+    /// * `prot` - New protection flags to apply.
     ///
     /// # Returns
-    /// * `Ok(())` - If the protection change succeeds
-    /// * `Err` - If the protection change fails
+    /// `Ok(())` on success, or an error if the operation fails.
     ///
     /// # Safety
-    /// This function is unsafe because it changes memory access permissions.
-    /// The caller must ensure:
-    /// - The address range is currently mapped
-    /// - The new permissions are compatible with the underlying memory
-    /// - No threads are accessing the region in a way that conflicts with
-    ///   the new permissions
+    /// Changing permissions can affect running code. Ensure no code is executing in the region
+    /// when removing execute permissions. `addr` must be page-aligned.
     unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
 
-    /// Reserves a region of memory for future use without committing physical storage.
+    /// Reserves a region of virtual address space without committing physical memory.
     ///
-    /// This function reserves a memory region in the process's virtual address space
-    /// but does not allocate physical memory nor create any actual mapping. The reserved
-    /// region can later be committed with additional mapping operations.
+    /// Reserves address space for future use without allocating physical storage.
+    /// Useful for ELF loading when the total memory footprint is known in advance,
+    /// allowing reservation of the entire address space before creating individual mappings.
     ///
-    /// This is particularly useful for ELF loading where the total memory footprint
-    /// is known in advance, allowing the loader to reserve the entire address space
-    /// before creating individual segment mappings.
-    ///
-    /// The default implementation creates a mapping with PROT_NONE protection,
-    /// which reserves the address space without committing physical memory.
+    /// The default implementation uses `PROT_NONE` to reserve space without committing memory.
     ///
     /// # Arguments
-    /// * `addr` - An optional starting address for the reservation.
-    ///   - If `Some(address)`, the system attempts to reserve memory at the specified address
-    ///   - If `None`, the system chooses an appropriate address
-    /// * `len` - The length of the memory region to reserve in bytes.
-    ///   Will be rounded up to the nearest page size boundary.
-    /// * `_use_file` - A flag indicating whether the reserved region will eventually
-    ///   be backed by a file. This parameter may be used by platform-specific implementations.
+    /// * `addr` - Preferred starting address, or `None` to let the system choose.
+    /// * `len` - Size of the region to reserve in bytes.
+    /// * `_use_file` - Hint whether the region will be file-backed (may be ignored).
     ///
     /// # Returns
-    /// * `Ok(NonNull<c_void>)` - A non-null pointer to the reserved memory region
-    /// * `Err` - If the reservation fails
+    /// A pointer to the reserved region on success.
     ///
     /// # Safety
-    /// This function is unsafe because it manipulates the process's virtual address space.
-    /// Accessing the reserved memory region before it is properly mapped results in
-    /// a segmentation fault.
+    /// Manipulates address space. The reserved region should not be accessed until properly mapped.
     unsafe fn mmap_reserve(
         addr: Option<usize>,
         len: usize,
         _use_file: bool,
     ) -> Result<NonNull<c_void>> {
         let mut need_copy = false;
-        // Create a reservation by mapping with PROT_NONE
-        // This reserves the address space without committing physical memory
+        // Reserve address space with PROT_NONE (no physical memory committed)
         unsafe {
             Self::mmap(
                 addr,

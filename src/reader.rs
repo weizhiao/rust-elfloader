@@ -6,80 +6,45 @@
 //! and relocation process.
 
 use crate::{Result, os::RawFile};
-use alloc::ffi::CString;
-use core::ffi::CStr;
+use alloc::string::{String, ToString};
 
-/// A trait representing a source of ELF data that can be read from.
+/// A trait for reading ELF data from various sources.
 ///
-/// This trait provides a uniform interface for accessing ELF data regardless
-/// of its storage medium (memory, file, etc.). Implementors of this trait
-/// can be used as data sources for ELF loading operations.
-///
-/// The trait is designed to abstract away the underlying storage mechanism
-/// while providing efficient access to the ELF data. This allows the ELF
-/// loader to work with various data sources without needing to know the
-/// specifics of how the data is stored or accessed.
+/// `ElfReader` abstracts the underlying storage (memory, file system, etc.)
+/// providing a unified interface for the loader to access ELF headers and segments.
 pub trait ElfReader {
-    /// Returns the name of the ELF object.
-    ///
-    /// This is typically the file path or a descriptive name for the object.
-    /// The name is used for error reporting and debugging purposes.
-    ///
-    /// # Returns
-    /// A C string reference containing the object's name.
-    fn file_name(&self) -> &CStr;
+    /// Returns the full name or path of the ELF object.
+    fn file_name(&self) -> &str;
 
-    /// Reads data from the ELF object into a buffer.
-    ///
-    /// This method reads a specified number of bytes from the ELF object
-    /// starting at a given offset and copies them into the provided buffer.
+    /// Reads a chunk of data from the ELF object into the provided buffer.
     ///
     /// # Arguments
-    /// * `buf` - A mutable slice where the read data will be stored.
-    ///           The length of this buffer determines how many bytes to read.
-    /// * `offset` - The byte offset within the ELF object where reading begins.
-    ///
-    /// # Returns
-    /// * `Ok(())` - If the read operation was successful.
-    /// * `Err` - If the read operation failed (e.g., I/O error, invalid offset).
-    ///
-    /// # Examples
-    /// ```rust,ignore
-    /// let mut buffer = [0u8; 64];
-    /// elf_object.read(&mut buffer, 0x100)?; // Read 64 bytes starting at offset 0x100
-    /// ```
+    /// * `buf` - The destination buffer. Its length determines the number of bytes read.
+    /// * `offset` - The starting byte offset within the ELF source.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
 
-    /// Extracts the raw file descriptor, if available.
+    /// Returns the underlying file descriptor if the source is a file.
     ///
-    /// For file-based ELF objects, this method returns the underlying file
-    /// descriptor which can be used for memory mapping operations. For
-    /// memory-based objects, this method returns `None`.
-    ///
-    /// This is particularly useful for optimizing file I/O by enabling
-    /// memory mapping when possible, rather than reading file contents
-    /// into buffers.
-    ///
-    /// # Returns
-    /// * `Some(fd)` - The raw file descriptor if the object is file-backed.
-    /// * `None` - If the object is not file-backed (e.g., memory-based).
+    /// This is used by the loader to perform efficient memory mapping (`mmap`).
+    /// Returns `None` for memory-based sources.
     fn as_fd(&self) -> Option<isize>;
+
+    /// Returns the short name of the ELF object (the filename without the path).
+    fn shortname(&self) -> &str {
+        let name = self.file_name();
+        name.rsplit('/').next().unwrap_or(name)
+    }
 }
 
-/// An ELF object stored in memory.
+/// An ELF object source backed by an in-memory byte slice.
 ///
-/// This struct represents an ELF object that is entirely stored in memory
-/// as a byte slice. It is useful for loading ELF files that have already
-/// been read into memory or for loading ELF data from embedded resources.
-///
-/// Memory-based ELF objects are typically faster to access than file-based
-/// ones since they don't require disk I/O operations. However, they consume
-/// memory proportional to the size of the ELF file.
+/// This is useful for loading ELF files that are already in memory, such as
+/// those embedded in the binary or received over a network.
 #[derive(Debug)]
 pub struct ElfBinary<'bytes> {
-    /// The name of the ELF object, typically the original file path.
-    name: CString,
-    /// The ELF data stored in memory as a byte slice.
+    /// The name assigned to this ELF object.
+    name: String,
+    /// The raw ELF data.
     bytes: &'bytes [u8],
 }
 
@@ -106,7 +71,7 @@ impl<'bytes> ElfBinary<'bytes> {
     /// ```
     pub fn new(name: &str, bytes: &'bytes [u8]) -> Self {
         Self {
-            name: CString::new(name).unwrap(),
+            name: name.to_string(),
             bytes,
         }
     }
@@ -116,8 +81,8 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     /// Returns the name of the ELF binary.
     ///
     /// # Returns
-    /// A C string reference containing the binary's name.
-    fn file_name(&self) -> &CStr {
+    /// A string slice containing the binary's name.
+    fn file_name(&self) -> &str {
         &self.name
     }
 
@@ -147,17 +112,13 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     }
 }
 
-/// An ELF object backed by a file.
+
+/// An ELF object source backed by a file on the filesystem.
 ///
-/// This struct represents an ELF object that is stored in a file and accessed
-/// through file I/O operations. It wraps a [RawFile] to provide the [ElfObject]
-/// interface for file-based ELF data.
-///
-/// File-based ELF objects are useful for loading large ELF files without
-/// consuming large amounts of memory. They support memory mapping optimizations
-/// when a file descriptor is available.
+/// This implementation uses standard file I/O to read ELF data. It also
+/// provides access to the underlying file descriptor for memory mapping.
 pub struct ElfFile {
-    /// The underlying raw file abstraction.
+    /// The underlying OS-specific file handle.
     inner: RawFile,
 }
 
@@ -207,7 +168,7 @@ impl ElfReader for ElfFile {
     ///
     /// # Returns
     /// A C string reference containing the file's path.
-    fn file_name(&self) -> &CStr {
+    fn file_name(&self) -> &str {
         self.inner.file_name()
     }
 

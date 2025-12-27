@@ -3,19 +3,18 @@ use crate::{
     mmap::{MapFlags, Mmap, ProtFlags},
     reader::ElfReader,
 };
-use alloc::{ffi::CString, string::ToString};
-use core::{
-    ffi::{CStr, c_void},
-    ptr::NonNull,
-    str::FromStr,
+use alloc::{
+    ffi::CString,
+    string::{String, ToString},
 };
+use core::{ffi::c_void, ptr::NonNull, str::FromStr};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
 pub(crate) struct RawFile {
-    name: CString,
+    name: String,
     fd: isize,
 }
 
@@ -131,14 +130,14 @@ impl RawFile {
             return Err(io_error("open failed"));
         }
         Ok(Self {
-            name,
+            name: path.to_string(),
             fd: fd as isize,
         })
     }
 
     pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
         Self {
-            name: CString::new(path).unwrap(),
+            name: path.to_string(),
             fd: raw_fd as isize,
         }
     }
@@ -183,7 +182,7 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &CStr {
+    fn file_name(&self) -> &str {
         &self.name
     }
 

@@ -18,7 +18,7 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 
 #[cfg(target_feature = "vfp2")]
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
         // sp has original lr (4 bytes)
@@ -48,7 +48,7 @@ pub extern "C" fn dl_runtime_resolve() {
 
 #[cfg(not(target_feature = "vfp2"))]
 #[unsafe(naked)]
-pub extern "C" fn dl_runtime_resolve() {
+pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
         push {{r0, r1, r2, r3, r4}}
@@ -70,7 +70,7 @@ pub extern "C" fn dl_runtime_resolve() {
 }
 
 /// Map arm relocation type to human readable name
-pub fn rel_type_to_str(r_type: usize) -> &'static str {
+pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_ARM_NONE => "R_ARM_NONE",
         R_ARM_ABS32 => "R_ARM_ABS32",
