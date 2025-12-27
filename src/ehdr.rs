@@ -10,7 +10,7 @@ use crate::{
     parse_ehdr_error,
 };
 use core::ops::Deref;
-use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT};
+use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 
 /// A wrapper around the ELF header structure
 ///
@@ -97,6 +97,19 @@ impl ElfHeader {
     #[inline]
     pub fn is_dylib(&self) -> bool {
         self.ehdr.e_type == ET_DYN
+    }
+
+    /// Checks if the ELF file is an executable
+    ///
+    /// This method determines whether the ELF file is an executable
+    /// (either a standard executable or a position-independent executable).
+    ///
+    /// # Returns
+    /// * `true` - If the ELF file is an executable (ET_EXEC or ET_DYN)
+    /// * `false` - Otherwise
+    #[inline]
+    pub fn is_executable(&self) -> bool {
+        self.ehdr.e_type == ET_EXEC || self.ehdr.e_type == ET_DYN
     }
 
     /// Validates the ELF header

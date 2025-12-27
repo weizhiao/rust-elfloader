@@ -153,7 +153,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
     ///
     /// This method loads an executable ELF file into memory and prepares it
     /// for relocation. The file is validated to ensure it is indeed an
-    /// executable and not a dynamic library.
+    /// executable (either a standard executable or a position-independent executable).
     ///
     /// # Arguments
     /// * `object` - The ELF object to load as an executable.
@@ -174,25 +174,36 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
-        // Ensure the file is actually an executable and not a dynamic library
-        if ehdr.is_dylib() {
+        // Ensure the file is actually an executable
+        if !ehdr.is_executable() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
-        let has_dynamic = phdrs
-            .iter()
-            .find(|phdr| phdr.p_type == PT_DYNAMIC)
-            .is_some();
+        let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
 
         if has_dynamic {
             // Load the relocated common part
-            let inner = self.load_dynamic_impl(ehdr, object)?;
+            let inner = Self::load_dynamic_impl(
+                &self.hook,
+                &self.init_fn,
+                &self.fini_fn,
+                ehdr,
+                phdrs,
+                object,
+            )?;
             // Wrap in ElfExec and return
             Ok(ExecImage::Dynamic(inner))
         } else {
             // Load as a static module without dynamic section
-            let inner = self.load_static_impl(ehdr, object)?;
+            let inner = Self::load_static_impl(
+                &self.hook,
+                &self.init_fn,
+                &self.fini_fn,
+                ehdr,
+                phdrs,
+                object,
+            )?;
             Ok(ExecImage::Static(inner))
         }
     }

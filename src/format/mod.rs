@@ -11,6 +11,7 @@ use crate::{
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
+use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
 mod component;
 mod image;
@@ -237,7 +238,7 @@ unsafe impl<T: Send> Send for Symbol<'_, T> {}
 // Safety: Symbol can be shared between threads if T can
 unsafe impl<T: Sync> Sync for Symbol<'_, T> {}
 
-impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
+impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// Load an ELF file into memory
     ///
     /// # Arguments
@@ -248,13 +249,56 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
     /// * `Err(Error)` - If loading fails
     pub fn load(&mut self, mut object: impl ElfReader) -> Result<ElfImage<D>> {
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        let is_dylib = ehdr.is_dylib();
-        if is_dylib {
-            Ok(ElfImage::Dylib(self.load_dylib(object)?))
-        } else if ehdr.e_type == elf::abi::ET_REL {
+
+        if ehdr.e_type == elf::abi::ET_REL {
             // Relocatable files don't use user_data, so we call load_rel directly
-            Ok(ElfImage::Object(self.load_object_impl(ehdr, object)?))
+            return Ok(ElfImage::Object(self.load_object_impl(ehdr, object)?));
+        }
+
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
+
+        // For ET_DYN, we check if it has an interpreter (PT_INTERP)
+        // or if it lacks a dynamic section (static PIE)
+        // to distinguish between PIE executables and shared libraries.
+        let is_pie =
+            ehdr.is_dylib() && (phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic);
+
+        let is_exec = ehdr.e_type == elf::abi::ET_EXEC || is_pie;
+
+        if is_exec {
+            let exec = if has_dynamic {
+                ExecImage::Dynamic(Self::load_dynamic_impl(
+                    &self.hook,
+                    &self.init_fn,
+                    &self.fini_fn,
+                    ehdr,
+                    phdrs,
+                    object,
+                )?)
+            } else {
+                ExecImage::Static(Self::load_static_impl(
+                    &self.hook,
+                    &self.init_fn,
+                    &self.fini_fn,
+                    ehdr,
+                    phdrs,
+                    object,
+                )?)
+            };
+            Ok(ElfImage::Exec(exec))
+        } else if ehdr.is_dylib() {
+            let inner = Self::load_dynamic_impl(
+                &self.hook,
+                &self.init_fn,
+                &self.fini_fn,
+                ehdr,
+                phdrs,
+                object,
+            )?;
+            Ok(ElfImage::Dylib(DylibImage { inner }))
         } else {
+            // Fallback for other types, though usually handled by is_exec
             Ok(ElfImage::Exec(self.load_exec(object)?))
         }
     }

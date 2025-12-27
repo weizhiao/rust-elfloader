@@ -187,8 +187,8 @@ where
     D: Default + 'static,
 {
     pub(crate) buf: ElfBuf,
-    init_fn: FnHandler,
-    fini_fn: FnHandler,
+    pub(crate) init_fn: FnHandler,
+    pub(crate) fini_fn: FnHandler,
     pub(crate) hook: H,
     _marker: PhantomData<(M, D)>,
 }
@@ -303,18 +303,20 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     }
 
     pub(crate) fn load_static_impl(
-        &mut self,
+        hook: &H,
+        init_fn: &FnHandler,
+        fini_fn: &FnHandler,
         ehdr: ElfHeader,
+        phdrs: &[ElfPhdr],
         mut object: impl ElfReader,
     ) -> Result<StaticImage<D>> {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let init_fn = init_fn.clone();
+        let fini_fn = fini_fn.clone();
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
-            &self.hook,
+            hook,
             segments,
             object.file_name().to_owned(),
             ehdr,
@@ -324,20 +326,21 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         Ok(builder.build_static(phdrs)?)
     }
 
-    /// Load a dynamic ELF object
     pub(crate) fn load_dynamic_impl(
-        &mut self,
+        hook: &H,
+        init_fn: &FnHandler,
+        fini_fn: &FnHandler,
         ehdr: ElfHeader,
+        phdrs: &[ElfPhdr],
         mut object: impl ElfReader,
     ) -> Result<DynamicImage<D>> {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let init_fn = init_fn.clone();
+        let fini_fn = fini_fn.clone();
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
-            &self.hook,
+            hook,
             segments,
             object.file_name().to_owned(),
             ehdr,

@@ -25,7 +25,7 @@ where
     D: 'static,
 {
     /// The common part containing basic ELF object information.
-    inner: DynamicImage<D>,
+    pub(crate) inner: DynamicImage<D>,
 }
 
 impl<D> Deref for DylibImage<D> {
@@ -143,8 +143,17 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+
         // Load the relocated common part
-        let inner = self.load_dynamic_impl(ehdr, object)?;
+        let inner = Self::load_dynamic_impl(
+            &self.hook,
+            &self.init_fn,
+            &self.fini_fn,
+            ehdr,
+            phdrs,
+            object,
+        )?;
 
         // Wrap in ElfDylib and return
         Ok(DylibImage { inner })
