@@ -6,7 +6,7 @@
 
 use crate::{
     LoadHook, Loader, Result,
-    format::{LoadedModule, dynamic::common::DynamicImage},
+    format::{LoadedModule, image::common::DynamicImage},
     mmap::Mmap,
     parse_ehdr_error,
     reader::ElfReader,

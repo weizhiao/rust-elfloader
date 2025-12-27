@@ -67,43 +67,27 @@ impl ElfDynamic {
                     DT_GNU_HASH => gnu_hash_off = Some(dynamic.d_un as usize),
                     DT_SYMTAB => symtab_off = dynamic.d_un as usize,
                     DT_STRTAB => strtab_off = dynamic.d_un as usize,
-                    DT_PLTRELSZ => {
-                        pltrel_size = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
+                    DT_PLTRELSZ => pltrel_size = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_PLTREL => {
                         is_rela = Some(dynamic.d_un as i64 == DT_RELA);
                     }
-                    DT_JMPREL => {
-                        pltrel_off = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
+                    DT_JMPREL => pltrel_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_RELR => relr_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_RELA | DT_REL => {
                         is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
                         rel_off = NonZeroUsize::new(dynamic.d_un as usize)
                     }
-                    DT_RELASZ | DT_RELSZ => {
-                        rel_size = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
-                    DT_RELRSZ => {
-                        relr_size = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
+                    DT_RELASZ | DT_RELSZ => rel_size = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_RELRSZ => relr_size = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_RELACOUNT | DT_RELCOUNT => {
                         rel_count = NonZeroUsize::new(dynamic.d_un as usize)
                     }
                     DT_INIT => init_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_FINI => fini_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_INIT_ARRAY => {
-                        init_array_off = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
-                    DT_INIT_ARRAYSZ => {
-                        init_array_size = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
-                    DT_FINI_ARRAY => {
-                        fini_array_off = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
-                    DT_FINI_ARRAYSZ => {
-                        fini_array_size = NonZeroUsize::new(dynamic.d_un as usize)
-                    }
+                    DT_INIT_ARRAY => init_array_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_INIT_ARRAYSZ => init_array_size = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_FINI_ARRAY => fini_array_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_FINI_ARRAYSZ => fini_array_size = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_VERSYM => {
                         version_ids_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
                     }
@@ -209,7 +193,7 @@ impl ElfDynamic {
             strtab: strtab_off + base,
             // Check if binding should be done immediately
             bind_now: flags & DF_BIND_NOW as usize != 0 || flags_1 & DF_1_NOW as usize != 0,
-            got: NonNull::new(
+            got_plt: NonNull::new(
                 got_off
                     .map(|off| (base + off.get()) as *mut usize)
                     .unwrap_or(null_mut()),
@@ -301,7 +285,7 @@ pub struct ElfDynamic {
     /// DT_FLAGS and DT_FLAGS_1 - Indicates if all symbols should be bound immediately
     pub bind_now: bool,
     /// DT_PLTGOT - Global Offset Table
-    pub got: Option<NonNull<usize>>,
+    pub got_plt: Option<NonNull<usize>>,
     /// DT_INIT - Initialization function
     pub init_fn: Option<fn()>,
     /// DT_INIT_ARRAY - Initialization function array

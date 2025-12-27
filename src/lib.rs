@@ -120,8 +120,9 @@ pub use format::{
     LoadedModule, ObjectImage, Symbol,
 };
 pub use loader::{LoadHook, LoadHookContext, Loader};
+pub use mmap::Mmap;
 pub use reader::{ElfBinary, ElfFile, ElfReader};
-pub use relocation::{RelocationContext, RelocationHandler, SymbolLookup};
+pub use relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup};
 
 /// Error types used throughout the `elf_loader` library.
 ///

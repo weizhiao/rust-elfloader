@@ -83,7 +83,6 @@ default-features = false
 
 [dependencies]
 bitflags = "2.9.0"
-delegate = "0.13.3"
 
 [dev-dependencies]
 criterion = "0.5.1"

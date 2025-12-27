@@ -135,7 +135,7 @@ impl StaticReloc for X86_64Relocator {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
     {
-        let symtab = core.symtab().unwrap();
+        let symtab = core.symtab();
         let r_sym = rel_type.r_symbol();
         let r_type = rel_type.r_type();
         let base = core.base();

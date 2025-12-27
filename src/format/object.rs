@@ -66,7 +66,7 @@ pub(crate) struct ObjectBuilder {
     name: CString,
 
     /// Symbol table for the ELF file
-    symtab: Option<SymbolTable>,
+    symtab: SymbolTable,
 
     /// Initialization function array
     init_array: Option<&'static [fn()]>,
@@ -178,7 +178,7 @@ impl ObjectBuilder {
         // Construct and return the builder
         Self {
             name,
-            symtab,
+            symtab: symtab.unwrap(),
             init_fn,
             fini_fn,
             segments,
@@ -201,12 +201,12 @@ impl ObjectBuilder {
         let inner = ModuleInner {
             is_init: AtomicBool::new(false),
             name: self.name,
-            symbols: self.symtab,
-            dynamic_info: None,
+            symtab: self.symtab,
             fini: None,
             fini_array: None,
             fini_handler: self.fini_fn,
             user_data: (),
+            dynamic_info: None,
             segments: self.segments,
             elf_type: ElfType::Relocatable,
         };

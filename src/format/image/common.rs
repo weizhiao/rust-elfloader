@@ -3,7 +3,10 @@ use crate::{
     arch::{Dyn, ElfPhdr, ElfRelType},
     dynamic::ElfDynamic,
     ehdr::ElfHeader,
-    format::component::{ElfPhdrs, ElfType, ModuleInner},
+    format::{
+        component::{ElfType, ModuleInner},
+        image::exec::{StaticImage, StaticImageInner},
+    },
     loader::FnHandler,
     mmap::Mmap,
     relocation::DynamicRelocation,
@@ -19,7 +22,6 @@ use core::{
     ptr::{NonNull, null},
     sync::atomic::AtomicBool,
 };
-use delegate::delegate;
 use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR};
 
 #[cfg(not(feature = "portable-atomic"))]
@@ -27,12 +29,29 @@ use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
+/// Internal representation of ELF program headers
+#[derive(Clone)]
+pub(crate) enum ElfPhdrs {
+    /// Program headers mapped from memory
+    Mmap(&'static [ElfPhdr]),
+
+    /// Program headers stored in a vector
+    Vec(Vec<ElfPhdr>),
+}
+
+impl ElfPhdrs {
+    pub(crate) fn as_slice(&self) -> &[ElfPhdr] {
+        match self {
+            ElfPhdrs::Mmap(phdrs) => phdrs,
+            ElfPhdrs::Vec(phdrs) => phdrs,
+        }
+    }
+}
+
 pub(crate) struct DynamicInfo {
-    pub(crate) dynamic: NonNull<Dyn>,
-    #[allow(dead_code)]
+    pub(crate) dynamic_ptr: NonNull<Dyn>,
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     pub(crate) phdrs: ElfPhdrs,
-    pub(crate) needed_libs: Box<[&'static str]>,
     /// Lazy binding scope for symbol resolution during lazy binding
     /// Stored as trait object for type erasure of different SymbolLookup implementations
     pub(crate) lazy_scope: Option<Arc<dyn SymbolLookup>>,
@@ -47,7 +66,7 @@ struct ElfExtraData {
     lazy: bool,
 
     /// Pointer to the Global Offset Table (.got.plt section)
-    got: Option<NonNull<usize>>,
+    got_plt: Option<NonNull<usize>>,
 
     /// Dynamic relocation information (rela.dyn and rela.plt)
     relocation: DynamicRelocation,
@@ -63,6 +82,9 @@ struct ElfExtraData {
 
     /// DT_RUNPATH value from the dynamic section
     runpath: Option<&'static str>,
+
+    /// List of needed library names from the dynamic section
+    needed_libs: Box<[&'static str]>,
 }
 
 /// Data structure used during lazy parsing of ELF objects
@@ -71,8 +93,7 @@ struct ElfExtraData {
 /// during the relocation process.
 struct LazyData<D> {
     /// Core component containing the basic ELF object information
-    core: ElfModule<D>,
-
+    module: ElfModule<D>,
     /// Extra data needed for relocation
     extra: ElfExtraData,
 }
@@ -103,7 +124,7 @@ enum State<D> {
         name: CString,
 
         /// Pointer to the dynamic section
-        dynamic_ptr: Option<NonNull<Dyn>>,
+        dynamic_ptr: NonNull<Dyn>,
 
         /// Memory segments
         segments: ElfSegments,
@@ -141,109 +162,79 @@ impl<D> State<D> {
                 elf_type,
             } => {
                 // If we have a dynamic section, parse it and prepare relocation data
-                if let Some(dynamic_ptr) = dynamic_ptr {
-                    let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments).unwrap();
-                    let relocation = DynamicRelocation::new(
-                        dynamic.pltrel,
-                        dynamic.dynrel,
-                        dynamic.relr,
-                        dynamic.rel_count,
-                    );
 
-                    // Create symbol table from dynamic section
-                    let symbols = SymbolTable::from_dynamic(&dynamic);
+                let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments).unwrap();
+                let relocation = DynamicRelocation::new(
+                    dynamic.pltrel,
+                    dynamic.dynrel,
+                    dynamic.relr,
+                    dynamic.rel_count,
+                );
 
-                    // Collect needed library names
-                    let needed_libs: Vec<&'static str> = dynamic
-                        .needed_libs
-                        .iter()
-                        .map(|needed_lib| symbols.strtab().get_str(needed_lib.get()))
-                        .collect();
+                // Create symbol table from dynamic section
+                let symtab = SymbolTable::from_dynamic(&dynamic);
 
-                    // Create the lazy data structure
-                    LazyData {
-                        extra: ElfExtraData {
-                            // Determine if lazy binding should be enabled
-                            lazy: !dynamic.bind_now,
+                // Collect needed library names
+                let needed_libs: Vec<&'static str> = dynamic
+                    .needed_libs
+                    .iter()
+                    .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
+                    .collect();
 
-                            // Store GNU_RELRO segment information
-                            relro,
+                // Create the lazy data structure
+                LazyData {
+                    extra: ElfExtraData {
+                        // Determine if lazy binding should be enabled
+                        lazy: !dynamic.bind_now,
 
-                            // Store relocation information
-                            relocation,
+                        // Store GNU_RELRO segment information
+                        relro,
 
-                            // Create initialization function
-                            init: Box::new(move || {
-                                init_handler(dynamic.init_fn, dynamic.init_array_fn)
-                            }),
+                        // Store relocation information
+                        relocation,
 
-                            // Store GOT pointer
-                            got: dynamic.got,
+                        // Create initialization function
+                        init: Box::new(move || {
+                            init_handler(dynamic.init_fn, dynamic.init_array_fn)
+                        }),
 
-                            // Store RPATH value
-                            rpath: dynamic
-                                .rpath_off
-                                .map(|rpath_off| symbols.strtab().get_str(rpath_off.get())),
+                        // Store GOT pointer
+                        got_plt: dynamic.got_plt,
 
-                            // Store RUNPATH value
-                            runpath: dynamic
-                                .runpath_off
-                                .map(|runpath_off| symbols.strtab().get_str(runpath_off.get())),
-                        },
-                        core: ElfModule {
-                            inner: Arc::new(ModuleInner {
-                                is_init: AtomicBool::new(false),
-                                name,
-                                symbols: Some(symbols),
-                                dynamic_info: Some(DynamicInfo {
-                                    dynamic: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
-                                    pltrel: NonNull::new(
-                                        dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
-                                    ),
-                                    phdrs,
-                                    needed_libs: needed_libs.into_boxed_slice(),
-                                    lazy_scope: None,
-                                }),
-                                fini: dynamic.fini_fn,
-                                fini_array: dynamic.fini_array_fn,
-                                fini_handler,
-                                segments,
-                                user_data,
-                                elf_type,
-                            }),
-                        },
-                    }
-                } else {
-                    // If there's no dynamic section (e.g., for executables)
-                    assert!(!elf_type.is_dylib(), "dylib does not have dynamic");
-                    let relocation = DynamicRelocation::new(None, None, None, None);
+                        // Store RPATH value
+                        rpath: dynamic
+                            .rpath_off
+                            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
 
-                    // Create minimal lazy data structure
-                    LazyData {
-                        core: ElfModule {
-                            inner: Arc::new(ModuleInner {
-                                is_init: AtomicBool::new(false),
-                                name,
-                                symbols: None,
-                                dynamic_info: None,
-                                fini: None,
-                                fini_array: None,
-                                fini_handler,
-                                segments,
-                                user_data,
-                                elf_type,
-                            }),
-                        },
-                        extra: ElfExtraData {
-                            lazy: false,
-                            relro,
-                            relocation,
-                            init: Box::new(|| {}),
-                            got: None,
-                            rpath: None,
-                            runpath: None,
-                        },
-                    }
+                        // Store needed library names
+                        needed_libs: needed_libs.into_boxed_slice(),
+
+                        // Store RUNPATH value
+                        runpath: dynamic
+                            .runpath_off
+                            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
+                    },
+                    module: ElfModule {
+                        inner: Arc::new(ModuleInner {
+                            is_init: AtomicBool::new(false),
+                            name,
+                            symtab,
+                            fini: dynamic.fini_fn,
+                            fini_array: dynamic.fini_array_fn,
+                            fini_handler,
+                            segments,
+                            user_data,
+                            elf_type,
+                            dynamic_info: Some(Arc::new(DynamicInfo {
+                                dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                                pltrel: NonNull::new(
+                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
+                                ),
+                                phdrs,
+                                lazy_scope: None,
+                            })),
+                        }),
+                    },
                 }
             }
             State::Empty | State::Init(_) => unreachable!(),
@@ -372,8 +363,8 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// A reference to the [`ElfModule`].
     #[inline]
-    pub fn core_ref(&self) -> &ElfModule<D> {
-        &self.data.core
+    pub fn module_ref(&self) -> &ElfModule<D> {
+        &self.data.module
     }
 
     /// Gets the core component of the ELF object.
@@ -381,8 +372,8 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// A cloned [`ElfModule`].
     #[inline]
-    pub fn core(&self) -> ElfModule<D> {
-        self.data.core.clone()
+    pub fn module(&self) -> ElfModule<D> {
+        self.module_ref().clone()
     }
 
     /// Converts this object into its core component.
@@ -390,12 +381,8 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// The [`ElfModule`].
     #[inline]
-    pub fn into_core(self) -> ElfModule<D> {
-        self.data.force();
-        match self.data.state.into_inner() {
-            State::Empty | State::Uninit { .. } => unreachable!(),
-            State::Init(lazy_data) => lazy_data.core,
-        }
+    pub fn into_module(self) -> ElfModule<D> {
+        self.module()
     }
 
     /// Whether lazy binding is enabled for the current ELF object
@@ -481,7 +468,7 @@ impl<D> DynamicImage<D> {
     /// An optional NonNull pointer to the GOT
     #[inline]
     pub(crate) fn got(&self) -> Option<NonNull<usize>> {
-        self.data.extra.got
+        self.data.extra.got_plt
     }
 
     /// Gets the dynamic relocation information
@@ -499,8 +486,8 @@ impl<D> DynamicImage<D> {
     /// any registered initialization functions.
     #[inline]
     pub(crate) fn finish(&self) {
-        self.data.core.set_init();
-        (self.data.extra.init)();
+        self.data.module.set_init();
+        self.data.extra.init.as_ref()();
     }
 
     /// Gets the GNU_RELRO segment information
@@ -518,24 +505,48 @@ impl<D> DynamicImage<D> {
     /// An optional mutable reference to the user data
     #[inline]
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut D> {
-        Arc::get_mut(&mut self.data.core.inner).map(|inner| &mut inner.user_data)
+        self.data.module.user_data_mut()
     }
 
-    // Delegate methods to the core component
-    delegate! {
-        to self.data.core{
-            pub(crate) fn symtab(&self) -> Option<&SymbolTable>;
-            /// Gets the base address of the ELF object.
-            pub fn base(&self) -> usize;
-            /// Gets the needed libs' name of the ELF object.
-            pub fn needed_libs(&self) -> &[&str];
-            /// Gets the address of the dynamic section.
-            pub fn dynamic(&self) -> Option<NonNull<Dyn>>;
-            /// Gets the memory length of the ELF object map.
-            pub fn map_len(&self) -> usize;
-            /// Gets user data from the ELF object.
-            pub fn user_data(&self) -> &D;
-        }
+    pub(crate) fn symtab(&self) -> &SymbolTable {
+        self.data.module.symtab()
+    }
+
+    pub fn base(&self) -> usize {
+        self.data.module.base()
+    }
+
+    pub fn mapped_len(&self) -> usize {
+        self.data.module.segments().len()
+    }
+
+    pub fn needed_libs(&self) -> &[&str] {
+        &self.data.extra.needed_libs
+    }
+
+    pub fn dynamic_ptr(&self) -> Option<NonNull<Dyn>> {
+        self.data.module.dynamic_ptr()
+    }
+
+    pub fn user_data(&self) -> &D {
+        self.data.module.user_data()
+    }
+
+    /// Sets the lazy scope for this component
+    ///
+    /// # Arguments
+    /// * `lazy_scope` - The lazy scope to set
+    #[inline]
+    pub(crate) fn set_lazy_scope<LazyS>(&self, lazy_scope: LazyS)
+    where
+        D: 'static,
+        LazyS: SymbolLookup + Send + Sync + 'static,
+    {
+        let info = unsafe {
+            &mut *(Arc::as_ptr(&self.data.module.inner.dynamic_info.as_ref().unwrap())
+                as *mut DynamicInfo)
+        };
+        info.lazy_scope = Some(Arc::new(lazy_scope));
     }
 }
 
@@ -544,7 +555,7 @@ impl<D> DynamicImage<D> {
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final RelocatedCommonPart object.
-pub(crate) struct DynamicBuilder<'hook, H, M: Mmap, D = ()>
+pub(crate) struct ImageBuilder<'hook, H, M: Mmap, D = ()>
 where
     H: LoadHook<D>,
     D: Default,
@@ -586,11 +597,11 @@ where
     _marker: PhantomData<M>,
 }
 
-impl<'hook, H, M: Mmap, D: Default> DynamicBuilder<'hook, H, M, D>
+impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
 where
     H: LoadHook<D>,
 {
-    /// Create a new DynamicBuilder
+    /// Create a new ImageBuilder
     ///
     /// # Arguments
     /// * `hook` - Hook function for processing program headers
@@ -720,7 +731,7 @@ where
     /// # Returns
     /// * `Ok(RelocatedCommonPart)` - The built relocated ELF object
     /// * `Err(Error)` - If building fails
-    pub(crate) fn build(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicImage<D>> {
+    pub(crate) fn build_dynamic(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicImage<D>> {
         // Determine if this is a dynamic library
         let elf_type = if self.ehdr.is_dylib() {
             ElfType::Dylib
@@ -732,6 +743,8 @@ where
         for phdr in phdrs {
             self.parse_phdr(phdr)?;
         }
+
+        let dynamic_ptr = self.dynamic_ptr.expect("dynamic section not found");
 
         // Create program headers representation
         let phdrs = self.create_phdrs(phdrs);
@@ -756,12 +769,30 @@ where
                     init_handler: self.init_fn,
                     fini_handler: self.fini_fn,
                     name: self.name,
-                    dynamic_ptr: self.dynamic_ptr,
+                    dynamic_ptr,
                     segments: self.segments,
                     relro: self.relro,
                     user_data: self.user_data,
                 }),
             },
+        })
+    }
+
+    pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {
+        // Parse all program headers
+        for phdr in phdrs {
+            self.parse_phdr(phdr)?;
+        }
+
+        let entry = self.ehdr.e_entry as usize;
+        let static_inner = StaticImageInner {
+            entry,
+            name: self.name,
+            user_data: self.user_data,
+            segments: self.segments,
+        };
+        Ok(StaticImage {
+            inner: Arc::new(static_inner),
         })
     }
 }

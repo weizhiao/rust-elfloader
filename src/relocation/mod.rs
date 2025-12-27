@@ -214,7 +214,7 @@ impl<'a, D> RelocationContext<'a, D> {
     /// Find symbol definition in the current scope
     #[inline]
     pub fn find_symdef(&self, r_sym: usize) -> Option<(SymDef<'a, D>, Option<usize>)> {
-        let symbol = self.lib.symtab().unwrap();
+        let symbol = self.lib.symtab();
         let (sym, syminfo) = symbol.symbol_idx(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
     }
@@ -647,7 +647,7 @@ pub(crate) fn reloc_error<D, E: core::fmt::Display>(
             "file: {}, relocation type: {}, symbol name: {}, error: {}",
             lib.shortname(),
             r_type_str,
-            lib.symtab().unwrap().symbol_idx(r_sym).1.name(),
+            lib.symtab().symbol_idx(r_sym).1.name(),
             err
         ))
     }

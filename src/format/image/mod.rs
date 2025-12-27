@@ -4,9 +4,9 @@
 //! been loaded and relocated in memory. It includes support for both dynamic
 //! libraries (shared objects) and executables.
 
-pub(crate) use common::{DynamicBuilder, DynamicImage, DynamicInfo};
+pub(crate) use common::{DynamicImage, DynamicInfo, ElfPhdrs, ImageBuilder};
 pub use dylib::{DylibImage, LoadedDylib};
-pub use exec::{ExecImage, LoadedExec};
+pub use exec::{ExecImage, LoadedExec, StaticImage};
 
 mod common;
 pub(crate) mod dylib;

@@ -5,13 +5,57 @@
 /// synchronous loading of executable files.
 use crate::{
     LoadHook, Loader, Result,
-    format::{LoadedModule, dynamic::common::DynamicImage},
+    format::{LoadedModule, image::common::DynamicImage},
     mmap::Mmap,
     parse_ehdr_error,
     reader::ElfReader,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    segment::ElfSegments,
 };
-use core::{fmt::Debug, ops::Deref};
+use alloc::ffi::CString;
+use core::fmt::Debug;
+use elf::abi::PT_DYNAMIC;
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
+
+#[derive(Clone)]
+pub struct StaticImage<D> {
+    pub(crate) inner: Arc<StaticImageInner<D>>,
+}
+
+impl<D> Debug for StaticImage<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StaticImage")
+            .field("name", &self.inner.name)
+            .finish()
+    }
+}
+
+impl<D> StaticImage<D> {
+    pub fn name(&self) -> &str {
+        self.inner.name.to_str().unwrap()
+    }
+
+    pub fn entry(&self) -> usize {
+        self.inner.entry
+    }
+}
+
+pub(crate) struct StaticImageInner<D> {
+    /// File name of the ELF object
+    pub(crate) name: CString,
+
+    pub(crate) entry: usize,
+
+    /// User-defined data
+    pub(crate) user_data: D,
+
+    /// Memory segments
+    pub(crate) segments: ElfSegments,
+}
 
 impl<D: 'static> Relocatable<D> for ExecImage<D> {
     type Output = LoadedExec<D>;
@@ -34,32 +78,28 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
-        let (relocated, entry) = self.inner.relocate_impl(
-            scope,
-            pre_find,
-            post_find,
-            pre_handler,
-            post_handler,
-            lazy,
-            lazy_scope,
-            use_scope_as_lazy,
-        )?;
-        Ok(LoadedExec {
-            entry,
-            inner: relocated,
-        })
-    }
-}
-
-impl<D> Deref for ExecImage<D> {
-    type Target = DynamicImage<D>;
-
-    /// Dereferences to the underlying RelocatedCommonPart
-    ///
-    /// This implementation allows direct access to the common ELF object
-    /// fields through the ElfExec wrapper.
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+        match self {
+            ExecImage::Dynamic(dynamic_image) => {
+                let (inner, entry) = dynamic_image.relocate_impl(
+                    scope,
+                    pre_find,
+                    post_find,
+                    pre_handler,
+                    post_handler,
+                    lazy,
+                    lazy_scope,
+                    use_scope_as_lazy,
+                )?;
+                Ok(LoadedExec {
+                    entry,
+                    inner: LoadedExecInner::Dynamic(inner),
+                })
+            }
+            ExecImage::Static(mini_module) => Ok(LoadedExec {
+                entry: mini_module.entry(),
+                inner: LoadedExecInner::Static(mini_module),
+            }),
+        }
     }
 }
 
@@ -69,12 +109,13 @@ impl<D> Deref for ExecImage<D> {
 /// into memory but has not yet undergone relocation. It contains all the
 /// necessary information to perform relocation and prepare the executable
 /// for execution.
-pub struct ExecImage<D>
+pub enum ExecImage<D>
 where
     D: 'static,
 {
     /// The common part containing basic ELF object information.
-    inner: DynamicImage<D>,
+    Dynamic(DynamicImage<D>),
+    Static(StaticImage<D>),
 }
 
 impl<D> Debug for ExecImage<D> {
@@ -84,8 +125,7 @@ impl<D> Debug for ExecImage<D> {
     /// the executable name and its dependencies.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExec")
-            .field("name", &self.inner.name())
-            .field("needed_libs", &self.inner.needed_libs())
+            .field("name", &self.name())
             .finish()
     }
 }
@@ -98,6 +138,13 @@ impl<D: 'static> ExecImage<D> {
     /// handler, forcing lazy/eager binding, and specifying the symbol resolution scope.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            ExecImage::Dynamic(image) => image.name(),
+            ExecImage::Static(image) => image.name(),
+        }
     }
 }
 
@@ -132,11 +179,22 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        // Load the relocated common part
-        let inner = self.load_dynamic_impl(ehdr, object)?;
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let has_dynamic = phdrs
+            .iter()
+            .find(|phdr| phdr.p_type == PT_DYNAMIC)
+            .is_some();
 
-        // Wrap in ElfExec and return
-        Ok(ExecImage { inner })
+        if has_dynamic {
+            // Load the relocated common part
+            let inner = self.load_dynamic_impl(ehdr, object)?;
+            // Wrap in ElfExec and return
+            Ok(ExecImage::Dynamic(inner))
+        } else {
+            // Load as a static module without dynamic section
+            let inner = self.load_static_impl(ehdr, object)?;
+            Ok(ExecImage::Static(inner))
+        }
     }
 }
 
@@ -145,12 +203,18 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
 /// This structure represents an executable ELF file that has been loaded
 /// and relocated in memory, making it ready for execution. It contains
 /// the entry point and other information needed to run the executable.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LoadedExec<D> {
     /// Entry point of the executable.
     entry: usize,
     /// The relocated ELF object.
-    inner: LoadedModule<D>,
+    inner: LoadedExecInner<D>,
+}
+
+#[derive(Clone, Debug)]
+enum LoadedExecInner<D> {
+    Dynamic(LoadedModule<D>),
+    Static(StaticImage<D>),
 }
 
 impl<D> LoadedExec<D> {
@@ -162,26 +226,32 @@ impl<D> LoadedExec<D> {
     pub fn entry(&self) -> usize {
         self.entry
     }
-}
 
-impl<D> Debug for LoadedExec<D> {
-    /// Formats the [`LoadedExec`] for debugging purposes.
-    ///
-    /// This implementation delegates to the inner [`LoadedModule`] object's
-    /// debug implementation.
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.inner.fmt(f)
+    pub fn mapped_len(&self) -> usize {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => module.mapped_len(),
+            LoadedExecInner::Static(static_image) => static_image.inner.segments.len(),
+        }
     }
-}
 
-impl<D> Deref for LoadedExec<D> {
-    type Target = LoadedModule<D>;
+    pub fn user_data(&self) -> &D {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => &module.user_data(),
+            LoadedExecInner::Static(static_image) => &static_image.inner.user_data,
+        }
+    }
 
-    /// Dereferences to the underlying [`LoadedModule`].
-    ///
-    /// This implementation allows direct access to the [`LoadedModule`]
-    /// fields through the [`LoadedExec`] wrapper.
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    pub fn is_static(&self) -> bool {
+        match &self.inner {
+            LoadedExecInner::Dynamic(_) => false,
+            LoadedExecInner::Static(_) => true,
+        }
+    }
+
+    pub fn module_ref(&self) -> Option<&LoadedModule<D>> {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => Some(module),
+            LoadedExecInner::Static(_) => None,
+        }
     }
 }

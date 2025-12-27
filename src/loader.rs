@@ -2,7 +2,7 @@ use crate::{
     ElfReader, Result,
     arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
     ehdr::ElfHeader,
-    format::{DynamicBuilder, DynamicImage, ObjectBuilder, ObjectImage},
+    format::{DynamicImage, ImageBuilder, ObjectBuilder, ObjectImage, StaticImage},
     mmap::Mmap,
     os::DefaultMmap,
     segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
@@ -189,7 +189,7 @@ where
     pub(crate) buf: ElfBuf,
     init_fn: FnHandler,
     fini_fn: FnHandler,
-    hook: H,
+    pub(crate) hook: H,
     _marker: PhantomData<(M, D)>,
 }
 
@@ -302,6 +302,28 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
+    pub(crate) fn load_static_impl(
+        &mut self,
+        ehdr: ElfHeader,
+        mut object: impl ElfReader,
+    ) -> Result<StaticImage<D>> {
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+        let segments = phdr_segments.load_segments::<M>(&mut object)?;
+        phdr_segments.mprotect::<M>()?;
+        let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
+            &self.hook,
+            segments,
+            object.file_name().to_owned(),
+            ehdr,
+            init_fn,
+            fini_fn,
+        );
+        Ok(builder.build_static(phdrs)?)
+    }
+
     /// Load a dynamic ELF object
     pub(crate) fn load_dynamic_impl(
         &mut self,
@@ -314,7 +336,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let builder: DynamicBuilder<'_, H, M, D> = DynamicBuilder::new(
+        let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
             &self.hook,
             segments,
             object.file_name().to_owned(),
@@ -322,7 +344,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
             init_fn,
             fini_fn,
         );
-        Ok(builder.build(phdrs)?)
+        Ok(builder.build_dynamic(phdrs)?)
     }
 
     /// Load a relocatable ELF object

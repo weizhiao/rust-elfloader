@@ -78,7 +78,7 @@ impl<D> DynamicImage<D> {
         // Optimization: check if relocation is empty
         if self.relocation().is_empty() {
             let entry = self.entry();
-            let core = self.into_core();
+            let core = self.into_module();
             let relocated = unsafe { LoadedModule::from_core(core) };
             return Ok((relocated, entry));
         }
@@ -154,7 +154,7 @@ where
         .enumerate()
         .filter_map(|(i, &flag)| if flag { Some(scope[i].clone()) } else { None })
         .collect();
-    Ok(unsafe { LoadedModule::from_core_deps(elf.into_core(), deps) })
+    Ok(unsafe { LoadedModule::from_core_deps(elf.into_module(), deps) })
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
@@ -178,7 +178,7 @@ pub(crate) unsafe extern "C" fn dl_fixup(dylib: &ModuleInner, rela_idx: usize) -
     assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
 
     // Get symbol information
-    let (_, syminfo) = dylib.symbols.as_ref().unwrap().symbol_idx(r_sym);
+    let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
     // Look up symbol in local scope
     let symbol = dylib
@@ -242,11 +242,11 @@ impl<D> DynamicImage<D> {
         let scope = ctx.scope;
         let pre_find = ctx.pre_find;
         let post_find = ctx.post_find;
-        let core = self.core_ref();
+        let core = self.module_ref();
         let base = core.base();
         let segments = core.segments();
         let reloc = self.relocation();
-        let symtab = self.symtab().unwrap();
+        let symtab = self.symtab();
 
         // Process PLT relocations
         for rel in reloc.pltrel {
@@ -310,7 +310,7 @@ impl<D> DynamicImage<D> {
 
             // Set the lazy scope if provided
             if let Some(lazy_scope) = lazy_scope {
-                core.set_lazy_scope(lazy_scope);
+                self.set_lazy_scope(lazy_scope);
             }
         } else {
             // Apply RELRO (RELocation Read-Only) protection if available
@@ -323,7 +323,7 @@ impl<D> DynamicImage<D> {
 
     /// Perform relative relocations (REL_RELATIVE)
     fn relocate_relative(&self) -> &Self {
-        let core = self.core_ref();
+        let core = self.module_ref();
         let reloc = self.relocation();
         let segments = core.segments();
         let base = core.base();
@@ -392,9 +392,9 @@ impl<D> DynamicImage<D> {
             S = Value of the symbol whose index resides in the relocation entry
         */
 
-        let core = self.core_ref();
+        let core = self.module_ref();
         let reloc = self.relocation();
-        let symtab = self.symtab().unwrap();
+        let symtab = self.symtab();
         let segments = core.segments();
         let base = core.base();
 
@@ -437,7 +437,7 @@ impl<D> DynamicImage<D> {
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
                     if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
-                        let len = hctx.lib.symtab().unwrap().symbol_idx(r_sym).0.st_size();
+                        let len = hctx.lib.symtab().symbol_idx(r_sym).0.st_size();
                         if let Some(idx) = idx {
                             ctx.dependency_flags[idx] = true;
                         }

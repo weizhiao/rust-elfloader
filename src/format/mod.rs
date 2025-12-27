@@ -13,15 +13,15 @@ use crate::{
 use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 
 mod component;
-mod dynamic;
+mod image;
 mod object;
 
 pub(crate) use component::ModuleInner;
-pub(crate) use dynamic::{DynamicBuilder, DynamicImage};
+pub(crate) use image::{DynamicImage, ImageBuilder, StaticImage};
 pub(crate) use object::ObjectBuilder;
 
 pub use component::{ElfModule, ElfModuleRef, LoadedModule};
-pub use dynamic::{DylibImage, ExecImage, LoadedDylib, LoadedExec};
+pub use image::{DylibImage, ExecImage, LoadedDylib, LoadedExec};
 pub use object::{LoadedObject, ObjectImage};
 
 /// An unrelocated ELF file.
@@ -112,24 +112,6 @@ impl<D> LoadedElf<D> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
-        }
-    }
-}
-
-impl<D> Deref for ElfImage<D> {
-    type Target = ElfModule<D>;
-
-    /// Dereferences to the underlying ElfModule
-    ///
-    /// This allows direct access to common fields shared by all ELF file types.
-    ///
-    /// # Panics
-    /// Panics if called on a Relocatable variant, as relocatable files always use `ElfModule<()>`.
-    fn deref(&self) -> &Self::Target {
-        match self {
-            ElfImage::Dylib(elf_dylib) => elf_dylib.core_ref(),
-            ElfImage::Exec(elf_exec) => elf_exec.core_ref(),
-            ElfImage::Object(_) => panic!("Deref not supported for Relocatable variant"),
         }
     }
 }

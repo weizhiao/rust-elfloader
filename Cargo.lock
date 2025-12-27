@@ -305,7 +305,6 @@ dependencies = [
  "cc",
  "cfg-if",
  "criterion",
- "delegate",
  "elf",
  "env_logger",
  "foldhash",

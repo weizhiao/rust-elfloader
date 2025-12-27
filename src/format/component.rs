@@ -7,13 +7,13 @@
 use crate::{
     arch::{Dyn, ElfPhdr},
     dynamic::ElfDynamic,
-    format::dynamic::DynamicInfo,
+    format::image::{DynamicInfo, ElfPhdrs},
     loader::FnHandler,
-    relocation::{SymDef, SymbolLookup},
+    relocation::SymDef,
     segment::ElfSegments,
     symbol::{SymbolInfo, SymbolTable},
 };
-use alloc::{boxed::Box, ffi::CString, vec::Vec};
+use alloc::{ffi::CString, vec::Vec};
 use core::{
     ffi::CStr,
     fmt::Debug,
@@ -209,7 +209,7 @@ impl<D> LoadedModule<D> {
     /// # Returns
     /// A reference to the SymbolTable
     pub fn symtab(&self) -> &SymbolTable {
-        unsafe { self.core.symtab().unwrap_unchecked() }
+        &self.core.symtab()
     }
 
     /// Gets a pointer to a function or static variable by symbol name
@@ -314,16 +314,6 @@ impl<D> LoadedModule<D> {
     }
 }
 
-/// Internal representation of ELF program headers
-#[derive(Clone)]
-pub(crate) enum ElfPhdrs {
-    /// Program headers mapped from memory
-    Mmap(&'static [ElfPhdr]),
-
-    /// Program headers stored in a vector
-    Vec(Vec<ElfPhdr>),
-}
-
 /// The type of the ELF file
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElfType {
@@ -343,15 +333,6 @@ impl ElfType {
     }
 }
 
-impl ElfPhdrs {
-    fn as_slice(&self) -> &[ElfPhdr] {
-        match self {
-            ElfPhdrs::Mmap(phdrs) => phdrs,
-            ElfPhdrs::Vec(phdrs) => phdrs,
-        }
-    }
-}
-
 /// Inner structure for ElfModule
 pub(crate) struct ModuleInner<D = ()> {
     /// Indicates whether the component has been initialized
@@ -361,10 +342,7 @@ pub(crate) struct ModuleInner<D = ()> {
     pub(crate) name: CString,
 
     /// ELF symbols table
-    pub(crate) symbols: Option<SymbolTable>,
-
-    /// Dynamic component
-    pub(crate) dynamic_info: Option<DynamicInfo>,
+    pub(crate) symtab: SymbolTable,
 
     /// Finalization function
     pub(crate) fini: Option<fn()>,
@@ -377,6 +355,9 @@ pub(crate) struct ModuleInner<D = ()> {
 
     /// User-defined data
     pub(crate) user_data: D,
+
+    /// Dynamic information
+    pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
 
     /// Memory segments
     pub(crate) segments: ElfSegments,
@@ -442,26 +423,6 @@ unsafe impl<D> Sync for ModuleInner<D> {}
 unsafe impl<D> Send for ModuleInner<D> {}
 
 impl<D> ElfModule<D> {
-    /// Sets the lazy scope for this component
-    ///
-    /// # Arguments
-    /// * `lazy_scope` - The lazy scope to set
-    #[inline]
-    pub(crate) fn set_lazy_scope<LazyS>(&self, lazy_scope: LazyS)
-    where
-        D: 'static,
-        LazyS: SymbolLookup + Send + Sync + 'static,
-    {
-        // 因为在完成重定位前，只有unsafe的方法可以拿到ElfModule的引用，所以这里认为是安全的
-        // LazyScope 会被长期存储用于延迟绑定符号查询，因此需要 Send + Sync + 'static 约束
-        // 注意：D 的生命周期由 ModuleInner<D> 保证
-        unsafe {
-            let ptr = &mut *(Arc::as_ptr(&self.inner) as *mut ModuleInner<D>);
-            // 在relocate接口处保证了lazy_scope的声明周期，因此这里直接转换
-            ptr.dynamic_info.as_mut().unwrap().lazy_scope = Some(Arc::new(lazy_scope));
-        };
-    }
-
     /// Marks the component as initialized
     #[inline]
     pub(crate) fn set_init(&self) {
@@ -486,6 +447,18 @@ impl<D> ElfModule<D> {
     #[inline]
     pub fn user_data(&self) -> &D {
         &self.inner.user_data
+    }
+
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .map(|info| info.phdrs.as_slice())
+    }
+
+    #[inline]
+    pub fn user_data_mut(&mut self) -> Option<&mut D> {
+        Arc::get_mut(&mut self.inner).map(|inner| &mut inner.user_data)
     }
 
     /// Gets the number of strong references to the ELF object
@@ -555,43 +528,8 @@ impl<D> ElfModule<D> {
     /// # Returns
     /// The total length of memory occupied by the ELF object
     #[inline]
-    pub fn map_len(&self) -> usize {
+    pub fn mapped_len(&self) -> usize {
         self.inner.segments.len()
-    }
-
-    /// Gets the program headers of the ELF object
-    ///
-    /// # Returns
-    /// A slice of the program headers
-    #[inline]
-    pub fn phdrs(&self) -> &[ElfPhdr] {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .map(|d| d.phdrs.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// Gets the address of the dynamic section
-    ///
-    /// # Returns
-    /// An optional NonNull pointer to the dynamic section
-    #[inline]
-    pub fn dynamic(&self) -> Option<NonNull<Dyn>> {
-        self.inner.dynamic_info.as_ref().map(|d| d.dynamic)
-    }
-
-    /// Gets the needed libs' name of the ELF object
-    ///
-    /// # Returns
-    /// A slice of the names of libraries this ELF object depends on
-    #[inline]
-    pub fn needed_libs(&self) -> &[&str] {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .map(|d| &*d.needed_libs)
-            .unwrap_or(&[])
     }
 
     /// Gets the symbol table
@@ -599,8 +537,21 @@ impl<D> ElfModule<D> {
     /// # Returns
     /// An optional reference to the symbol table
     #[inline]
-    pub fn symtab(&self) -> Option<&SymbolTable> {
-        self.inner.symbols.as_ref()
+    pub fn symtab(&self) -> &SymbolTable {
+        &self.inner.symtab
+    }
+
+    /// Gets a pointer to the dynamic section
+    ///
+    /// # Returns
+    /// * `Some(ptr)` - A pointer to the dynamic section if it exists
+    /// * `None` - If the dynamic section does not exist
+    #[inline]
+    pub fn dynamic_ptr(&self) -> Option<NonNull<Dyn>> {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .map(|info| info.dynamic_ptr)
     }
 
     /// Gets the segments
@@ -637,14 +588,13 @@ impl<D> ElfModule<D> {
             inner: Arc::new(ModuleInner {
                 name,
                 is_init: AtomicBool::new(true),
-                symbols: Some(SymbolTable::from_dynamic(&dynamic)),
-                dynamic_info: Some(DynamicInfo {
-                    dynamic: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                symtab: SymbolTable::from_dynamic(&dynamic),
+                dynamic_info: Some(Arc::new(DynamicInfo {
+                    dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                     pltrel: None,
                     phdrs: ElfPhdrs::Mmap(phdrs),
-                    needed_libs: Box::new([]),
                     lazy_scope: None,
-                }),
+                })),
                 segments,
                 fini: None,
                 fini_array: None,
