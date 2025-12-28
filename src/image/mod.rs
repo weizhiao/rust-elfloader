@@ -6,24 +6,23 @@
 
 use crate::{
     LoadHook, Loader, Result,
-    mmap::Mmap,
-    reader::ElfReader,
+    input::IntoElfReader,
+    os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
 use core::fmt::Debug;
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
-mod component;
-mod image;
-mod object;
+mod builder;
+mod common;
+mod kinds;
 
-pub(crate) use component::ModuleInner;
-pub(crate) use image::{DynamicImage, ImageBuilder, StaticImage};
-pub(crate) use object::ObjectBuilder;
+pub(crate) use builder::{ImageBuilder, ObjectBuilder};
+pub(crate) use common::{CoreInner, DynamicImage};
+pub(crate) use kinds::StaticImage;
 
-pub use component::{ElfModule, ElfModuleRef, LoadedModule, Symbol};
-pub use image::{DylibImage, ExecImage, LoadedDylib, LoadedExec};
-pub use object::{LoadedObject, ObjectImage};
+pub use common::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
+pub use kinds::{LoadedDylib, LoadedExec, LoadedObject, RawDylib, RawExec, RawObject};
 
 /// A mapped but unrelocated ELF image.
 ///
@@ -31,18 +30,18 @@ pub use object::{LoadedObject, ObjectImage};
 /// but has not yet undergone the relocation process. It can be a dynamic library,
 /// an executable, or a relocatable object file.
 #[derive(Debug)]
-pub enum ElfImage<D>
+pub enum RawElf<D>
 where
     D: 'static,
 {
     /// A dynamic library (shared object, typically `.so`).
-    Dylib(DylibImage<D>),
+    Dylib(RawDylib<D>),
 
     /// An executable file (typically a PIE or non-PIE executable).
-    Exec(ExecImage<D>),
+    Exec(RawExec<D>),
 
     /// A relocatable object file (typically `.o`).
-    Object(ObjectImage),
+    Object(RawObject),
 }
 
 /// A fully relocated and ready-to-use ELF module.
@@ -64,12 +63,12 @@ pub enum LoadedElf<D> {
     Object(LoadedObject<()>),
 }
 
-impl<D: 'static> ElfImage<D> {
+impl<D: 'static> RawElf<D> {
     /// Creates a builder for relocating the ELF file.
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, ElfBinary};
+    /// use elf_loader::{Loader, input::ElfBinary};
     ///
     /// let mut loader = Loader::new();
     /// let bytes = &[]; // ELF file bytes
@@ -82,6 +81,26 @@ impl<D: 'static> ElfImage<D> {
     /// ```
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
+    }
+
+    /// Gets the name of the ELF file
+    #[inline]
+    pub fn name(&self) -> &str {
+        match self {
+            RawElf::Dylib(dylib) => dylib.name(),
+            RawElf::Exec(exec) => exec.name(),
+            RawElf::Object(object) => object.name(),
+        }
+    }
+
+    /// Gets the total length of mapped memory for the ELF file
+    #[inline]
+    pub fn mapped_len(&self) -> usize {
+        match self {
+            RawElf::Dylib(dylib) => dylib.mapped_len(),
+            RawElf::Exec(exec) => exec.mapped_len(),
+            RawElf::Object(object) => object.mapped_len(),
+        }
     }
 }
 
@@ -112,6 +131,19 @@ impl<D> LoadedElf<D> {
         }
     }
 
+    /// Converts this LoadedElf into a LoadedObject if it is one
+    ///
+    /// # Returns
+    /// * `Some(object)` - If this is an Object variant
+    /// * `None` - If this is a Dylib or Exec variant
+    #[inline]
+    pub fn into_object(self) -> Option<LoadedObject<()>> {
+        match self {
+            LoadedElf::Object(object) => Some(object),
+            _ => None,
+        }
+    }
+
     /// Gets a reference to the LoadedDylib if this is one
     ///
     /// # Returns
@@ -124,14 +156,50 @@ impl<D> LoadedElf<D> {
             _ => None,
         }
     }
+
+    /// Gets a reference to the LoadedExec if this is one
+    ///
+    /// # Returns
+    /// * `Some(exec)` - If this is an Exec variant
+    /// * `None` - If this is a Dylib variant
+    #[inline]
+    pub fn as_exec(&self) -> Option<&LoadedExec<D>> {
+        match self {
+            LoadedElf::Exec(exec) => Some(exec),
+            _ => None,
+        }
+    }
+
+    /// Gets a reference to the LoadedObject if this is one
+    ///
+    /// # Returns
+    /// * `Some(object)` - If this is an Object variant
+    /// * `None` - If this is a Dylib or Exec variant
+    #[inline]
+    pub fn as_object(&self) -> Option<&LoadedObject<()>> {
+        match self {
+            LoadedElf::Object(object) => Some(object),
+            _ => None,
+        }
+    }
+
+    /// Gets the name of the ELF file
+    #[inline]
+    pub fn name(&self) -> &str {
+        match self {
+            LoadedElf::Dylib(dylib) => dylib.name(),
+            LoadedElf::Exec(exec) => exec.name(),
+            LoadedElf::Object(object) => object.name(),
+        }
+    }
 }
 
-impl<D: 'static> Relocatable<D> for ElfImage<D> {
+impl<D: 'static> Relocatable<D> for RawElf<D> {
     type Output = LoadedElf<D>;
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedModule<D>],
+        scope: &[LoadedCore<D>],
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: PreH,
@@ -148,7 +216,7 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
         PostH: RelocationHandler,
     {
         match self {
-            ElfImage::Dylib(dylib) => {
+            RawElf::Dylib(dylib) => {
                 let relocated = Relocatable::relocate(
                     dylib,
                     scope,
@@ -161,7 +229,7 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
                 )?;
                 Ok(LoadedElf::Dylib(relocated))
             }
-            ElfImage::Exec(exec) => {
+            RawElf::Exec(exec) => {
                 let relocated = Relocatable::relocate(
                     exec,
                     scope,
@@ -174,7 +242,7 @@ impl<D: 'static> Relocatable<D> for ElfImage<D> {
                 )?;
                 Ok(LoadedElf::Exec(relocated))
             }
-            ElfImage::Object(relocatable) => {
+            RawElf::Object(relocatable) => {
                 let relocated = Relocatable::relocate(
                     relocatable,
                     &[],
@@ -200,59 +268,27 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// # Returns
     /// * `Ok(Elf)` - The loaded ELF file
     /// * `Err(Error)` - If loading fails
-    pub fn load(&mut self, mut object: impl ElfReader) -> Result<ElfImage<D>> {
+    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D>>
+    where
+        I: IntoElfReader<'a>,
+    {
+        let mut object = input.into_reader()?;
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
-        if ehdr.e_type == elf::abi::ET_REL {
-            // Relocatable files don't use user_data, so we call load_rel directly
-            return Ok(ElfImage::Object(self.load_object_impl(ehdr, object)?));
-        }
-
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
-        let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
-
-        // For ET_DYN, we check if it has an interpreter (PT_INTERP)
-        // or if it lacks a dynamic section (static PIE)
-        // to distinguish between PIE executables and shared libraries.
-        let is_pie =
-            ehdr.is_dylib() && (phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic);
-
-        let is_exec = ehdr.e_type == elf::abi::ET_EXEC || is_pie;
-
-        if is_exec {
-            let exec = if has_dynamic {
-                ExecImage::Dynamic(Self::load_dynamic_impl(
-                    &self.hook,
-                    &self.init_fn,
-                    &self.fini_fn,
-                    ehdr,
-                    phdrs,
-                    object,
-                )?)
-            } else {
-                ExecImage::Static(Self::load_static_impl(
-                    &self.hook,
-                    &self.init_fn,
-                    &self.fini_fn,
-                    ehdr,
-                    phdrs,
-                    object,
-                )?)
-            };
-            Ok(ElfImage::Exec(exec))
-        } else if ehdr.is_dylib() {
-            let inner = Self::load_dynamic_impl(
-                &self.hook,
-                &self.init_fn,
-                &self.fini_fn,
-                ehdr,
-                phdrs,
-                object,
-            )?;
-            Ok(ElfImage::Dylib(DylibImage { inner }))
-        } else {
-            // Fallback for other types, though usually handled by is_exec
-            Ok(ElfImage::Exec(self.load_exec(object)?))
+        match ehdr.e_type {
+            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_internal(object)?)),
+            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_internal(object)?)),
+            elf::abi::ET_DYN => {
+                let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+                let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
+                let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
+                if is_pie {
+                    Ok(RawElf::Exec(self.load_exec_internal(object)?))
+                } else {
+                    Ok(RawElf::Dylib(self.load_dylib_internal(object)?))
+                }
+            }
+            _ => Ok(RawElf::Exec(self.load_exec_internal(object)?)),
         }
     }
 }

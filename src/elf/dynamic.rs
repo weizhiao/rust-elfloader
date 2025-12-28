@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     Result,
-    arch::{DT_RELR, DT_RELRSZ, Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
+    elf::{DT_RELR, DT_RELRSZ, Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
     parse_dynamic_error,
     segment::ElfSegments,
 };
@@ -273,8 +273,9 @@ impl SubAssign<usize> for ElfDynamicHashTab {
     }
 }
 
+#[allow(unused)]
 /// Information from the ELF dynamic section.
-pub struct ElfDynamic {
+pub(crate) struct ElfDynamic {
     /// Pointer to the dynamic section.
     pub dyn_ptr: *const Dyn,
     /// Hash table information.

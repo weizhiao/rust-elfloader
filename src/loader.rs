@@ -1,11 +1,10 @@
 use crate::{
-    ElfReader, Result,
-    arch::{EHDR_SIZE, ElfPhdr, ElfShdr},
-    ehdr::ElfHeader,
-    format::{DynamicImage, ImageBuilder, ObjectBuilder, ObjectImage, StaticImage},
-    mmap::Mmap,
-    os::DefaultMmap,
-    segment::{ElfSegments, SegmentBuilder, phdr::PhdrSegments, shdr::ShdrSegments},
+    Result,
+    elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
+    image::{DynamicImage, ImageBuilder, ObjectBuilder, RawObject, StaticImage},
+    input::ElfReader,
+    os::{DefaultMmap, Mmap},
+    segment::{ElfSegments, SegmentBuilder, program::ProgramSegments, section::SectionSegments},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::marker::PhantomData;
@@ -157,7 +156,7 @@ pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 ///
 /// # Examples
 /// ```no_run
-/// use elf_loader::{Loader, ElfBinary};
+/// use elf_loader::{Loader, input::ElfBinary};
 ///
 /// let mut loader = Loader::new();
 /// let bytes = std::fs::read("liba.so").unwrap();
@@ -272,7 +271,8 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     ) -> Result<StaticImage<D>> {
         let init_fn = init_fn.clone();
         let fini_fn = fini_fn.clone();
-        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+        let mut phdr_segments =
+            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
@@ -296,7 +296,8 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     ) -> Result<DynamicImage<D>> {
         let init_fn = init_fn.clone();
         let fini_fn = fini_fn.clone();
-        let mut phdr_segments = PhdrSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+        let mut phdr_segments =
+            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
         let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
@@ -315,11 +316,11 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         &mut self,
         ehdr: ElfHeader,
         mut object: impl ElfReader,
-    ) -> Result<ObjectImage> {
+    ) -> Result<RawObject> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
-        let mut shdr_segments = ShdrSegments::new(shdrs, &mut object);
+        let mut shdr_segments = SectionSegments::new(shdrs, &mut object);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {

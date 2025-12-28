@@ -4,15 +4,16 @@
 //! It handles the creation of memory segments, mapping them from file or
 //! anonymous sources, and managing their protection and lifecycle.
 
-pub(crate) mod phdr;
-pub(crate) mod shdr;
-
-use super::mmap::{self, Mmap, ProtFlags};
-use crate::{Result, arch::Phdr, mmap::MapFlags, reader::ElfReader, relocation::RelocValue};
+use crate::input::ElfReader;
+use crate::os::{MapFlags, Mmap, ProtFlags};
+use crate::{Result, elf::Phdr, relocation::RelocValue};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
 use core::ptr::NonNull;
+
+pub(crate) mod program;
+pub(crate) mod section;
 
 /// Standard page size used for memory mapping operations
 pub const PAGE_SIZE: usize = 0x1000;
@@ -261,7 +262,7 @@ impl ElfSegment {
                         zero_mmap_addr,
                         zero_mmap_len,
                         prot,
-                        mmap::MapFlags::MAP_PRIVATE | mmap::MapFlags::MAP_FIXED,
+                        MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
                     )?;
                 }
             }
@@ -482,7 +483,7 @@ impl ElfSegments {
     ///
     /// # Returns
     /// A new ElfSegments instance
-    pub fn new(
+    pub(crate) fn new(
         memory: NonNull<c_void>,
         len: usize,
         munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,

@@ -1,4 +1,4 @@
-use elf_loader::load_dylib;
+use elf_loader::Loader;
 use std::collections::HashMap;
 
 fn main() {
@@ -11,7 +11,8 @@ fn main() {
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
     // Load and relocate dynamic library liba.so
-    let liba = load_dylib!("target/liba.so")
+    let liba = Loader::new()
+        .load_dylib("target/liba.so")
         .unwrap()
         .relocator()
         .pre_find(&pre_find)

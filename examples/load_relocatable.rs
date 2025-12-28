@@ -1,5 +1,5 @@
 use core::str;
-use elf_loader::{ElfFile, Loader};
+use elf_loader::{Loader, input::ElfFile};
 use std::collections::HashMap;
 use std::sync::Arc;
 

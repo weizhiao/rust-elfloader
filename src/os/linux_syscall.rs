@@ -1,8 +1,8 @@
-use crate::ElfReader;
+use crate::input::ElfReader;
 use crate::{Error, io_error};
 use crate::{
     Result,
-    mmap::{MapFlags, Mmap, ProtFlags},
+    os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::borrow::ToOwned;
 use alloc::ffi::CString;

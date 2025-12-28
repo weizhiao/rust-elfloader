@@ -105,3 +105,16 @@ jobs:
         target: [ x86_64-unknown-linux-gnu ]
         channel: [ stable ]
         features: [ "use-syscall" ]
+
+  build-no-std:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly
+    - env:
+        TARGET: x86_64-unknown-none
+        CHANNEL: nightly
+        OP: build
+      run: sh ci/run.sh

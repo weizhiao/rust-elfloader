@@ -1,6 +1,7 @@
 use crate::{
-    ElfReader, Result,
-    mmap::{MapFlags, Mmap, ProtFlags},
+    Result,
+    input::ElfReader,
+    os::{MapFlags, Mmap, ProtFlags},
     segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};

@@ -4,10 +4,10 @@
 //! The GNU hash table provides better performance and memory efficiency compared
 //! to the traditional SYSV hash table.
 
+use super::ElfHashTable;
 use crate::{
-    arch::ElfSymbol,
-    hash::{ElfHashTable, PreCompute},
-    symbol::{SymbolInfo, SymbolTable},
+    elf::ElfSymbol,
+    elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
 };
 
 /// Header structure for GNU ELF hash tables

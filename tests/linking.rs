@@ -1,8 +1,9 @@
 use elf_loader::{
-    ElfBinary, Loader,
+    Loader,
     arch::{
         REL_COPY, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC,
     },
+    input::ElfBinary,
 };
 use gen_elf::{Arch, DylibWriter, ElfWriterConfig, ObjectWriter, RelocEntry, SymbolDesc};
 use std::collections::HashMap;
@@ -197,9 +198,7 @@ fn run_dynamic_linking(is_lazy: bool) {
         .lazy(is_lazy);
 
     let relocated = if is_lazy {
-        relocator
-            .lazy_scope(symbol_lookup.clone())
-            .relocate()
+        relocator.lazy_scope(symbol_lookup.clone()).relocate()
     } else {
         relocator.relocate()
     }

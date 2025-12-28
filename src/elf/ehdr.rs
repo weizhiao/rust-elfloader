@@ -6,7 +6,8 @@
 
 use crate::{
     Result,
-    arch::{E_CLASS, EHDR_SIZE, EM_ARCH, Ehdr},
+    arch::EM_ARCH,
+    elf::{E_CLASS, EHDR_SIZE, Ehdr},
     parse_ehdr_error,
 };
 use core::ops::Deref;

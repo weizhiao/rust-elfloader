@@ -1,4 +1,3 @@
-use elf_loader::load_dylib;
 use std::collections::HashMap;
 
 fn main() {
@@ -12,9 +11,10 @@ fn main() {
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
-    let liba = load_dylib!("target/liba.so").unwrap();
-    let libb = load_dylib!("target/libb.so").unwrap();
-    let libc = load_dylib!("target/libc.so").unwrap();
+    let mut loader = elf_loader::Loader::new();
+    let liba = loader.load_dylib("target/liba.so").unwrap();
+    let libb = loader.load_dylib("target/libb.so").unwrap();
+    let libc = loader.load_dylib("target/libc.so").unwrap();
     let a = liba.relocator().pre_find(&pre_find).relocate().unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

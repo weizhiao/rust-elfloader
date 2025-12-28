@@ -1,7 +1,9 @@
 use crate::{
-    ElfReader, Result,
-    arch::{ElfShdr, PLT_ENTRY, PLT_ENTRY_SIZE, Shdr, StaticRelocator},
-    mmap::{MapFlags, Mmap, ProtFlags},
+    Result,
+    arch::{PLT_ENTRY, PLT_ENTRY_SIZE, StaticRelocator},
+    elf::{ElfRelType, ElfShdr, Shdr},
+    input::ElfReader,
+    os::{MapFlags, Mmap, ProtFlags},
     relocation::{RelocValue, StaticReloc},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
@@ -25,7 +27,7 @@ pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
 }
 
 /// Manages segments created from ELF section headers
-pub(crate) struct ShdrSegments {
+pub(crate) struct SectionSegments {
     segments: Vec<ElfSegment>,
     total_size: usize,
     pltgot: Option<PltGotSection>,
@@ -48,7 +50,7 @@ fn flags_to_idx(flags: u64) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
-impl SegmentBuilder for ShdrSegments {
+impl SegmentBuilder for SectionSegments {
     /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let len = self.total_size;
@@ -78,7 +80,7 @@ impl SegmentBuilder for ShdrSegments {
     }
 }
 
-impl ShdrSegments {
+impl SectionSegments {
     /// Create a new ShdrSegments instance from section headers
     pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Self {
         // Create section units for different memory protection types
@@ -193,9 +195,8 @@ impl PltGotSection {
                 }
                 // Safety: we read bytes from file, and we are casting to a POD type (ElfRelType)
                 // We use read_unaligned to handle potential misalignment.
-                let rel_entry = unsafe {
-                    core::ptr::read_unaligned(chunk.as_ptr() as *const crate::arch::ElfRelType)
-                };
+                let rel_entry =
+                    unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType) };
                 let r_type = rel_entry.r_type() as u32;
                 let r_sym = rel_entry.r_symbol();
 

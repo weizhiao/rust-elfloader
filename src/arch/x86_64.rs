@@ -1,33 +1,72 @@
+//! x86-64 architecture-specific ELF relocation and dynamic linking support.
+//!
+//! This module provides x86-64 specific implementations for ELF relocation,
+//! dynamic linking, and procedure linkage table (PLT) handling.
+
 use crate::{
-    arch::ElfRelType,
+    elf::ElfRelType,
     relocation::{RelocValue, StaticReloc, SymbolLookup, find_symbol_addr, reloc_error},
-    segment::shdr::{GotEntry, PltEntry, PltGotSection},
+    segment::section::{GotEntry, PltEntry, PltGotSection},
 };
 use elf::abi::*;
 
+/// The ELF machine type for x86-64 architecture.
 pub const EM_ARCH: u16 = EM_X86_64;
+
+/// Offset for TLS Dynamic Thread Vector.
+/// For x86-64, this is 0 as the TCB (Thread Control Block) comes first.
 pub const TLS_DTV_OFFSET: usize = 0;
 
+/// Relative relocation type - add base address to relative offset.
 pub const REL_RELATIVE: u32 = R_X86_64_RELATIVE;
+/// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_X86_64_GLOB_DAT;
+/// TLS DTPMOD relocation type - set to TLS module ID.
 pub const REL_DTPMOD: u32 = R_X86_64_DTPMOD64;
+/// Symbolic relocation type - set to absolute symbol address.
 pub const REL_SYMBOLIC: u32 = R_X86_64_64;
+/// PLT jump slot relocation type - set PLT entry to symbol address.
 pub const REL_JUMP_SLOT: u32 = R_X86_64_JUMP_SLOT;
+/// TLS DTPOFF relocation type - set to TLS offset relative to DTV.
 pub const REL_DTPOFF: u32 = R_X86_64_DTPOFF64;
+/// IRELATIVE relocation type - call function to get address.
 pub const REL_IRELATIVE: u32 = R_X86_64_IRELATIVE;
+/// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_X86_64_COPY;
+/// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_X86_64_TPOFF64;
 
+/// Offset in GOT for dynamic library handle.
 pub(crate) const DYLIB_OFFSET: usize = 1;
+/// Offset in GOT for resolver function pointer.
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
+/// Size of each PLT entry in bytes.
 pub(crate) const PLT_ENTRY_SIZE: usize = 16;
 
+/// Template for PLT entries.
+/// Each PLT entry contains:
+/// - endbr64 instruction for CET (Control-flow Enforcement Technology)
+/// - jmp instruction to jump through GOT entry
+/// - padding bytes
 pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
     0xf3, 0x0f, 0x1e, 0xfa, // endbr64
     0xff, 0x25, 0, 0, 0, 0, // jmp *GOTPLT+idx(%rip)
     0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // (padding)
 ];
 
+/// Dynamic linker runtime resolver for x86-64 PLT entries.
+///
+/// This function is called when a PLT entry needs to resolve a symbol address
+/// at runtime. It saves the current register state, calls the dynamic linker
+/// resolution function, and then restores the state before jumping to the
+/// resolved function.
+///
+/// The function preserves all caller-saved registers and SIMD registers
+/// to ensure compatibility with various calling conventions.
+///
+/// # Safety
+/// This function uses naked assembly and must be called with the correct
+/// stack layout set up by the PLT stub code.
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
@@ -100,9 +139,23 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     )
 }
 
+/// x86-64 ELF relocator implementation.
+///
+/// This struct implements the `StaticReloc` trait to provide x86-64 specific
+/// relocation processing for ELF files. It handles various relocation types
+/// including absolute addresses, PC-relative offsets, GOT entries, and PLT entries.
 pub(crate) struct X86_64Relocator;
 
 /// Map x86_64 relocation type value to human readable name.
+///
+/// This function converts numeric relocation type constants to their
+/// corresponding string names for debugging and error reporting purposes.
+///
+/// # Arguments
+/// * `r_type` - The numeric relocation type value
+///
+/// # Returns
+/// A static string containing the relocation type name, or "UNKNOWN" for unrecognized types.
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_X86_64_NONE => "R_X86_64_NONE",
@@ -123,11 +176,30 @@ pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
 }
 
 impl StaticReloc for X86_64Relocator {
+    /// Perform x86-64 specific ELF relocation.
+    ///
+    /// This method handles various x86-64 relocation types including:
+    /// - R_X86_64_64: Absolute 64-bit address
+    /// - R_X86_64_PC32: 32-bit PC-relative offset
+    /// - R_X86_64_PLT32: 32-bit PLT entry offset
+    /// - R_X86_64_GOTPCREL: 32-bit GOT entry offset
+    /// - R_X86_64_32/R_X86_64_32S: 32-bit absolute addresses
+    ///
+    /// # Arguments
+    /// * `core` - The ELF core image being relocated
+    /// * `rel_type` - The relocation entry to process
+    /// * `pltgot` - PLT/GOT section for managing procedure linkage
+    /// * `scope` - Array of loaded core images for symbol resolution
+    /// * `pre_find` - Pre-resolution symbol lookup
+    /// * `post_find` - Post-resolution symbol lookup
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or an error if relocation fails
     fn relocate<PreS, PostS>(
-        core: &crate::format::ElfModule<()>,
+        core: &crate::image::ElfCore<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[crate::format::LoadedModule<()>],
+        scope: &[crate::image::LoadedCore<()>],
         pre_find: &PreS,
         post_find: &PostS,
     ) -> crate::Result<()>
@@ -238,10 +310,33 @@ impl StaticReloc for X86_64Relocator {
         Ok(())
     }
 
+    /// Check if a relocation type requires a GOT entry.
+    ///
+    /// GOT (Global Offset Table) entries are needed for position-independent
+    /// references to symbols. On x86-64, GOT entries are required for:
+    /// - R_X86_64_GOTPCREL: PC-relative reference to GOT entry
+    /// - R_X86_64_PLT32: PLT entry that may need GOT indirection
+    ///
+    /// # Arguments
+    /// * `rel_type` - The relocation type to check
+    ///
+    /// # Returns
+    /// `true` if the relocation type requires a GOT entry, `false` otherwise
     fn needs_got(rel_type: u32) -> bool {
         matches!(rel_type, R_X86_64_GOTPCREL | R_X86_64_PLT32)
     }
 
+    /// Check if a relocation type requires a PLT entry.
+    ///
+    /// PLT (Procedure Linkage Table) entries are needed for function calls
+    /// that may need lazy binding. On x86-64, PLT entries are required for:
+    /// - R_X86_64_PLT32: PC-relative call through PLT
+    ///
+    /// # Arguments
+    /// * `rel_type` - The relocation type to check
+    ///
+    /// # Returns
+    /// `true` if the relocation type requires a PLT entry, `false` otherwise
     fn needs_plt(rel_type: u32) -> bool {
         rel_type == R_X86_64_PLT32
     }

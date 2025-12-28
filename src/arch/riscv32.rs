@@ -1,18 +1,33 @@
+//! RISC-V 32-bit architecture-specific ELF relocation and dynamic linking support.
+//!
+//! This module provides RISC-V 32-bit specific implementations for ELF relocation,
+//! dynamic linking, and procedure linkage table (PLT) handling.
+
 use elf::abi::*;
 
+/// The ELF machine type for RISC-V architecture.
 pub const EM_ARCH: u16 = EM_RISCV;
-/* Dynamic thread vector pointers point 0x800 past the start of each
-TLS block.  */
+/// Offset for TLS Dynamic Thread Vector.
+/// For RISC-V, the DTV pointers point 0x800 past the start of each TLS block.
 pub const TLS_DTV_OFFSET: usize = 0x800;
 
+/// Relative relocation type - add base address to relative offset.
 pub const REL_RELATIVE: u32 = R_RISCV_RELATIVE;
+/// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_RISCV_32;
+/// TLS DTPMOD relocation type - set to TLS module ID.
 pub const REL_DTPMOD: u32 = R_RISCV_TLS_DTPMOD64;
+/// Symbolic relocation type - set to absolute symbol address.
 pub const REL_SYMBOLIC: u32 = R_RISCV_32;
+/// PLT jump slot relocation type - set PLT entry to symbol address.
 pub const REL_JUMP_SLOT: u32 = R_RISCV_JUMP_SLOT;
+/// TLS DTPOFF relocation type - set to TLS offset relative to DTV.
 pub const REL_DTPOFF: u32 = R_RISCV_TLS_DTPREL32;
+/// IRELATIVE relocation type - call function to get address.
 pub const REL_IRELATIVE: u32 = R_RISCV_IRELATIVE;
+/// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_RISCV_COPY;
+/// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_RISCV_TLS_TPREL32;
 
 pub(crate) const DYLIB_OFFSET: usize = 1;

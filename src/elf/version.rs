@@ -1,4 +1,4 @@
-use crate::symbol::{ElfStringTable, SymbolTable};
+use crate::elf::{ElfStringTable, SymbolTable};
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 use elf::abi;

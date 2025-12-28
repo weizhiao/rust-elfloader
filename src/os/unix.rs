@@ -1,7 +1,7 @@
 use crate::{
     Error, Result, io_error,
-    mmap::{MapFlags, Mmap, ProtFlags},
-    reader::ElfReader,
+    os::{MapFlags, Mmap, ProtFlags},
+    input::ElfReader,
 };
 use alloc::{
     ffi::CString,

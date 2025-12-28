@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use elf_loader::{ElfFile, Loader};
+use elf_loader::{Loader, input::ElfFile};
 use libloading::Library;
 use std::path::PathBuf;
 

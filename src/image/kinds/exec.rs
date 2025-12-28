@@ -5,10 +5,11 @@
 /// synchronous loading of executable files.
 use crate::{
     LoadHook, Loader, Result,
-    format::{LoadedModule, image::common::DynamicImage},
-    mmap::Mmap,
+    elf::ElfPhdr,
+    image::{DynamicImage, ImageBuilder, LoadedCore},
+    input::{ElfReader, IntoElfReader},
+    os::Mmap,
     parse_ehdr_error,
-    reader::ElfReader,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
     segment::ElfSegments,
 };
@@ -22,7 +23,7 @@ use alloc::sync::Arc;
 use portable_atomic_util::Arc;
 
 #[derive(Clone)]
-pub struct StaticImage<D> {
+pub(crate) struct StaticImage<D> {
     pub(crate) inner: Arc<StaticImageInner<D>>,
 }
 
@@ -57,12 +58,12 @@ pub(crate) struct StaticImageInner<D> {
     pub(crate) segments: ElfSegments,
 }
 
-impl<D: 'static> Relocatable<D> for ExecImage<D> {
+impl<D: 'static> Relocatable<D> for RawExec<D> {
     type Output = LoadedExec<D>;
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedModule<D>],
+        scope: &[LoadedCore<D>],
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: PreH,
@@ -77,8 +78,8 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {
-        match self {
-            ExecImage::Dynamic(image) => {
+        match self.inner {
+            ExecImageInner::Dynamic(image) => {
                 let entry = image.entry();
                 let inner = image.relocate_impl(
                     scope,
@@ -94,7 +95,7 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
                     inner: LoadedExecInner::Dynamic(inner),
                 })
             }
-            ExecImage::Static(image) => Ok(LoadedExec {
+            ExecImageInner::Static(image) => Ok(LoadedExec {
                 entry: image.entry(),
                 inner: LoadedExecInner::Static(image),
             }),
@@ -108,7 +109,14 @@ impl<D: 'static> Relocatable<D> for ExecImage<D> {
 /// into memory but has not yet undergone relocation. It contains all the
 /// necessary information to perform relocation and prepare the executable
 /// for execution.
-pub enum ExecImage<D>
+pub struct RawExec<D>
+where
+    D: 'static,
+{
+    pub(crate) inner: ExecImageInner<D>,
+}
+
+pub(crate) enum ExecImageInner<D>
 where
     D: 'static,
 {
@@ -117,28 +125,45 @@ where
     Static(StaticImage<D>),
 }
 
-impl<D> Debug for ExecImage<D> {
-    /// Formats the [`ExecImage`] for debugging purposes.
+impl<D> Debug for RawExec<D> {
+    /// Formats the [`RawExec`] for debugging purposes.
     ///
     /// This implementation provides a debug representation that includes
-    /// the executable name and its dependencies.
+    /// the executable name.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ElfExec")
+        f.debug_struct("RawExec")
             .field("name", &self.name())
             .finish()
     }
 }
 
-impl<D: 'static> ExecImage<D> {
+impl<D: 'static> RawExec<D> {
     /// Creates a builder for relocating the executable.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
 
+    /// Returns the name of the executable.
     pub fn name(&self) -> &str {
-        match self {
-            ExecImage::Dynamic(image) => image.name(),
-            ExecImage::Static(image) => image.name(),
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.name(),
+            ExecImageInner::Static(image) => image.name(),
+        }
+    }
+
+    /// Returns the entry point of the executable.
+    pub fn entry(&self) -> usize {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.entry(),
+            ExecImageInner::Static(image) => image.entry(),
+        }
+    }
+
+    /// Returns the total length of memory that will be occupied by the executable after relocation.
+    pub fn mapped_len(&self) -> usize {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.mapped_len(),
+            ExecImageInner::Static(image) => image.inner.segments.len(),
         }
     }
 }
@@ -154,18 +179,26 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
     /// * `object` - The ELF object to load as an executable.
     ///
     /// # Returns
-    /// * `Ok(ExecImage)` - The loaded executable.
+    /// * `Ok(RawExec)` - The loaded executable.
     /// * `Err(Error)` - If loading fails.
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, ElfBinary};
+    /// use elf_loader::{Loader, input::ElfBinary};
     ///
     /// let mut loader = Loader::new();
     /// let bytes = &[]; // ELF executable bytes
     /// let exec = loader.load_exec(ElfBinary::new("my_exec", bytes)).unwrap();
     /// ```
-    pub fn load_exec(&mut self, mut object: impl ElfReader) -> Result<ExecImage<D>> {
+    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D>>
+    where
+        I: IntoElfReader<'a>,
+    {
+        let object = input.into_reader()?;
+        self.load_exec_internal(object)
+    }
+
+    pub(crate) fn load_exec_internal(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -187,8 +220,10 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
                 phdrs,
                 object,
             )?;
-            // Wrap in ElfExec and return
-            Ok(ExecImage::Dynamic(inner))
+            // Wrap in RawExec and return
+            Ok(RawExec {
+                inner: ExecImageInner::Dynamic(inner),
+            })
         } else {
             // Load as a static module without dynamic section
             let inner = Self::load_static_impl(
@@ -199,7 +234,9 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
                 phdrs,
                 object,
             )?;
-            Ok(ExecImage::Static(inner))
+            Ok(RawExec {
+                inner: ExecImageInner::Static(inner),
+            })
         }
     }
 }
@@ -219,34 +256,43 @@ pub struct LoadedExec<D> {
 
 #[derive(Clone, Debug)]
 enum LoadedExecInner<D> {
-    Dynamic(LoadedModule<D>),
+    Dynamic(LoadedCore<D>),
     Static(StaticImage<D>),
 }
 
 impl<D> LoadedExec<D> {
     /// Returns the entry point of the executable.
-    ///
-    /// # Returns
-    /// The virtual address of the entry point.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
     }
 
+    /// Returns the name of the executable.
+    #[inline]
+    pub fn name(&self) -> &str {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().name() },
+            LoadedExecInner::Static(static_image) => &static_image.inner.name,
+        }
+    }
+
+    /// Returns the total length of memory occupied by the executable.
     pub fn mapped_len(&self) -> usize {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.mapped_len(),
+            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().mapped_len() },
             LoadedExecInner::Static(static_image) => static_image.inner.segments.len(),
         }
     }
 
+    /// Returns a reference to the user-defined data associated with this executable.
     pub fn user_data(&self) -> &D {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => &module.user_data(),
+            LoadedExecInner::Dynamic(module) => unsafe { &module.core_ref().user_data() },
             LoadedExecInner::Static(static_image) => &static_image.inner.user_data,
         }
     }
 
+    /// Returns whether this executable was loaded as a static binary.
     pub fn is_static(&self) -> bool {
         match &self.inner {
             LoadedExecInner::Dynamic(_) => false,
@@ -254,10 +300,34 @@ impl<D> LoadedExec<D> {
         }
     }
 
-    pub fn module_ref(&self) -> Option<&LoadedModule<D>> {
+    /// Returns a reference to the core ELF object if this is a dynamic executable.
+    pub fn core_ref(&self) -> Option<&LoadedCore<D>> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => Some(module),
             LoadedExecInner::Static(_) => None,
         }
+    }
+}
+
+impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
+where
+    H: LoadHook<D>,
+{
+    pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {
+        // Parse all program headers
+        for phdr in phdrs {
+            self.parse_phdr(phdr)?;
+        }
+
+        let entry = self.ehdr.e_entry as usize;
+        let static_inner = StaticImageInner {
+            entry,
+            name: self.name,
+            user_data: self.user_data,
+            segments: self.segments,
+        };
+        Ok(StaticImage {
+            inner: Arc::new(static_inner),
+        })
     }
 }

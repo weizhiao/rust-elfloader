@@ -1,0 +1,198 @@
+//! Relocatable ELF file handling
+//!
+//! This module provides functionality for loading and relocating relocatable
+//! ELF files (also known as object files). These are typically .o files that
+//! contain code and data that need to be relocated before they can be executed.
+
+use crate::{
+    LoadHook, Loader, Result,
+    image::{ElfCore, LoadedCore, builder::ObjectBuilder, common::CoreInner},
+    input::{ElfReader, IntoElfReader},
+    loader::FnHandler,
+    os::Mmap,
+    relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
+    segment::section::PltGotSection,
+};
+use alloc::boxed::Box;
+use core::{borrow::Borrow, fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
+
+#[cfg(not(feature = "portable-atomic"))]
+use alloc::sync::Arc;
+#[cfg(feature = "portable-atomic")]
+use portable_atomic_util::Arc;
+
+impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
+    /// Loads a object ELF file into memory.
+    ///
+    /// This method loads a relocatable ELF file (typically a `.o` file) into memory
+    /// and prepares it for relocation. The file is not yet relocated after this
+    /// operation.
+    ///
+    /// # Arguments
+    /// * `object` - The ELF object to load.
+    ///
+    /// # Returns
+    /// * `Ok(RawObject)` - The loaded relocatable ELF file.
+    /// * `Err(Error)` - If loading fails.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use elf_loader::{Loader, input::ElfBinary};
+    ///
+    /// let mut loader = Loader::new();
+    /// let bytes = &[]; // Relocatable ELF bytes
+    /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
+    /// ```
+    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject>
+    where
+        I: IntoElfReader<'a>,
+    {
+        let object = input.into_reader()?;
+        self.load_object_internal(object)
+    }
+
+    pub(crate) fn load_object_internal(&mut self, mut object: impl ElfReader) -> Result<RawObject> {
+        let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
+        self.load_object_impl(ehdr, object)
+    }
+}
+
+impl ObjectBuilder {
+    /// Build the final RawObject
+    ///
+    /// This method constructs the final RawObject from the
+    /// components collected during the building process.
+    ///
+    /// # Returns
+    /// A RawObject instance ready for relocation
+    pub(crate) fn build(self) -> RawObject {
+        // Create the inner component structure
+        let inner = CoreInner {
+            is_init: AtomicBool::new(false),
+            name: self.name,
+            symtab: self.symtab,
+            fini: None,
+            fini_array: None,
+            fini_handler: self.fini_fn,
+            user_data: (),
+            dynamic_info: None,
+            segments: self.segments,
+        };
+
+        // Construct and return the ElfRelocatable object
+        RawObject {
+            core: ElfCore {
+                inner: Arc::new(inner),
+            },
+            pltgot: self.pltgot,
+            relocation: self.relocation,
+            mprotect: self.mprotect,
+            init_array: self.init_array,
+            init: self.init_fn,
+        }
+    }
+}
+
+/// A relocatable ELF object.
+///
+/// This structure represents a relocatable ELF file (typically a `.o` file)
+/// that has been loaded into memory and is ready for relocation. It contains
+/// all the necessary information to perform the relocation process.
+pub struct RawObject {
+    /// Core component containing basic ELF information.
+    pub(crate) core: ElfCore<()>,
+
+    /// Static relocation information.
+    pub(crate) relocation: StaticRelocation,
+
+    /// PLT/GOT section information.
+    pub(crate) pltgot: PltGotSection,
+
+    /// Memory protection function.
+    pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
+
+    /// Initialization function handler.
+    pub(crate) init: FnHandler,
+
+    /// Initialization function array.
+    pub(crate) init_array: Option<&'static [fn()]>,
+}
+
+impl Deref for RawObject {
+    type Target = ElfCore<()>;
+
+    /// Dereferences to the underlying [`ElfCore`].
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl RawObject {
+    /// Creates a builder for relocating the relocatable file.
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), ()> {
+        Relocator::new(self)
+    }
+}
+
+impl Debug for RawObject {
+    /// Formats the [`RawObject`] for debugging purposes.
+    ///
+    /// This implementation provides a debug representation that includes
+    /// the object name.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RawObject")
+            .field("core", &self.core)
+            .finish()
+    }
+}
+
+impl Relocatable<()> for RawObject {
+    type Output = LoadedObject<()>;
+
+    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+        self,
+        scope: &[LoadedCore<()>],
+        pre_find: &PreS,
+        post_find: &PostS,
+        _pre_handler: PreH,
+        _post_handler: PostH,
+        _lazy: Option<bool>,
+        _lazy_scope: Option<LazyS>,
+    ) -> Result<Self::Output>
+    where
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
+        LazyS: SymbolLookup,
+        PreH: RelocationHandler,
+        PostH: RelocationHandler,
+    {
+        let inner = self.relocate_impl(scope, pre_find, post_find)?;
+        Ok(LoadedObject { inner })
+    }
+}
+
+/// A relocated object file.
+#[derive(Debug, Clone)]
+pub struct LoadedObject<D> {
+    pub(crate) inner: LoadedCore<D>,
+}
+
+impl<D> Deref for LoadedObject<D> {
+    type Target = LoadedCore<D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<D> Borrow<LoadedCore<D>> for LoadedObject<D> {
+    fn borrow(&self) -> &LoadedCore<D> {
+        &self.inner
+    }
+}
+
+impl<D> Borrow<LoadedCore<D>> for &LoadedObject<D> {
+    fn borrow(&self) -> &LoadedCore<D> {
+        &self.inner
+    }
+}

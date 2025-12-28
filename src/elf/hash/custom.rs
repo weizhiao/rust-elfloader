@@ -4,10 +4,10 @@
 //! when standard ELF hash sections (.hash or .gnu.hash) are not available.
 //! It uses the hashbrown crate for efficient hash table operations.
 
+use super::ElfHashTable;
 use crate::{
-    arch::{ElfShdr, ElfSymbol},
-    hash::{ElfHashTable, PreCompute},
-    symbol::{ElfStringTable, SymbolInfo, SymbolTable},
+    elf::{ElfShdr, ElfSymbol},
+    elf::{ElfStringTable, PreCompute, SymbolTable, symbol::SymbolInfo},
 };
 use core::hash::{Hash, Hasher};
 use elf::abi::STT_FILE;

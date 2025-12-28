@@ -6,9 +6,8 @@
 //! symbol resolution APIs.
 
 use crate::{
-    arch::{ElfShdr, ElfSymbol},
-    dynamic::ElfDynamic,
-    hash::{HashTable, PreCompute},
+    elf::{ElfDynamic, HashTable, PreCompute},
+    elf::{ElfShdr, ElfSymbol},
 };
 use core::ffi::CStr;
 
@@ -113,7 +112,7 @@ impl<'symtab> SymbolInfo<'symtab> {
             name,
             cname: None,
             #[cfg(feature = "version")]
-            version: version.map(crate::version::SymbolVersion::new),
+            version: version.map(super::version::SymbolVersion::new),
         }
     }
 

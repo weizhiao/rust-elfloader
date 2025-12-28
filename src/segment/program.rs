@@ -1,7 +1,7 @@
 use crate::{
     Result,
-    arch::ElfPhdr,
-    mmap::{MapFlags, Mmap, ProtFlags},
+    elf::ElfPhdr,
+    os::{MapFlags, Mmap, ProtFlags},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -21,14 +21,14 @@ fn segment_prot(p_flag: u32) -> ProtFlags {
 }
 
 /// Manages segments parsed from ELF program headers
-pub(crate) struct PhdrSegments<'phdr> {
+pub(crate) struct ProgramSegments<'phdr> {
     phdrs: &'phdr [ElfPhdr],
     segments: Vec<ElfSegment>,
     is_dylib: bool,
     use_file: bool,
 }
 
-impl<'phdr> PhdrSegments<'phdr> {
+impl<'phdr> ProgramSegments<'phdr> {
     /// Create a new PhdrSegments instance
     pub(crate) fn new(phdrs: &'phdr [ElfPhdr], is_dylib: bool, use_file: bool) -> Self {
         Self {
@@ -74,7 +74,7 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (Option<usize>, usize, u
     )
 }
 
-impl SegmentBuilder for PhdrSegments<'_> {
+impl SegmentBuilder for ProgramSegments<'_> {
     /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let (addr, len, min_vaddr) = parse_segments(self.phdrs, self.is_dylib);

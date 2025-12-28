@@ -1,9 +1,10 @@
 use crate::{
-    ElfModule, Result,
-    arch::{ElfRelType, StaticRelocator},
-    format::{LoadedModule, ObjectImage},
+    Result,
+    arch::StaticRelocator,
+    elf::ElfRelType,
+    image::{ElfCore, LoadedCore, RawObject},
     relocation::SymbolLookup,
-    segment::shdr::PltGotSection,
+    segment::section::PltGotSection,
 };
 use alloc::{boxed::Box, vec::Vec};
 
@@ -19,13 +20,13 @@ impl StaticRelocation {
     }
 }
 
-impl ObjectImage {
+impl RawObject {
     pub(crate) fn relocate_impl<PreS, PostS>(
         mut self,
-        scope: &[LoadedModule<()>],
+        scope: &[LoadedCore<()>],
         pre_find: &PreS,
         post_find: &PostS,
-    ) -> Result<LoadedModule<()>>
+    ) -> Result<LoadedCore<()>>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -44,16 +45,16 @@ impl ObjectImage {
         }
         (self.mprotect)()?;
         (self.init)(None, self.init_array);
-        Ok(unsafe { LoadedModule::from_core(self.core) })
+        Ok(unsafe { LoadedCore::from_core(self.core) })
     }
 }
 
 pub(crate) trait StaticReloc {
     fn relocate<PreS, PostS>(
-        core: &ElfModule<()>,
+        core: &ElfCore<()>,
         rel_type: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[LoadedModule<()>],
+        scope: &[LoadedCore<()>],
         pre_find: &PreS,
         post_find: &PostS,
     ) -> Result<()>

@@ -4,12 +4,8 @@
 //! While less efficient than the GNU hash table, it is still widely supported and
 //! used in many ELF implementations.
 
-use crate::{
-    arch::ElfSymbol,
-    hash::{ElfHashTable, PreCompute},
-    symbol::{SymbolInfo, SymbolTable},
-};
-
+use super::ElfHashTable;
+use crate::elf::{ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
 /// Header structure for SYSV ELF hash tables
 ///
 /// This structure represents the header of a SYSV hash table, which contains

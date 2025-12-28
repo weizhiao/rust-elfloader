@@ -1,52 +1,26 @@
 use crate::{
-    ElfModule, LoadHook, LoadHookContext, Result, SymbolLookup,
-    arch::{Dyn, ElfPhdr, ElfRelType},
-    dynamic::ElfDynamic,
-    ehdr::ElfHeader,
-    format::{
-        component::{ElfType, ModuleInner},
-        image::exec::{StaticImage, StaticImageInner},
-    },
+    LoadHook, Result,
+    elf::{Dyn, ElfPhdr, ElfRelType},
+    elf::{ElfDynamic, ElfPhdrs, SymbolTable},
+    image::{ElfCore, ImageBuilder, common::CoreInner},
     loader::FnHandler,
-    mmap::Mmap,
-    relocation::DynamicRelocation,
+    os::Mmap,
+    relocation::{DynamicRelocation, SymbolLookup},
     segment::{ELFRelro, ElfSegments},
-    symbol::SymbolTable,
 };
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     cell::Cell,
-    ffi::{CStr, c_char},
-    marker::PhantomData,
+    ffi::CStr,
     ops::{Deref, DerefMut},
     ptr::{NonNull, null},
     sync::atomic::AtomicBool,
 };
-use elf::abi::{PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
-
-/// Internal representation of ELF program headers
-#[derive(Clone)]
-pub(crate) enum ElfPhdrs {
-    /// Program headers mapped from memory
-    Mmap(&'static [ElfPhdr]),
-
-    /// Program headers stored in a vector
-    Vec(Vec<ElfPhdr>),
-}
-
-impl ElfPhdrs {
-    pub(crate) fn as_slice(&self) -> &[ElfPhdr] {
-        match self {
-            ElfPhdrs::Mmap(phdrs) => phdrs,
-            ElfPhdrs::Vec(phdrs) => phdrs,
-        }
-    }
-}
 
 pub(crate) struct DynamicInfo {
     pub(crate) dynamic_ptr: NonNull<Dyn>,
@@ -93,7 +67,7 @@ struct ElfExtraData {
 /// during the relocation process.
 struct LazyData<D> {
     /// Core component containing the basic ELF object information
-    module: ElfModule<D>,
+    module: ElfCore<D>,
     /// Extra data needed for relocation
     extra: ElfExtraData,
 }
@@ -108,9 +82,6 @@ enum State<D> {
 
     /// Uninitialized state with all necessary data to perform initialization
     Uninit {
-        /// Indicates the type of the ELF file
-        elf_type: ElfType,
-
         /// Program headers
         phdrs: ElfPhdrs,
 
@@ -159,7 +130,6 @@ impl<D> State<D> {
                 init_handler,
                 fini_handler,
                 phdrs,
-                elf_type,
             } => {
                 // If we have a dynamic section, parse it and prepare relocation data
 
@@ -214,8 +184,8 @@ impl<D> State<D> {
                             .runpath_off
                             .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
                     },
-                    module: ElfModule {
-                        inner: Arc::new(ModuleInner {
+                    module: ElfCore {
+                        inner: Arc::new(CoreInner {
                             is_init: AtomicBool::new(false),
                             name,
                             symtab,
@@ -224,7 +194,6 @@ impl<D> State<D> {
                             fini_handler,
                             segments,
                             user_data,
-                            elf_type,
                             dynamic_info: Some(Arc::new(DynamicInfo {
                                 dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                                 pltrel: NonNull::new(
@@ -332,7 +301,7 @@ impl<D> DerefMut for LazyParse<D> {
 /// ELF objects, whether they are dynamic libraries or executables.
 /// It contains basic information like entry point, name, and program headers,
 /// as well as lazily parsed data required for relocation and symbol lookup.
-pub struct DynamicImage<D>
+pub(crate) struct DynamicImage<D>
 where
     D: 'static,
 {
@@ -350,46 +319,30 @@ where
 
 impl<D> DynamicImage<D> {
     /// Gets the entry point of the ELF object.
-    ///
-    /// # Returns
-    /// The virtual address of the entry point.
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
     }
 
     /// Gets the core component reference of the ELF object.
-    ///
-    /// # Returns
-    /// A reference to the [`ElfModule`].
     #[inline]
-    pub fn module_ref(&self) -> &ElfModule<D> {
+    pub fn core_ref(&self) -> &ElfCore<D> {
         &self.data.module
     }
 
     /// Gets the core component of the ELF object.
-    ///
-    /// # Returns
-    /// A cloned [`ElfModule`].
     #[inline]
-    pub fn module(&self) -> ElfModule<D> {
-        self.module_ref().clone()
+    pub fn core(&self) -> ElfCore<D> {
+        self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
-    ///
-    /// # Returns
-    /// The [`ElfModule`].
     #[inline]
-    pub fn into_module(self) -> ElfModule<D> {
-        self.module()
+    pub fn into_core(self) -> ElfCore<D> {
+        self.core()
     }
 
     /// Whether lazy binding is enabled for the current ELF object
-    ///
-    /// # Returns
-    /// * `true` - If lazy binding is enabled
-    /// * `false` - If lazy binding is disabled
     #[inline]
     pub fn is_lazy(&self) -> bool {
         self.data.extra.lazy
@@ -423,18 +376,12 @@ impl<D> DynamicImage<D> {
     }
 
     /// Gets the name of the ELF object
-    ///
-    /// # Returns
-    /// A string slice containing the ELF object name
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Gets the program headers of the ELF object
-    ///
-    /// # Returns
-    /// A slice of the program headers
     pub fn phdrs(&self) -> &[ElfPhdr] {
         match &self.phdrs {
             ElfPhdrs::Mmap(phdrs) => &phdrs,
@@ -488,26 +435,36 @@ impl<D> DynamicImage<D> {
         self.data.module.user_data_mut()
     }
 
+    /// Gets the symbol table of the ELF object
+    #[inline]
     pub(crate) fn symtab(&self) -> &SymbolTable {
         self.data.module.symtab()
     }
 
+    /// Gets the base address of the loaded ELF object
     pub fn base(&self) -> usize {
         self.data.module.base()
     }
 
+    /// Gets the total length of mapped memory for the ELF object
     pub fn mapped_len(&self) -> usize {
         self.data.module.segments().len()
     }
 
+    /// Gets the list of needed library names from the dynamic section
     pub fn needed_libs(&self) -> &[&str] {
         &self.data.extra.needed_libs
     }
 
+    /// Gets the dynamic section pointer
+    ///
+    /// # Returns
+    /// An optional NonNull pointer to the dynamic section
     pub fn dynamic_ptr(&self) -> Option<NonNull<Dyn>> {
         self.data.module.dynamic_ptr()
     }
 
+    /// Gets a reference to the user data
     pub fn user_data(&self) -> &D {
         self.data.module.user_data()
     }
@@ -530,194 +487,24 @@ impl<D> DynamicImage<D> {
     }
 }
 
-/// Builder for creating relocated ELF objects
-///
-/// This structure is used internally during the loading process to collect
-/// and organize the various components of a relocated ELF file before
-/// building the final RelocatedCommonPart object.
-pub(crate) struct ImageBuilder<'hook, H, M: Mmap, D = ()>
-where
-    H: LoadHook<D>,
-    D: Default,
-{
-    /// Hook function for processing program headers (always present)
-    hook: &'hook H,
-
-    /// Mapped program headers
-    phdr_mmap: Option<&'static [ElfPhdr]>,
-
-    /// Name of the ELF file
-    name: String,
-
-    /// ELF header
-    ehdr: ElfHeader,
-
-    /// GNU_RELRO segment information
-    relro: Option<ELFRelro>,
-
-    /// Pointer to the dynamic section
-    dynamic_ptr: Option<NonNull<Dyn>>,
-
-    /// User-defined data
-    user_data: D,
-
-    /// Memory segments
-    segments: ElfSegments,
-
-    /// Initialization function handler
-    init_fn: FnHandler,
-
-    /// Finalization function handler
-    fini_fn: FnHandler,
-
-    /// Pointer to the interpreter path (PT_INTERP)
-    interp: Option<NonNull<c_char>>,
-
-    /// Phantom data to maintain Mmap type information
-    _marker: PhantomData<M>,
-}
-
 impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
 where
     H: LoadHook<D>,
 {
-    /// Create a new ImageBuilder
-    ///
-    /// # Arguments
-    /// * `hook` - Hook function for processing program headers
-    /// * `segments` - Memory segments of the ELF file
-    /// * `name` - Name of the ELF file
-    /// * `ehdr` - ELF header
-    /// * `init_fn` - Initialization function handler
-    /// * `fini_fn` - Finalization function handler
-    ///
-    /// # Returns
-    /// A new DynamicBuilder instance
-    pub(crate) fn new(
-        hook: &'hook H,
-        segments: ElfSegments,
-        name: String,
-        ehdr: ElfHeader,
-        init_fn: FnHandler,
-        fini_fn: FnHandler,
-    ) -> Self {
-        Self {
-            hook,
-            phdr_mmap: None,
-            name,
-            ehdr,
-            relro: None,
-            dynamic_ptr: None,
-            segments,
-            user_data: D::default(),
-            init_fn,
-            fini_fn,
-            interp: None,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Parse a program header and extract relevant information
-    ///
-    /// This method processes a program header and extracts information
-    /// needed for relocation, such as the dynamic section, GNU_RELRO
-    /// segment, and interpreter path.
-    ///
-    /// # Arguments
-    /// * `phdr` - The program header to parse
-    ///
-    /// # Returns
-    /// * `Ok(())` - If parsing succeeds
-    /// * `Err(Error)` - If parsing fails
-    fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
-        let mut ctx = LoadHookContext::new(&self.name, phdr, &self.segments, &mut self.user_data);
-        self.hook.call(&mut ctx)?;
-
-        // Process different program header types
-        match phdr.p_type {
-            // Parse the .dynamic section
-            PT_DYNAMIC => {
-                self.dynamic_ptr =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_paddr as usize)).unwrap())
-            }
-
-            // Store GNU_RELRO segment information
-            PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
-
-            // Store program header table mapping
-            PT_PHDR => {
-                self.phdr_mmap = Some(
-                    self.segments
-                        .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
-                );
-            }
-
-            // Store interpreter path
-            PT_INTERP => {
-                self.interp =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
-            }
-
-            // Ignore other program header types
-            _ => {}
-        };
-        Ok(())
-    }
-
-    /// Create program headers from the parsed data
-    ///
-    /// This method creates the appropriate program header representation
-    /// based on whether they are mapped in memory or need to be stored
-    /// in a vector.
-    ///
-    /// # Arguments
-    /// * `phdrs` - Slice of program headers
-    ///
-    /// # Returns
-    /// An ElfPhdrs enum containing either mapped or vector-based headers
-    fn create_phdrs(&self, phdrs: &[ElfPhdr]) -> ElfPhdrs {
-        let (phdr_start, phdr_end) = self.ehdr.phdr_range();
-
-        // Get mapped program headers or create them from loaded segments
-        self.phdr_mmap
-            .or_else(|| {
-                phdrs
-                    .iter()
-                    .filter(|phdr| phdr.p_type == PT_LOAD)
-                    .find_map(|phdr| {
-                        let cur_range =
-                            phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
-                        if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
-                            return Some(self.segments.get_slice::<ElfPhdr>(
-                                phdr.p_vaddr as usize + phdr_start - cur_range.start,
-                                self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
-                            ));
-                        }
-                        None
-                    })
-            })
-            .map(|phdrs| ElfPhdrs::Mmap(phdrs))
-            .unwrap_or_else(|| ElfPhdrs::Vec(Vec::from(phdrs)))
-    }
-
-    /// Build the final RelocatedCommonPart object
+    /// Build the final DynamicImage object
     ///
     /// This method completes the building process by parsing all program
-    /// headers and constructing the final RelocatedCommonPart object.
+    /// headers and constructing the final DynamicImage object.
     ///
     /// # Arguments
     /// * `phdrs` - Slice of program headers
     ///
     /// # Returns
-    /// * `Ok(RelocatedCommonPart)` - The built relocated ELF object
+    /// * `Ok(DynamicImage)` - The built relocated ELF object
     /// * `Err(Error)` - If building fails
     pub(crate) fn build_dynamic(mut self, phdrs: &[ElfPhdr]) -> Result<DynamicImage<D>> {
         // Determine if this is a dynamic library
-        let elf_type = if self.ehdr.is_dylib() {
-            ElfType::Dylib
-        } else {
-            ElfType::Exec
-        };
+        let is_dylib = self.ehdr.is_dylib();
 
         // Parse all program headers
         for phdr in phdrs {
@@ -731,12 +518,7 @@ where
 
         // Build and return the relocated common part
         Ok(DynamicImage {
-            entry: self.ehdr.e_entry as usize
-                + if elf_type.is_dylib() {
-                    self.segments.base()
-                } else {
-                    0
-                },
+            entry: self.ehdr.e_entry as usize + if is_dylib { self.segments.base() } else { 0 },
             interp: self
                 .interp
                 .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
@@ -744,7 +526,6 @@ where
             phdrs: phdrs.clone(),
             data: LazyParse {
                 state: Cell::new(State::Uninit {
-                    elf_type,
                     phdrs,
                     init_handler: self.init_fn,
                     fini_handler: self.fini_fn,
@@ -755,24 +536,6 @@ where
                     user_data: self.user_data,
                 }),
             },
-        })
-    }
-
-    pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {
-        // Parse all program headers
-        for phdr in phdrs {
-            self.parse_phdr(phdr)?;
-        }
-
-        let entry = self.ehdr.e_entry as usize;
-        let static_inner = StaticImageInner {
-            entry,
-            name: self.name,
-            user_data: self.user_data,
-            segments: self.segments,
-        };
-        Ok(StaticImage {
-            inner: Arc::new(static_inner),
         })
     }
 }
