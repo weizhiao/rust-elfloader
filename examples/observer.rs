@@ -51,7 +51,7 @@ impl RelocationObserver for Observer {
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
-        if event.symbol_name() == "print" {
+        if event.symbol_name() == b"print" {
             event.set_resolved_addr(VmAddr::from_ptr(host_print as *const ()));
         }
         Ok(())

@@ -17,7 +17,7 @@ pub(crate) trait DependencySource {
     fn search(&self) -> &ModuleSearch;
     fn source_id(&self) -> ModuleSourceId;
     fn needed_len(&self) -> usize;
-    fn needed(&self, index: usize) -> Option<&str>;
+    fn needed(&self, index: usize) -> Option<&[u8]>;
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -39,7 +39,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     #[inline]
-    fn needed(&self, index: usize) -> Option<&str> {
+    fn needed(&self, index: usize) -> Option<&[u8]> {
         self.needed_libs().get(index).copied()
     }
 }
@@ -61,7 +61,7 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
     }
 
     #[inline]
-    fn needed(&self, index: usize) -> Option<&str> {
+    fn needed(&self, index: usize) -> Option<&[u8]> {
         self.needed_lib(index)
     }
 }
@@ -76,7 +76,7 @@ pub enum ResolveInput<'a, Root> {
     /// One `DT_NEEDED` edge of an already scanned module.
     Dependency {
         /// Library name stored in the owner's `DT_NEEDED` entry.
-        needed: &'a str,
+        needed: &'a [u8],
     },
 }
 
@@ -106,7 +106,7 @@ impl<'a, Root> ResolveRequest<'a, Root> {
 
     #[inline]
     pub(crate) const fn dependency(
-        needed: &'a str,
+        needed: &'a [u8],
         search: &'a ModuleSearch,
         tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,

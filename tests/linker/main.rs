@@ -166,7 +166,7 @@ impl KeyResolver for ModuleDependencyResolver {
                 )))
             }
             ResolveInput::Dependency { needed } => {
-                assert_eq!(*needed, DEP_KEY);
+                assert_eq!(*needed, DEP_KEY.as_bytes());
                 Ok(ResolvedKey::module(self.dep.clone(), Vec::new()))
             }
         }
@@ -193,7 +193,7 @@ impl KeyResolver for SyntheticDependencyResolver {
                 )))
             }
             ResolveInput::Dependency { needed } => {
-                assert_eq!(*needed, "dep");
+                assert_eq!(*needed, b"dep");
                 Ok(ResolvedKey::module(
                     SyntheticModule::empty("dep"),
                     Vec::new(),

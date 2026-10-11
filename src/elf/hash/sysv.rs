@@ -12,7 +12,6 @@ use crate::{
 };
 use core::mem::size_of;
 
-use super::sysv_hash;
 /// Header structure for SYSV ELF hash tables
 ///
 /// This structure represents the header of a SYSV hash table, which contains
@@ -154,7 +153,7 @@ impl ElfHash {
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         // Get or compute the hash value for the symbol
-        let hash = lookup.sysv_hash(|name| sysv_hash(name.as_bytes()));
+        let hash = lookup.sysv_hash();
 
         let buckets = self.buckets.as_slice();
         let chains = self.chains.as_slice();
@@ -177,13 +176,11 @@ impl ElfHash {
 
             // Check if this is the symbol we're looking for
             #[cfg(feature = "version")]
-            if sym_name == lookup.name().as_bytes()
-                && table.check_match(chain_idx, lookup.version())
-            {
+            if sym_name == lookup.name() && table.check_match(chain_idx, lookup.version()) {
                 return Some(cur_symbol);
             }
             #[cfg(not(feature = "version"))]
-            if sym_name == lookup.name().as_bytes() {
+            if sym_name == lookup.name() {
                 return Some(cur_symbol);
             }
 

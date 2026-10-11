@@ -20,7 +20,7 @@ struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
 
 /// GNU unique symbol state shared by one linker context.
 pub(crate) struct SymbolRegistry<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    unique: Mutex<BTreeMap<Box<str>, UniqueDef<Arch, Tls>>>,
+    unique: Mutex<BTreeMap<Box<[u8]>, UniqueDef<Arch, Tls>>>,
     pending_pins: Mutex<Vec<ModuleInstanceId>>,
 }
 
@@ -48,7 +48,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
 
     fn resolve_unique<'lib>(
         &self,
-        name: &str,
+        name: &[u8],
         symbol: &ElfSymbol<Arch::Layout>,
         source: &ModuleHandle<Arch, Tls>,
     ) -> SymDef<'lib, Arch, Tls> {
@@ -210,7 +210,7 @@ where
             "binding file [{}] to [{}]: symbol [{}]",
             self.source.name().escape_ascii(),
             source.name().escape_ascii(),
-            entry.name()
+            entry.name().escape_ascii()
         );
         Some(symbol)
     }
@@ -270,7 +270,7 @@ where
 
     fn bind<'find>(
         &self,
-        name: &str,
+        name: &[u8],
         symbol: &'find ElfSymbol<Arch::Layout>,
         source: &'find ModuleHandle<Arch, Tls>,
     ) -> SymDef<'find, Arch, Tls> {
@@ -285,7 +285,7 @@ where
     #[inline(never)]
     fn bind_unique<'find>(
         &self,
-        name: &str,
+        name: &[u8],
         symbol: &'find ElfSymbol<Arch::Layout>,
         source: &'find ModuleHandle<Arch, Tls>,
     ) -> SymDef<'find, Arch, Tls> {
@@ -363,7 +363,7 @@ mod tests {
             .exports()
             .lookup(&mut lookup)
             .expect("test module must contain a symbol");
-        SymbolEntry::new(symbol, SymbolInfo::from_str("value", None))
+        SymbolEntry::new(symbol, SymbolInfo::from_bytes(b"value", None))
     }
 
     fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LocalScope {

@@ -288,7 +288,7 @@ mod tests {
             .alloc_sections()
             .iter()
             .copied()
-            .find(|section| plan.memory_layout().section(*section).name() == ".data")
+            .find(|section| plan.memory_layout().section(*section).name() == b".data")
             .unwrap();
 
         let arena = plan.memory_layout_mut().create_arena(ArenaDescriptor::new(

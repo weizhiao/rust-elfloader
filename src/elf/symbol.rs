@@ -5,7 +5,7 @@
 //! It serves as a bridge between the raw ELF data structures and the higher-level
 //! symbol resolution APIs.
 
-use super::hash::{PreCompute, SymbolHash};
+use super::hash::{PreCompute, SymbolHash, sysv_hash};
 use super::{
     layout::{ElfLayout, NativeElfLayout},
     raw::ElfSymRaw,
@@ -443,33 +443,6 @@ impl ElfStringTable {
         CStr::from_bytes_until_nul(bytes)
             .expect("ELF string table entry is missing a NUL terminator")
     }
-
-    /// Convert a C-style string to a Rust string slice
-    ///
-    /// # Arguments
-    /// * `s` - The C-style string to convert
-    ///
-    /// # Returns
-    /// A string slice containing the same data as the C-style string
-    #[inline]
-    fn convert_cstr(s: &CStr) -> &str {
-        core::str::from_utf8(s.to_bytes()).expect("ELF string table entry is not valid UTF-8")
-    }
-
-    /// Get a Rust string slice from the string table at the specified offset
-    ///
-    /// This method combines [get_cstr] and [convert_cstr] to directly return
-    /// a Rust string slice for the string at the specified offset.
-    ///
-    /// # Arguments
-    /// * `offset` - Byte offset within the string table where the string starts
-    ///
-    /// # Returns
-    /// A static reference to the Rust string at the specified offset
-    #[inline]
-    pub(crate) fn get_str(&self, offset: usize) -> &'static str {
-        Self::convert_cstr(self.get_cstr(offset))
-    }
 }
 
 /// Read-only symbol table view shared by dynamic and relocatable symbol tables.
@@ -540,7 +513,7 @@ impl<L: ElfLayout, H: Clone> Clone for SymbolTable<L, H> {
 #[derive(Clone)]
 pub(crate) struct SymbolInfo<'symtab> {
     /// The symbol name.
-    name: &'symtab str,
+    name: &'symtab [u8],
 
     /// Optional symbol version information.
     #[cfg(feature = "version")]
@@ -550,7 +523,7 @@ pub(crate) struct SymbolInfo<'symtab> {
 impl<'symtab> Debug for SymbolInfo<'symtab> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut debug = f.debug_struct("SymbolInfo");
-        debug.field("name", &self.name);
+        debug.field("name", &self.name.escape_ascii());
         #[cfg(feature = "version")]
         {
             if let Some(v) = &self.version {
@@ -564,7 +537,7 @@ impl<'symtab> Debug for SymbolInfo<'symtab> {
 impl<'symtab> SymbolInfo<'symtab> {
     /// Creates a new `SymbolInfo` from a name and optional version.
     #[allow(unused_variables)]
-    pub(crate) fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
+    pub(crate) fn from_bytes(name: &'symtab [u8], version: Option<&'symtab [u8]>) -> Self {
         SymbolInfo {
             name,
             #[cfg(feature = "version")]
@@ -574,7 +547,7 @@ impl<'symtab> SymbolInfo<'symtab> {
 
     /// Returns the name of the symbol.
     #[inline]
-    pub(crate) fn name(&self) -> &'symtab str {
+    pub(crate) fn name(&self) -> &'symtab [u8] {
         self.name
     }
 
@@ -586,6 +559,9 @@ impl<'symtab> SymbolInfo<'symtab> {
 }
 
 /// Symbol lookup request plus reusable hash precomputation state.
+///
+/// Names and versions are matched as raw bytes without a trailing NUL.
+/// UTF-8 strings and byte slices are both accepted.
 pub struct SymbolLookup<'symbol> {
     info: SymbolInfo<'symbol>,
     precompute: PreCompute,
@@ -594,15 +570,21 @@ pub struct SymbolLookup<'symbol> {
 impl<'symbol> SymbolLookup<'symbol> {
     /// Creates a lookup request for an unversioned symbol name.
     #[inline]
-    pub fn new(name: &'symbol str) -> Self {
-        Self::from_info(SymbolInfo::from_str(name, None))
+    pub fn new(name: &'symbol (impl AsRef<[u8]> + ?Sized)) -> Self {
+        Self::from_info(SymbolInfo::from_bytes(name.as_ref(), None))
     }
 
     #[cfg(feature = "version")]
     /// Creates a lookup request for a symbol name constrained to one version.
     #[inline]
-    pub fn with_version(name: &'symbol str, version: &'symbol str) -> Self {
-        Self::from_info(SymbolInfo::from_str(name, Some(version)))
+    pub fn with_version(
+        name: &'symbol (impl AsRef<[u8]> + ?Sized),
+        version: &'symbol (impl AsRef<[u8]> + ?Sized),
+    ) -> Self {
+        Self::from_info(SymbolInfo::from_bytes(
+            name.as_ref(),
+            Some(version.as_ref()),
+        ))
     }
 
     #[inline]
@@ -611,16 +593,16 @@ impl<'symbol> SymbolLookup<'symbol> {
         Self { info, precompute }
     }
 
-    /// Returns the requested symbol name.
+    /// Returns the requested symbol name as bytes without a trailing NUL.
     #[inline]
-    pub fn name(&self) -> &'symbol str {
+    pub fn name(&self) -> &'symbol [u8] {
         self.info.name()
     }
 
     /// Returns the requested GNU symbol version, when versioned lookup is
     /// enabled and the request carries one.
     #[inline]
-    pub(crate) fn version_name(&self) -> Option<&str> {
+    pub(crate) fn version_name(&self) -> Option<&[u8]> {
         #[cfg(feature = "version")]
         {
             self.info.version().map(|version| version.name())
@@ -637,11 +619,11 @@ impl<'symbol> SymbolLookup<'symbol> {
     }
 
     #[inline]
-    pub(crate) fn sysv_hash(&mut self, hash: impl FnOnce(&str) -> u32) -> u32 {
+    pub(crate) fn sysv_hash(&mut self) -> u32 {
         if let Some(hash) = self.precompute.hash {
             hash
         } else {
-            let hash = hash(self.name());
+            let hash = sysv_hash(self.name());
             self.precompute.hash = Some(hash);
             hash
         }
@@ -649,11 +631,11 @@ impl<'symbol> SymbolLookup<'symbol> {
 
     #[inline]
     #[cfg(feature = "object")]
-    pub(crate) fn custom_hash(&mut self, hash: impl FnOnce(&str) -> u64) -> u64 {
+    pub(crate) fn custom_hash(&mut self) -> u64 {
         if let Some(hash) = self.precompute.custom {
             hash
         } else {
-            let hash = hash(self.name());
+            let hash = crate::object::CustomHash::<&[u8]>::hash(self.name());
             self.precompute.custom = Some(hash);
             hash
         }
@@ -690,9 +672,9 @@ impl<'symtab, L: ElfLayout> SymbolEntry<'symtab, L> {
         &self.info
     }
 
-    /// Returns the symbol name.
+    /// Returns the symbol name as bytes without a trailing NUL.
     #[inline]
-    pub fn name(&self) -> &'symtab str {
+    pub fn name(&self) -> &'symtab [u8] {
         self.info.name()
     }
 }
@@ -729,7 +711,7 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
         SymbolEntry::new(
             symbol,
             SymbolInfo {
-                name: self.strtab.get_str(symbol.st_name()),
+                name: self.strtab.get_cstr(symbol.st_name()).to_bytes(),
                 #[cfg(feature = "version")]
                 version: self.get_requirement(index),
             },
@@ -746,7 +728,7 @@ impl<'symtab, L: ElfLayout, H: SymbolHash<L>> SymbolTableView<'symtab, L, H> {
 
 impl<'symtab, L: ElfLayout> SymbolTableView<'symtab, L> {
     /// Looks up a symbol by its name.
-    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&'symtab ElfSymbol<L>> {
+    pub fn lookup_by_name(&self, name: impl AsRef<[u8]>) -> Option<&'symtab ElfSymbol<L>> {
         let name = name.as_ref();
         let mut lookup = SymbolLookup::new(name);
         self.lookup(&mut lookup)

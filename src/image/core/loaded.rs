@@ -169,11 +169,13 @@ impl<
     /// * `Some(symbol)` - If the symbol is found
     /// * `None` - If the symbol is not found
     #[inline]
-    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+    pub unsafe fn get<'lib, T>(&'lib self, name: impl AsRef<[u8]>) -> Option<Symbol<'lib, T>> {
         unsafe { self.try_get(name).ok().flatten() }
     }
 
     /// Tries to get a pointer to a function or static variable by symbol name.
+    ///
+    /// Names are raw bytes without a trailing NUL; strings are also accepted.
     ///
     /// This resolves IFUNC symbols through the executor retained during relocation.
     ///
@@ -181,8 +183,11 @@ impl<
     ///
     /// `T` must match the type and ABI of the resolved symbol.
     #[inline]
-    pub unsafe fn try_get<'lib, T>(&'lib self, name: &str) -> Result<Option<Symbol<'lib, T>>> {
-        let addr = lookup_symbol(self, &mut SymbolLookup::new(name))?;
+    pub unsafe fn try_get<'lib, T>(
+        &'lib self,
+        name: impl AsRef<[u8]>,
+    ) -> Result<Option<Symbol<'lib, T>>> {
+        let addr = lookup_symbol(self, &mut SymbolLookup::new(name.as_ref()))?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
@@ -212,13 +217,15 @@ impl<
     #[inline]
     pub unsafe fn get_version<'lib, T>(
         &'lib self,
-        name: &str,
-        version: &str,
+        name: impl AsRef<[u8]>,
+        version: impl AsRef<[u8]>,
     ) -> Option<Symbol<'lib, T>> {
         unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 
     /// Tries to load a versioned symbol from the ELF object.
+    ///
+    /// Names and versions are raw bytes without a trailing NUL.
     ///
     /// This resolves IFUNC symbols through the executor retained during relocation.
     ///
@@ -229,10 +236,13 @@ impl<
     #[inline]
     pub unsafe fn try_get_version<'lib, T>(
         &'lib self,
-        name: &str,
-        version: &str,
+        name: impl AsRef<[u8]>,
+        version: impl AsRef<[u8]>,
     ) -> Result<Option<Symbol<'lib, T>>> {
-        let addr = lookup_symbol(self, &mut SymbolLookup::with_version(name, version))?;
+        let addr = lookup_symbol(
+            self,
+            &mut SymbolLookup::with_version(name.as_ref(), version.as_ref()),
+        )?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 

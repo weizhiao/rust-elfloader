@@ -110,7 +110,7 @@ impl<Arch: RelocationArch> PltRelocInfo<Arch> {
 pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
-    pub(crate) needed_libs: Box<[&'static str]>,
+    pub(crate) needed_libs: Box<[&'static [u8]]>,
     pub(crate) symbolic: bool,
 }
 
@@ -370,10 +370,10 @@ where
         let symtab = SymbolTable::from_dynamic(&dynamic, &self.segments)?;
         let exports = symtab.clone();
         let lazy_symtab = symtab.clone();
-        let needed_libs: Vec<&'static str> = dynamic
+        let needed_libs: Vec<&'static [u8]> = dynamic
             .needed_libs
             .iter()
-            .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
+            .map(|needed_lib| symtab.strtab().get_cstr(needed_lib.get()).to_bytes())
             .collect();
 
         if !needed_libs.is_empty() {
@@ -381,13 +381,13 @@ where
         }
         let soname = dynamic
             .soname_off
-            .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
+            .map(|soname_off| symtab.strtab().get_cstr(soname_off.get()).to_bytes());
         let rpath = dynamic
             .rpath_off
-            .map(|rpath_off| symtab.strtab().get_str(rpath_off));
+            .map(|rpath_off| symtab.strtab().get_cstr(rpath_off).to_bytes());
         let runpath = dynamic
             .runpath_off
-            .map(|runpath_off| symtab.strtab().get_str(runpath_off));
+            .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = match search_paths {
             Some(paths) => paths.module_search(self.path, soname, runpath, rpath),
             None => ModuleSearch::from_dynamic(self.path, soname, runpath, rpath),

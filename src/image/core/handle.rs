@@ -229,18 +229,18 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let needed_libs = dynamic
             .needed_libs
             .iter()
-            .map(|needed| symtab.strtab().get_str(needed.get()))
+            .map(|needed| symtab.strtab().get_cstr(needed.get()).to_bytes())
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let soname = dynamic
             .soname_off
-            .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
+            .map(|soname_off| symtab.strtab().get_cstr(soname_off.get()).to_bytes());
         let rpath = dynamic
             .rpath_off
-            .map(|rpath_off| symtab.strtab().get_str(rpath_off));
+            .map(|rpath_off| symtab.strtab().get_cstr(rpath_off).to_bytes());
         let runpath = dynamic
             .runpath_off
-            .map(|runpath_off| symtab.strtab().get_str(runpath_off));
+            .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let source = ModuleSourceId::fresh();

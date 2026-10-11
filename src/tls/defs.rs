@@ -5,7 +5,7 @@ use crate::{
     sync::Weak,
 };
 
-pub(crate) const TLS_GET_ADDR_SYMBOL: &str = "__tls_get_addr";
+pub(crate) const TLS_GET_ADDR_SYMBOL: &[u8] = b"__tls_get_addr";
 
 /// Information about a TLS segment from ELF headers.
 #[derive(Clone, Copy, Default, Eq, PartialEq)]

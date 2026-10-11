@@ -282,7 +282,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns the list of needed library names from the dynamic section.
-    pub fn needed_libs(&self) -> &[&str] {
+    pub fn needed_libs(&self) -> &[&[u8]] {
         match self {
             RawExec::Dynamic(image) => image.needed_libs(),
             RawExec::Static(_) => &[],

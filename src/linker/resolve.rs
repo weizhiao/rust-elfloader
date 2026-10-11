@@ -39,9 +39,7 @@ fn search_aliases(
     let path = (path != entry_key).then(|| ModuleKey::from(path));
     let soname = search
         .soname()
-        .filter(|soname| {
-            soname.as_bytes() != entry_key && Some(soname.as_bytes()) != path.as_deref()
-        })
+        .filter(|soname| *soname != entry_key && Some(*soname) != path.as_deref())
         .map(ModuleKey::from);
     (path, soname)
 }
@@ -296,7 +294,7 @@ where
                     let needed = source
                         .needed(idx)
                         .expect("DT_NEEDED index must be within the parsed dependency list");
-                    if let Some(dep) = self.known_module(needed.as_bytes()) {
+                    if let Some(dep) = self.known_module(needed) {
                         push_dep(&mut direct_deps, dep);
                         continue;
                     }

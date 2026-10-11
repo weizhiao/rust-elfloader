@@ -56,10 +56,10 @@ struct MultiBinaryResolver {
 }
 
 impl MultiBinaryResolver {
-    fn module(&self, key: &str) -> Option<BinaryModule> {
+    fn module(&self, key: &[u8]) -> Option<BinaryModule> {
         self.modules
             .iter()
-            .find(|module| module.key == key)
+            .find(|module| module.key.as_bytes() == key)
             .copied()
     }
 }
@@ -78,7 +78,7 @@ impl KeyResolver for MultiBinaryResolver {
         let key = match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, self.root);
-                *root
+                root.as_bytes()
             }
             ResolveInput::Dependency { needed } => *needed,
         };
@@ -139,7 +139,7 @@ impl RelocationObserver for CustomBinding {
         let Some(symbol) = event.relocation_symbol() else {
             return Ok(HandleResult::Unhandled);
         };
-        if symbol.name() != "provider_value" {
+        if symbol.name() != b"provider_value" {
             return Ok(HandleResult::Unhandled);
         }
 
@@ -180,7 +180,7 @@ fn commits_resolver_modules() {
         .downcast_ref::<ElfModule<()>>()
         .expect("linker-loaded ELF should retain its concrete module type");
     assert_eq!(elf.path().file_name(), b"visible_root.so");
-    assert_eq!(elf.needed_libs(), [DEP_KEY]);
+    assert_eq!(elf.needed_libs(), [DEP_KEY.as_bytes()]);
     assert!(elf.phdrs().is_some_and(|phdrs| !phdrs.is_empty()));
     assert!(!elf.mapped_ranges().is_empty());
     let first_range = elf.mapped_ranges()[0];

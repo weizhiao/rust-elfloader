@@ -184,12 +184,14 @@ fn can_clear_exports() {
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
             assert!(
-                event.symbols().any(|symbol| symbol.name() == VALUE),
+                event
+                    .symbols()
+                    .any(|symbol| symbol.name() == VALUE.as_bytes()),
                 "relocated object symbol table should include the global object symbol"
             );
             let symbol = event
                 .symbols()
-                .find(|entry| entry.name() == VALUE)
+                .find(|entry| entry.name() == VALUE.as_bytes())
                 .expect("value symbol should exist");
             let addr = event.core().segments().base() + VmOffset::new(symbol.symbol().st_value());
             let mut bytes = [0u8; 4];

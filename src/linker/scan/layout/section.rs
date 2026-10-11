@@ -135,7 +135,7 @@ impl SectionPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionMetadata {
     scanned_section: ElfSectionId,
-    name: Box<str>,
+    name: Box<[u8]>,
     section_type: ElfSectionType,
     section_flags: ElfSectionFlags,
     linked_section: Option<SectionId>,
@@ -170,7 +170,7 @@ impl SectionMetadata {
 
     /// Returns the section name.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         &self.name
     }
 

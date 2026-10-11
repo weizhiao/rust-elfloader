@@ -83,7 +83,7 @@ fn arena_materializes_section_bytes() {
         let data_section = root
             .scanned(plan)
             .alloc_sections()
-            .find(|section| section.name() == ".data")
+            .find(|section| section.name() == b".data")
             .expect("compiled dylib should contain a .data section")
             .id();
         let layout_section = root
@@ -157,7 +157,7 @@ fn arena_supports_assign_next() {
         let data_section = root
             .scanned(plan)
             .alloc_sections()
-            .find(|section| section.name() == ".data")
+            .find(|section| section.name() == b".data")
             .expect("compiled dylib should contain a .data section")
             .id();
         let layout_section = root
@@ -369,7 +369,7 @@ fn whole_dso_supports_section_overrides() {
         let data_section = root
             .scanned(plan)
             .alloc_sections()
-            .find(|section| section.name() == ".data")
+            .find(|section| section.name() == b".data")
             .expect("compiled dylib should contain a .data section")
             .id();
         let layout_section = root

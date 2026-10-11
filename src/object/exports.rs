@@ -4,15 +4,15 @@ use crate::{
     object::CustomHash,
     sync::{Arc, OnceCell},
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 
 /// Runtime symbol exports for a relocated object.
 ///
 /// Unlike the relocation `.symtab`, this table owns symbol names and entries, so
 /// it can outlive init-only section metadata.
 pub(crate) struct ObjectExports<L: ElfLayout> {
-    hashtab: CustomHash<String>,
-    names: Vec<String>,
+    hashtab: CustomHash<Box<[u8]>>,
+    names: Vec<Box<[u8]>>,
     symbols: Vec<ElfSymbol<L>>,
 }
 
@@ -52,7 +52,7 @@ impl<L: ElfLayout> SymbolExports<L> for ObjectExportsCell<L> {
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
         self.get().symbol_name(symbol)
     }
 
@@ -75,8 +75,8 @@ impl<L: ElfLayout> ObjectExports<L> {
         }
     }
 
-    pub(crate) fn insert(&mut self, name: impl Into<String>, symbol: ElfSymbol<L>) {
-        let name = name.into();
+    pub(crate) fn insert(&mut self, name: impl AsRef<[u8]>, symbol: ElfSymbol<L>) {
+        let name: Box<[u8]> = name.as_ref().into();
         if let Some(idx) = self.hashtab.find_idx(&name) {
             if self.symbols[idx].is_weak() && !symbol.is_weak() {
                 self.symbols[idx] = symbol;
@@ -98,11 +98,11 @@ impl<L: ElfLayout> SymbolExports<L> for ObjectExports<L> {
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
         self.symbols
             .iter()
             .position(|entry| core::ptr::eq(entry, symbol))
-            .map(|idx| self.names[idx].as_str())
+            .map(|idx| self.names[idx].as_ref())
     }
 
     #[inline]
@@ -158,7 +158,7 @@ mod tests {
             <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::symbol_name(
                 &exports, resolved
             ),
-            Some("symbol"),
+            Some(b"symbol".as_slice()),
         );
         let mut count = 0;
         exports.for_each(&mut |_| count += 1);

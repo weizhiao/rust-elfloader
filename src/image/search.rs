@@ -215,9 +215,9 @@ impl SearchPathPool {
     pub(crate) fn module_search(
         &mut self,
         path: PathBuf,
-        soname: Option<&str>,
-        runpath: Option<&str>,
-        rpath: Option<&str>,
+        soname: Option<&[u8]>,
+        runpath: Option<&[u8]>,
+        rpath: Option<&[u8]>,
     ) -> ModuleSearch {
         let Self { dirs, tokens } = self;
         ModuleSearch::from_dynamic_with(path, soname, runpath, rpath, tokens, |path| {
@@ -233,7 +233,7 @@ impl SearchPathPool {
 /// a [`SearchPathPool`].
 pub struct ModuleSearch {
     path: PathBuf,
-    soname: Option<Box<str>>,
+    soname: Option<Box<[u8]>>,
     runpath: Option<Box<[SharedDir]>>,
     rpath: Option<Box<[SharedDir]>>,
 }
@@ -262,9 +262,9 @@ impl ModuleSearch {
 
     pub(crate) fn from_dynamic(
         path: PathBuf,
-        soname: Option<&str>,
-        runpath: Option<&str>,
-        rpath: Option<&str>,
+        soname: Option<&[u8]>,
+        runpath: Option<&[u8]>,
+        rpath: Option<&[u8]>,
     ) -> Self {
         Self::from_dynamic_with(
             path,
@@ -278,9 +278,9 @@ impl ModuleSearch {
 
     fn from_dynamic_with(
         path: PathBuf,
-        soname: Option<&str>,
-        runpath: Option<&str>,
-        rpath: Option<&str>,
+        soname: Option<&[u8]>,
+        runpath: Option<&[u8]>,
+        rpath: Option<&[u8]>,
         tokens: &PathTokens,
         mut intern: impl FnMut(PathBuf) -> SharedDir,
     ) -> Self {
@@ -309,7 +309,7 @@ impl ModuleSearch {
 
     /// Returns `DT_SONAME`, if present.
     #[inline]
-    pub fn soname(&self) -> Option<&str> {
+    pub fn soname(&self) -> Option<&[u8]> {
         self.soname.as_deref()
     }
 
@@ -341,7 +341,7 @@ impl ModuleSearch {
 }
 
 fn expand_dirs(
-    value: &str,
+    value: &[u8],
     origin: &Path,
     tokens: &PathTokens,
     intern: &mut impl FnMut(PathBuf) -> SharedDir,
@@ -350,11 +350,11 @@ fn expand_dirs(
         return Box::new([]);
     }
     let mut dirs = Vec::new();
-    for value in value.split(':') {
+    for value in value.split(|&byte| byte == b':') {
         let Some(path) = (if value.is_empty() {
             Some(PathBuf::from("."))
         } else {
-            tokens.expand(Path::new(value), origin)
+            Path::from_elf_bytes(value).and_then(|path| tokens.expand(path, origin))
         }) else {
             continue;
         };
@@ -432,13 +432,13 @@ mod tests {
         let first = paths.module_search(
             PathBuf::from("/opt/app/first.so"),
             None,
-            Some("$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
-            Some("/ignored"),
+            Some(b"$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
+            Some(b"/ignored"),
         );
         let second = paths.module_search(
             PathBuf::from("/opt/app/second.so"),
             None,
-            Some("$ORIGIN/lib:/usr/lib"),
+            Some(b"$ORIGIN/lib:/usr/lib"),
             None,
         );
         let first = first.runpath.as_deref().unwrap();

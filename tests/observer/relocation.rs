@@ -11,8 +11,8 @@ use elf_loader::{
 };
 use std::sync::{Arc, Mutex};
 
-const SYMBOLS: [&str; 3] = ["MESSAGE", "provider_value", "trace"];
-const PRE_SYMBOL: &str = "trace";
+const SYMBOLS: [&[u8]; 3] = [b"MESSAGE", b"provider_value", b"trace"];
+const PRE_SYMBOL: &[u8] = b"trace";
 
 extern "C" fn override_value() -> i32 {
     41
@@ -20,8 +20,8 @@ extern "C" fn override_value() -> i32 {
 
 #[derive(Default)]
 struct BindingState {
-    pre: Vec<String>,
-    bindings: Vec<String>,
+    pre: Vec<Vec<u8>>,
+    bindings: Vec<Vec<u8>>,
 }
 
 struct BindingRecorder(Arc<Mutex<BindingState>>);
@@ -45,7 +45,7 @@ impl RelocationObserver for BindingRecorder {
         assert!(SYMBOLS.contains(&symbol.name()));
         assert_eq!(event.symbol(event.rel().r_symbol()).name(), symbol.name());
         assert!(event.bind_symdef(event.rel().r_symbol()).is_some());
-        self.0.lock().unwrap().pre.push(symbol.name().to_string());
+        self.0.lock().unwrap().pre.push(symbol.name().to_vec());
         Ok(HandleResult::Unhandled)
     }
 
@@ -62,14 +62,14 @@ impl RelocationObserver for BindingRecorder {
         assert!(event.symbol().is_undef());
         assert!(SYMBOLS.contains(&event.symbol_name()));
         assert!(event.resolved_addr().is_some());
-        if event.symbol_name() == "provider_value" {
+        if event.symbol_name() == b"provider_value" {
             event.set_resolved_addr(VmAddr::from_ptr(override_value as *const ()));
         }
         self.0
             .lock()
             .unwrap()
             .bindings
-            .push(event.symbol_name().to_string());
+            .push(event.symbol_name().to_vec());
         Ok(())
     }
 }
@@ -117,8 +117,8 @@ fn observes_symbol_binding() {
 
 #[derive(Default)]
 struct FallbackState {
-    pre: Vec<String>,
-    post: Vec<String>,
+    pre: Vec<Vec<u8>>,
+    post: Vec<Vec<u8>>,
 }
 
 struct FallbackRecorder(Arc<Mutex<FallbackState>>);
@@ -140,7 +140,7 @@ impl RelocationObserver for FallbackRecorder {
         assert!(event.scope().is_empty());
         assert!(event.lazy().is_none());
         assert!(event.bind_symdef(event.rel().r_symbol()).is_none());
-        self.0.lock().unwrap().pre.push(symbol.name().to_string());
+        self.0.lock().unwrap().pre.push(symbol.name().to_vec());
         Ok(if symbol.name() == PRE_SYMBOL {
             HandleResult::Handled
         } else {
@@ -161,7 +161,7 @@ impl RelocationObserver for FallbackRecorder {
             .relocation_symbol()
             .expect("GOT relocation should reference a symbol");
         assert_ne!(symbol.name(), PRE_SYMBOL);
-        self.0.lock().unwrap().post.push(symbol.name().to_string());
+        self.0.lock().unwrap().post.push(symbol.name().to_vec());
         Ok(HandleResult::Handled)
     }
 }
@@ -185,7 +185,10 @@ fn handles_relocation_hooks() {
     state.pre.sort();
     state.post.sort();
     assert_eq!(state.pre, SYMBOLS);
-    assert_eq!(state.post, ["MESSAGE", "provider_value"]);
+    assert_eq!(
+        state.post,
+        [b"MESSAGE".as_slice(), b"provider_value".as_slice()]
+    );
 }
 
 #[derive(Default)]

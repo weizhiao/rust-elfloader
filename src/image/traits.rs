@@ -23,8 +23,8 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
     /// Visits symbols that can participate in exported-symbol lookup.
     fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>));
 
-    /// Returns the name for a symbol entry from this export table.
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str>;
+    /// Returns the name bytes, without a trailing NUL, for a symbol in this table.
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]>;
 
     /// Looks up one exported symbol by name and optional version.
     fn lookup<'exports>(
@@ -43,8 +43,8 @@ where
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
-        Some(self.strtab().get_str(symbol.st_name()))
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
+        Some(self.strtab().get_cstr(symbol.st_name()).to_bytes())
     }
 
     #[inline]
@@ -136,12 +136,14 @@ where
 
     /// Tries to resolve a typed symbol while this module remains borrowed.
     ///
+    /// Names are raw bytes without a trailing NUL; strings are also accepted.
+    ///
     /// # Safety
     ///
     /// `T` must match the symbol's type and calling convention.
     #[inline]
-    pub unsafe fn try_get<T>(&self, name: &str) -> Result<Option<Symbol<'_, T>>> {
-        let addr = lookup_symbol(self, &mut SymbolLookup::new(name))?;
+    pub unsafe fn try_get<T>(&self, name: impl AsRef<[u8]>) -> Result<Option<Symbol<'_, T>>> {
+        let addr = lookup_symbol(self, &mut SymbolLookup::new(name.as_ref()))?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
@@ -151,11 +153,13 @@ where
     ///
     /// `T` must match the symbol's type and calling convention.
     #[inline]
-    pub unsafe fn get<T>(&self, name: &str) -> Option<Symbol<'_, T>> {
+    pub unsafe fn get<T>(&self, name: impl AsRef<[u8]>) -> Option<Symbol<'_, T>> {
         unsafe { self.try_get(name).ok().flatten() }
     }
 
     /// Tries to resolve a versioned typed symbol while this module remains borrowed.
+    ///
+    /// Names and versions are raw bytes without a trailing NUL.
     ///
     /// # Safety
     ///
@@ -164,10 +168,13 @@ where
     #[inline]
     pub unsafe fn try_get_version<T>(
         &self,
-        name: &str,
-        version: &str,
+        name: impl AsRef<[u8]>,
+        version: impl AsRef<[u8]>,
     ) -> Result<Option<Symbol<'_, T>>> {
-        let addr = lookup_symbol(self, &mut SymbolLookup::with_version(name, version))?;
+        let addr = lookup_symbol(
+            self,
+            &mut SymbolLookup::with_version(name.as_ref(), version.as_ref()),
+        )?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
@@ -178,7 +185,11 @@ where
     /// `T` must match the symbol's type and calling convention.
     #[cfg(feature = "version")]
     #[inline]
-    pub unsafe fn get_version<T>(&self, name: &str, version: &str) -> Option<Symbol<'_, T>> {
+    pub unsafe fn get_version<T>(
+        &self,
+        name: impl AsRef<[u8]>,
+        version: impl AsRef<[u8]>,
+    ) -> Option<Symbol<'_, T>> {
         unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 }

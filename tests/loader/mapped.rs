@@ -47,7 +47,7 @@ fn scanned_dynamic_reuses_metadata() {
     else {
         panic!("compiled dylib should scan as dynamic");
     };
-    let soname = scanned.soname().map(str::to_owned);
+    let soname = scanned.soname().map(<[u8]>::to_vec);
 
     let raw = LOADER
         .load_scanned_dynamic(scanned)

@@ -21,7 +21,7 @@ use core::ptr::NonNull;
 /// runtime address without loading another ELF image.
 #[derive(Clone, Debug)]
 pub struct SyntheticSymbol {
-    name: String,
+    name: Vec<u8>,
     version: Option<SymbolVersion>,
     value: usize,
     size: usize,
@@ -34,7 +34,7 @@ pub struct SyntheticSymbol {
 /// GNU symbol-version metadata for a [`SyntheticSymbol`].
 #[derive(Clone, Debug)]
 pub struct SymbolVersion {
-    name: String,
+    name: Vec<u8>,
     default: bool,
 }
 
@@ -44,16 +44,16 @@ impl SymbolVersion {
     /// A default version corresponds to GNU `name@@version`; a non-default
     /// version corresponds to `name@version`.
     #[inline]
-    pub fn new(name: impl Into<String>, default: bool) -> Self {
+    pub fn new(name: impl AsRef<[u8]>, default: bool) -> Self {
         Self {
-            name: name.into(),
+            name: name.as_ref().to_vec(),
             default,
         }
     }
 
     /// Returns the version name.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         &self.name
     }
 
@@ -67,7 +67,7 @@ impl SymbolVersion {
 impl SyntheticSymbol {
     /// Creates a function symbol backed by an absolute runtime address.
     #[inline]
-    pub fn function(name: impl Into<String>, value: *const ()) -> Self {
+    pub fn function(name: impl AsRef<[u8]>, value: *const ()) -> Self {
         Self::from_fields(
             name,
             value as usize,
@@ -82,7 +82,7 @@ impl SyntheticSymbol {
 
     /// Creates an object symbol backed by an absolute runtime address.
     #[inline]
-    pub fn object(name: impl Into<String>, value: *const (), size: usize) -> Self {
+    pub fn object(name: impl AsRef<[u8]>, value: *const (), size: usize) -> Self {
         Self::from_fields(
             name,
             value as usize,
@@ -97,7 +97,7 @@ impl SyntheticSymbol {
 
     /// Creates a TLS symbol whose value is an offset in this module's TLS block.
     #[inline]
-    pub fn tls(name: impl Into<String>, offset: usize, size: usize) -> Self {
+    pub fn tls(name: impl AsRef<[u8]>, offset: usize, size: usize) -> Self {
         Self::from_fields(
             name,
             offset,
@@ -117,7 +117,7 @@ impl SyntheticSymbol {
     /// [`SymbolVersion`] to attach GNU symbol-version metadata.
     #[inline]
     pub fn from_fields(
-        name: impl Into<String>,
+        name: impl AsRef<[u8]>,
         value: usize,
         size: usize,
         bind: ElfSymbolBind,
@@ -127,7 +127,7 @@ impl SyntheticSymbol {
         version: Option<SymbolVersion>,
     ) -> Self {
         Self {
-            name: name.into(),
+            name: name.as_ref().to_vec(),
             version,
             value,
             size,
@@ -145,7 +145,7 @@ impl SyntheticSymbol {
     /// lives outside the ELF symbol-table entry.
     #[inline]
     pub fn from_elf<L: ElfLayout>(
-        name: impl Into<String>,
+        name: impl AsRef<[u8]>,
         symbol: &ElfSymbol<L>,
         version: Option<SymbolVersion>,
     ) -> Self {
@@ -167,7 +167,7 @@ impl SyntheticSymbol {
     /// an unversioned lookup. A non-default definition corresponds to
     /// `name@version` and is available only to an exact versioned lookup.
     #[inline]
-    pub fn with_version(mut self, version: impl Into<String>, default: bool) -> Self {
+    pub fn with_version(mut self, version: impl AsRef<[u8]>, default: bool) -> Self {
         self.version = Some(SymbolVersion::new(version, default));
         self
     }
@@ -277,9 +277,9 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = (), R = ()> {
     tls: Option<ModuleTls>,
     resolve_hook: R,
     user_data: D,
-    names: Vec<String>,
+    names: Vec<Arc<[u8]>>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
-    index: BTreeMap<String, SymbolIndex>,
+    index: BTreeMap<Arc<[u8]>, SymbolIndex>,
 }
 
 /// Runtime callback invoked when a synthetic symbol is resolved.
@@ -441,8 +441,12 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
     /// Inserts one symbol, returning the definition it replaced.
     pub fn insert(&mut self, symbol: SyntheticSymbol) -> Option<SyntheticSymbol> {
         let name = symbol.name;
+        let name = match self.index.get_key_value(name.as_slice()) {
+            Some((name, _)) => Arc::clone(name),
+            None => Arc::from(name),
+        };
         let version = symbol.version;
-        let entry = self.index.entry(name.clone()).or_default();
+        let entry = self.index.entry(Arc::clone(&name)).or_default();
         let existing = match version.as_ref() {
             Some(version) => entry.versions.iter().find_map(|(entry, index)| {
                 (entry.name == version.name).then(|| (*index, Some(entry.clone())))
@@ -465,10 +469,8 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
                 symbol.other,
                 symbol.section_index,
             );
-            let previous_name = core::mem::replace(&mut self.names[idx], name);
             let previous_symbol = core::mem::replace(&mut self.symbols[idx], elf_symbol);
-            let previous =
-                SyntheticSymbol::from_elf(previous_name, &previous_symbol, previous_version);
+            let previous = SyntheticSymbol::from_elf(&name, &previous_symbol, previous_version);
             (idx, Some(previous))
         } else {
             let idx = self.symbols.len();
@@ -521,8 +523,8 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
 
     /// Returns whether this module exports a synthetic symbol with `name`.
     #[inline]
-    pub fn contains(&self, name: &str) -> bool {
-        self.index.contains_key(name)
+    pub fn contains(&self, name: impl AsRef<[u8]>) -> bool {
+        self.index.contains_key(name.as_ref())
     }
 
     /// Returns the number of synthetic symbols.
@@ -623,8 +625,8 @@ where
     fn symbol_name<'exports>(
         &'exports self,
         symbol: &ElfSymbol<Arch::Layout>,
-    ) -> Option<&'exports str> {
-        self.names.get(symbol.st_name()).map(String::as_str)
+    ) -> Option<&'exports [u8]> {
+        self.names.get(symbol.st_name()).map(AsRef::as_ref)
     }
 
     #[inline]
@@ -689,7 +691,10 @@ mod tests {
         assert_eq!(symbol.bind(), ElfSymbolBind::GLOBAL);
         assert_eq!(symbol.symbol_type(), ElfSymbolType::FUNC);
         assert!(symbol.st_shndx().is_abs());
-        assert_eq!(module.exports().symbol_name(symbol), Some("host_double"));
+        assert_eq!(
+            module.exports().symbol_name(symbol),
+            Some(b"host_double".as_slice())
+        );
     }
 
     #[test]
@@ -771,13 +776,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(previous.value, 0x3000);
-        assert_eq!(previous.version.unwrap().name(), "VER_2");
+        assert_eq!(previous.version.unwrap().name(), b"VER_2");
 
         let previous = module
             .insert(SyntheticSymbol::function("entry", 0x5000usize as *const ()))
             .unwrap();
         assert_eq!(previous.value, 0x4000);
-        assert_eq!(previous.version.unwrap().name(), "VER_2");
+        assert_eq!(previous.version.unwrap().name(), b"VER_2");
 
         let mut lookup = SymbolLookup::new("entry");
         assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x5000);

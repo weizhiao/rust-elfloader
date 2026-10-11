@@ -289,7 +289,7 @@ where
 }
 
 #[cold]
-fn unresolved_symbol_error<D, Arch, R, Tls>(core: &ElfCore<D, Arch, R, Tls>, name: &str) -> Error
+fn unresolved_symbol_error<D, Arch, R, Tls>(core: &ElfCore<D, Arch, R, Tls>, name: &[u8]) -> Error
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

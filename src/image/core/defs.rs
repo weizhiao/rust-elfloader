@@ -241,7 +241,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns the `DT_SONAME` value, when present.
     #[inline]
-    pub fn soname(&self) -> Option<&str> {
+    pub fn soname(&self) -> Option<&[u8]> {
         self.search.soname()
     }
 
@@ -277,7 +277,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns the names recorded by `DT_NEEDED`.
     #[inline]
-    pub fn needed_libs(&self) -> &[&str] {
+    pub fn needed_libs(&self) -> &[&[u8]] {
         self.dynamic_info
             .as_ref()
             .map_or(&[], |info| info.needed_libs.as_ref())

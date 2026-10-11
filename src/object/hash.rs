@@ -15,7 +15,7 @@ struct TableEntry<N> {
 const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
 /// Hash table used for symbol lookup in Relink-generated object exports.
-pub struct CustomHash<N = &'static str> {
+pub struct CustomHash<N = &'static [u8]> {
     map: RawHashTable<TableEntry<N>>,
 }
 
@@ -39,37 +39,37 @@ impl<N> CustomHash<N> {
     }
 }
 
-impl<N: AsRef<str>> CustomHash<N> {
+impl<N: AsRef<[u8]>> CustomHash<N> {
     #[inline]
-    pub(crate) fn find_idx(&self, name: &str) -> Option<usize> {
-        let hash = Self::hash(name.as_bytes());
+    pub(crate) fn find_idx(&self, name: &[u8]) -> Option<usize> {
+        let hash = Self::hash(name);
         self.find_idx_with_hash(name, hash)
     }
 
     #[inline]
     pub(crate) fn lookup_idx(&self, lookup: &mut SymbolLookup<'_>) -> Option<usize> {
-        let hash = lookup.custom_hash(|name| Self::hash(name.as_bytes()));
+        let hash = lookup.custom_hash();
         self.find_idx_with_hash(lookup.name(), hash)
     }
 
     #[inline]
     pub(crate) fn insert_unique(&mut self, name: N, idx: usize) {
-        let hash = Self::hash(name.as_ref().as_bytes());
+        let hash = Self::hash(name.as_ref());
         self.map
             .insert_unique(hash, TableEntry { name, idx }, |val| {
-                Self::hash(val.name.as_ref().as_bytes())
+                Self::hash(val.name.as_ref())
             });
     }
 
     #[inline]
-    fn find_idx_with_hash(&self, name: &str, hash: u64) -> Option<usize> {
+    fn find_idx_with_hash(&self, name: &[u8], hash: u64) -> Option<usize> {
         self.map
             .find(hash, |entry| entry.name.as_ref() == name)
             .map(|entry| entry.idx)
     }
 }
 
-impl CustomHash<&'static str> {
+impl CustomHash<&'static [u8]> {
     pub(crate) fn from_symbols<L: ElfLayout>(
         symbols: &[ElfSymbol<L>],
         strtab: &ElfStringTable,
@@ -81,7 +81,7 @@ impl CustomHash<&'static str> {
                 continue;
             }
 
-            let name = strtab.get_str(symbol.st_name() as usize);
+            let name = strtab.get_cstr(symbol.st_name()).to_bytes();
             hashtab.insert_unique(name, idx);
         }
 

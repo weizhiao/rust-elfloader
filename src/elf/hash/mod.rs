@@ -102,8 +102,8 @@ pub(in crate::elf) struct PreCompute {
 
 impl PreCompute {
     #[inline]
-    pub(in crate::elf) fn new(name: &str) -> Self {
-        let gnuhash = ElfGnuHash::<NativeElfLayout>::hash(name.as_bytes()) as u32;
+    pub(in crate::elf) fn new(name: &[u8]) -> Self {
+        let gnuhash = ElfGnuHash::<NativeElfLayout>::hash(name) as u32;
         Self {
             gnuhash,
             hash: None,

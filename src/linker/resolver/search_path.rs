@@ -329,7 +329,9 @@ where
     ) -> Result<ResolvedKey<'cfg, Arch, Tls>> {
         let requested = match req.input() {
             ResolveInput::Root { root } => root.as_path(),
-            ResolveInput::Dependency { needed } => Path::new(needed),
+            ResolveInput::Dependency { needed } => {
+                Path::from_elf_bytes(needed).ok_or_else(|| req.unresolved())?
+            }
         };
         let request = CandidateRequest::new(requested, req.search(), req.tokens(), req.loaders());
 
@@ -440,7 +442,12 @@ mod tests {
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> ModuleSearch {
-        ModuleSearch::from_dynamic(PathBuf::from(path), soname, runpath, rpath)
+        ModuleSearch::from_dynamic(
+            PathBuf::from(path),
+            soname.map(str::as_bytes),
+            runpath.map(str::as_bytes),
+            rpath.map(str::as_bytes),
+        )
     }
 
     fn visit_chain(chain: &[&ModuleSearch], visitor: &mut LoaderVisitor<'_>) -> Result<()> {
@@ -476,7 +483,7 @@ mod tests {
         request: CandidateRequest<'_>,
     ) -> Option<PathBuf> {
         let req = ResolveRequest::dependency(
-            core::str::from_utf8(request.requested().as_bytes()).unwrap(),
+            request.requested().as_bytes(),
             request.owner(),
             request.tokens(),
             request.loaders,
@@ -642,7 +649,7 @@ mod tests {
         let owner = paths.module_search(
             PathBuf::from(owner_path.to_str().unwrap()),
             None,
-            Some("$ORIGIN/$LIB/${PLATFORM}"),
+            Some(b"$ORIGIN/$LIB/${PLATFORM}"),
             None,
         );
         let chain = [&owner];

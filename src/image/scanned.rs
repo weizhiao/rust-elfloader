@@ -187,7 +187,7 @@ pub(crate) struct ScannedDynamicLoadParts<Arch: RelocationArch = NativeArch> {
 /// A readable view over one scanned section and its metadata.
 pub struct ScannedSection<'a, L: ElfLayout = NativeElfLayout> {
     id: ElfSectionId,
-    name: &'a str,
+    name: &'a [u8],
     header: &'a ElfShdr<L>,
 }
 
@@ -223,8 +223,10 @@ impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     }
 
     #[inline]
-    fn section_name(&self, section: &ElfShdr<L>) -> &'a str {
-        self.shstrtab.get_str(section.sh_name() as usize)
+    fn section_name(&self, section: &ElfShdr<L>) -> &'a [u8] {
+        self.shstrtab
+            .get_cstr(section.sh_name() as usize)
+            .to_bytes()
     }
 }
 
@@ -248,7 +250,7 @@ impl<L: ElfLayout> ExactSizeIterator for ScannedSections<'_, L> {}
 
 impl<'a, L: ElfLayout> ScannedSection<'a, L> {
     #[inline]
-    fn new(id: ElfSectionId, name: &'a str, header: &'a ElfShdr<L>) -> Self {
+    fn new(id: ElfSectionId, name: &'a [u8], header: &'a ElfShdr<L>) -> Self {
         Self { id, name, header }
     }
 
@@ -260,7 +262,7 @@ impl<'a, L: ElfLayout> ScannedSection<'a, L> {
 
     /// Returns the section name.
     #[inline]
-    pub fn name(&self) -> &'a str {
+    pub fn name(&self) -> &'a [u8] {
         self.name
     }
 
@@ -442,7 +444,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 
     /// Returns the PT_INTERP string when present.
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
+    pub fn interp(&self) -> Option<&[u8]> {
         match self {
             Self::Dynamic(image) => image.interp(),
             Self::StaticExec(image) => image.interp(),
@@ -551,9 +553,9 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
         let strtab_bytes = unsafe { core::slice::from_raw_parts(strtab.as_ptr(), strtab.len()) };
         let strtab_view = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
-        let soname = soname.map(|offset| strtab_view.get_str(offset));
-        let runpath = runpath.map(|offset| strtab_view.get_str(offset));
-        let rpath = rpath.map(|offset| strtab_view.get_str(offset));
+        let soname = soname.map(|offset| strtab_view.get_cstr(offset).to_bytes());
+        let runpath = runpath.map(|offset| strtab_view.get_cstr(offset).to_bytes());
+        let rpath = rpath.map(|offset| strtab_view.get_cstr(offset).to_bytes());
         let search = match search_paths {
             Some(paths) => paths.module_search(path, soname, runpath, rpath),
             None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
@@ -611,13 +613,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
 
     /// Returns the PT_INTERP string when present.
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
-        self.interp.as_deref().and_then(|bytes| {
+    pub fn interp(&self) -> Option<&[u8]> {
+        self.interp.as_deref().map(|bytes| {
             let end = bytes
                 .iter()
                 .position(|byte| *byte == 0)
                 .unwrap_or(bytes.len());
-            core::str::from_utf8(&bytes[..end]).ok()
+            &bytes[..end]
         })
     }
 
@@ -629,24 +631,24 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
 
     /// Returns the DT_SONAME string when present.
     #[inline]
-    pub fn soname(&self) -> Option<&str> {
+    pub fn soname(&self) -> Option<&[u8]> {
         self.search.soname()
     }
 
     /// Returns one `DT_NEEDED` entry by index.
     #[inline]
-    pub fn needed_lib(&self, index: usize) -> Option<&str> {
+    pub fn needed_lib(&self, index: usize) -> Option<&[u8]> {
         self.needed_libs
             .get(index)
-            .map(|offset| self.strtab.get_str(*offset))
+            .map(|offset| self.strtab.get_cstr(*offset).to_bytes())
     }
 
     /// Iterates over the `DT_NEEDED` entries.
     #[inline]
-    pub fn needed_libs(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+    pub fn needed_libs(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
         self.needed_libs
             .iter()
-            .map(|offset| self.strtab.get_str(*offset))
+            .map(|offset| self.strtab.get_cstr(*offset).to_bytes())
     }
 
     /// Returns the planning capability of this module.
@@ -677,7 +679,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let header = section_table.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
-            shstrtab.get_str(header.sh_name() as usize),
+            shstrtab.get_cstr(header.sh_name() as usize).to_bytes(),
             header,
         ))
     }
@@ -791,13 +793,13 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
 
     /// Returns the PT_INTERP string when present.
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
-        self.interp.as_deref().and_then(|bytes| {
+    pub fn interp(&self) -> Option<&[u8]> {
+        self.interp.as_deref().map(|bytes| {
             let end = bytes
                 .iter()
                 .position(|byte| *byte == 0)
                 .unwrap_or(bytes.len());
-            core::str::from_utf8(&bytes[..end]).ok()
+            &bytes[..end]
         })
     }
 
@@ -823,7 +825,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
         let header = section_table.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
-            shstrtab.get_str(header.sh_name() as usize),
+            shstrtab.get_cstr(header.sh_name() as usize).to_bytes(),
             header,
         ))
     }

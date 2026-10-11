@@ -674,7 +674,7 @@ impl Display for RelocReason {
 pub struct RelocationFailure {
     file: Box<[u8]>,
     r_type: &'static str,
-    symbol: Option<Box<str>>,
+    symbol: Option<Box<[u8]>>,
     reason: RelocReason,
 }
 
@@ -683,7 +683,7 @@ impl RelocationFailure {
     pub(crate) fn new(
         file: &[u8],
         r_type: &'static str,
-        symbol: Option<&str>,
+        symbol: Option<&[u8]>,
         reason: RelocReason,
     ) -> Self {
         Self {
@@ -704,7 +704,7 @@ impl Display for RelocationFailure {
             self.r_type
         )?;
         if let Some(symbol) = &self.symbol {
-            write!(f, "symbol name: {symbol}, ")?;
+            write!(f, "symbol name: {}, ", symbol.escape_ascii())?;
         } else {
             f.write_str("no symbol, ")?;
         }
@@ -834,12 +834,12 @@ impl core::error::Error for CustomError {
 /// Unresolved dependency details carried separately so the top-level [`Error`] stays compact.
 pub struct UnresolvedDependency {
     owner: Box<[u8]>,
-    dependency: Box<str>,
+    dependency: Box<[u8]>,
 }
 
 impl UnresolvedDependency {
     #[inline]
-    pub(crate) fn new(owner: &[u8], dependency: &str) -> Self {
+    pub(crate) fn new(owner: &[u8], dependency: &[u8]) -> Self {
         Self {
             owner: owner.into(),
             dependency: dependency.into(),
@@ -852,7 +852,7 @@ impl Display for UnresolvedDependency {
         write!(
             f,
             "unresolved dependency [{}] needed by [{}]",
-            self.dependency,
+            self.dependency.escape_ascii(),
             self.owner.escape_ascii()
         )
     }
@@ -1316,7 +1316,7 @@ debug_as_display!(
 pub(crate) fn relocate_context_error(
     file: &[u8],
     r_type: &'static str,
-    symbol: Option<&str>,
+    symbol: Option<&[u8]>,
     reason: RelocReason,
 ) -> Error {
     Error::Relocation(RelocationError::Context(Box::new(RelocationFailure::new(

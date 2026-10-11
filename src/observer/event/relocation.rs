@@ -114,7 +114,7 @@ pub struct SymbolBindingEvent<
     core: &'a ElfCore<D, Arch, R, Tls>,
     rel: Option<&'a ElfRelType<Arch>>,
     symbol: &'a ElfSymbol<Arch::Layout>,
-    symbol_name: &'a str,
+    symbol_name: &'a [u8],
     resolved: Option<VmAddr>,
 }
 
@@ -126,7 +126,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
         core: &'a ElfCore<D, Arch, R, Tls>,
         rel: Option<&'a ElfRelType<Arch>>,
         symbol: &'a ElfSymbol<Arch::Layout>,
-        symbol_name: &'a str,
+        symbol_name: &'a [u8],
         resolved: Option<VmAddr>,
     ) -> Self {
         Self {
@@ -159,7 +159,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
 
     /// Returns the symbol name referenced by the relocation.
     #[inline]
-    pub const fn symbol_name(&self) -> &'a str {
+    pub const fn symbol_name(&self) -> &'a [u8] {
         self.symbol_name
     }
 

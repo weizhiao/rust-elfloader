@@ -181,6 +181,18 @@ impl Deref for PathString {
 pub struct Path(PathStr);
 
 impl Path {
+    /// Converts ELF path bytes into the host path representation.
+    pub(crate) fn from_elf_bytes(bytes: &[u8]) -> Option<&Self> {
+        #[cfg(any(unix, target_os = "none"))]
+        {
+            Some(Self::new(bytes))
+        }
+        #[cfg(not(any(unix, target_os = "none")))]
+        {
+            core::str::from_utf8(bytes).ok().map(Self::new)
+        }
+    }
+
     /// Creates a borrowed loader path from a byte slice.
     #[inline]
     pub fn new<P: AsRef<PathStr> + ?Sized>(path: &P) -> &Self {

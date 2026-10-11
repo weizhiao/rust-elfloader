@@ -123,14 +123,14 @@ impl VersionIndexTable {
 
 #[derive(Clone)]
 struct Version {
-    name: &'static str,
+    name: &'static [u8],
     hash: u32,
 }
 
 impl fmt::Debug for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Version")
-            .field("name", &self.name)
+            .field("name", &self.name.escape_ascii())
             .field("hash", &format_args!("0x{:x}", self.hash))
             .finish()
     }
@@ -221,7 +221,7 @@ fn parse_verdefs<R: RegionAccess>(
                 versions,
                 verdef.index(),
                 Version {
-                    name: strtab.get_str(aux.vda_name as usize),
+                    name: strtab.get_cstr(aux.vda_name as usize).to_bytes(),
                     hash: verdef.vd_hash,
                 },
             );
@@ -268,7 +268,7 @@ fn parse_verneeds<R: RegionAccess>(
                 versions,
                 aux.index(),
                 Version {
-                    name: strtab.get_str(aux.vna_name as usize),
+                    name: strtab.get_cstr(aux.vna_name as usize).to_bytes(),
                     hash: aux.vna_hash,
                 },
             );
@@ -295,7 +295,7 @@ fn parse_verneeds<R: RegionAccess>(
 
 #[derive(Clone)]
 pub(crate) struct SymbolVersion<'a> {
-    name: &'a str,
+    name: &'a [u8],
     hash: u32,
     hidden: bool,
 }
@@ -303,7 +303,7 @@ pub(crate) struct SymbolVersion<'a> {
 impl fmt::Debug for SymbolVersion<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SymbolVersion")
-            .field("name", &self.name)
+            .field("name", &self.name.escape_ascii())
             .field("hash", &format_args!("0x{:x}", self.hash))
             .field("hidden", &self.hidden)
             .finish()
@@ -311,16 +311,16 @@ impl fmt::Debug for SymbolVersion<'_> {
 }
 
 impl<'a> SymbolVersion<'a> {
-    pub(crate) fn new(name: &'a str) -> Self {
+    pub(crate) fn new(name: &'a [u8]) -> Self {
         Self {
             name,
-            hash: sysv_hash(name.as_bytes()),
+            hash: sysv_hash(name),
             hidden: true,
         }
     }
 
     #[inline]
-    pub(crate) const fn name(&self) -> &'a str {
+    pub(crate) const fn name(&self) -> &'a [u8] {
         self.name
     }
 }
@@ -517,9 +517,9 @@ mod tests {
         let fixture = version_fixture([0, 1, 2, abi::VER_NDX_HIDDEN | 3], false);
         let version = parse_fixture(&fixture).unwrap();
 
-        assert_eq!(version.version(2).unwrap().name, "VER_DEF");
-        assert_eq!(version.version(3).unwrap().name, "VER_NEED");
-        assert_eq!(version.version(4).unwrap().name, "VER_OTHER");
+        assert_eq!(version.version(2).unwrap().name, b"VER_DEF");
+        assert_eq!(version.version(3).unwrap().name, b"VER_NEED");
+        assert_eq!(version.version(4).unwrap().name, b"VER_OTHER");
         assert_eq!(version.version(4).unwrap().hash, 0xdead_beef);
     }
 
@@ -528,7 +528,7 @@ mod tests {
         let fixture = version_fixture([0, 1, 2, abi::VER_NDX_HIDDEN | 3], true);
         let version = parse_fixture(&fixture).unwrap();
 
-        assert_eq!(version.version(3).unwrap().name, "VER_NEED");
+        assert_eq!(version.version(3).unwrap().name, b"VER_NEED");
         assert!(version.version(4).is_none());
     }
 
@@ -555,8 +555,8 @@ mod tests {
         assert!(table.check_match(2, None));
         assert!(!table.check_match(3, None));
 
-        let exact = SymbolVersion::new("VER_DEF");
-        let mismatch = SymbolVersion::new("VER_OTHER");
+        let exact = SymbolVersion::new(b"VER_DEF");
+        let mismatch = SymbolVersion::new(b"VER_OTHER");
         assert!(table.check_match(2, Some(&exact)));
         assert!(!table.check_match(2, Some(&mismatch)));
 
@@ -579,9 +579,9 @@ mod tests {
             strtab: &fixture.strtab,
             version: None,
         };
-        let exact = SymbolVersion::new("VER_DEF");
+        let exact = SymbolVersion::new(b"VER_DEF");
         let compatible = SymbolVersion {
-            name: "VER_DEF",
+            name: b"VER_DEF",
             hash: sysv_hash(b"VER_DEF"),
             hidden: false,
         };
