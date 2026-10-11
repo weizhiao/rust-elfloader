@@ -20,6 +20,16 @@ const DT_RELRSZ: i64 = 35;
 const DT_RELR: i64 = 36;
 /// This element holds the size, in bytes, of the DT_RELR relocation entry.
 const DT_RELRENT: i64 = 37;
+/// Android packed RELA table (SHT_ANDROID_RELA stream).
+const DT_ANDROID_RELA: i64 = 0x6000_0011;
+/// Size in bytes of the Android packed RELA stream.
+const DT_ANDROID_RELASZ: i64 = 0x6000_0012;
+/// Android alias of DT_RELR (same bitmap encoding).
+const DT_ANDROID_RELR: i64 = 0x6fff_e000;
+/// Android alias of DT_RELRSZ.
+const DT_ANDROID_RELRSZ: i64 = 0x6fff_e001;
+/// Android alias of DT_RELRENT.
+const DT_ANDROID_RELRENT: i64 = 0x6fff_e003;
 
 /// Semantic wrapper for the ELF `d_tag` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,6 +131,16 @@ impl ElfDynamicTag {
     pub const RELRSZ: Self = Self(DT_RELRSZ);
     /// `DT_RELRENT`: size of one RELR entry.
     pub const RELRENT: Self = Self(DT_RELRENT);
+    /// `DT_ANDROID_RELA`: Android packed RELA stream.
+    pub const ANDROID_RELA: Self = Self(DT_ANDROID_RELA);
+    /// `DT_ANDROID_RELASZ`: size of the packed RELA stream.
+    pub const ANDROID_RELASZ: Self = Self(DT_ANDROID_RELASZ);
+    /// `DT_ANDROID_RELR`: Android alias of `DT_RELR`.
+    pub const ANDROID_RELR: Self = Self(DT_ANDROID_RELR);
+    /// `DT_ANDROID_RELRSZ`: Android alias of `DT_RELRSZ`.
+    pub const ANDROID_RELRSZ: Self = Self(DT_ANDROID_RELRSZ);
+    /// `DT_ANDROID_RELRENT`: Android alias of `DT_RELRENT`.
+    pub const ANDROID_RELRENT: Self = Self(DT_ANDROID_RELRENT);
 
     /// Creates a dynamic tag wrapper from a raw `d_tag` value.
     #[inline]
@@ -282,6 +302,8 @@ pub(crate) struct ParsedDynamic {
     pub(crate) relr_off: Option<NonZeroUsize>,
     pub(crate) relr_size: Option<NonZeroUsize>,
     pub(crate) relr_entry_size: Option<usize>,
+    pub(crate) android_rela_off: Option<NonZeroUsize>,
+    pub(crate) android_rela_size: Option<NonZeroUsize>,
     pub(crate) init_off: Option<NonZeroUsize>,
     pub(crate) fini_off: Option<NonZeroUsize>,
     pub(crate) init_array_off: Option<NonZeroUsize>,
@@ -332,7 +354,11 @@ impl ParsedDynamic {
                 self.is_rela = Some(ElfDynamicTag::new(value as i64) == ElfDynamicTag::RELA);
             }
             ElfDynamicTag::JMPREL => self.pltrel_off = NonZeroUsize::new(value),
-            ElfDynamicTag::RELR => self.relr_off = NonZeroUsize::new(value),
+            ElfDynamicTag::RELR | ElfDynamicTag::ANDROID_RELR => {
+                self.relr_off = NonZeroUsize::new(value)
+            }
+            ElfDynamicTag::ANDROID_RELA => self.android_rela_off = NonZeroUsize::new(value),
+            ElfDynamicTag::ANDROID_RELASZ => self.android_rela_size = NonZeroUsize::new(value),
             ElfDynamicTag::RELA | ElfDynamicTag::REL => {
                 self.is_rela = Some(tag == ElfDynamicTag::RELA);
                 self.rel_off = NonZeroUsize::new(value)
@@ -342,8 +368,12 @@ impl ParsedDynamic {
             }
             ElfDynamicTag::RELAENT => self.rela_entry_size = Some(value),
             ElfDynamicTag::RELENT => self.rel_entry_size = Some(value),
-            ElfDynamicTag::RELRSZ => self.relr_size = NonZeroUsize::new(value),
-            ElfDynamicTag::RELRENT => self.relr_entry_size = Some(value),
+            ElfDynamicTag::RELRSZ | ElfDynamicTag::ANDROID_RELRSZ => {
+                self.relr_size = NonZeroUsize::new(value)
+            }
+            ElfDynamicTag::RELRENT | ElfDynamicTag::ANDROID_RELRENT => {
+                self.relr_entry_size = Some(value)
+            }
             ElfDynamicTag::RELACOUNT | ElfDynamicTag::RELCOUNT => {
                 self.rel_count = NonZeroUsize::new(value)
             }
@@ -457,8 +487,8 @@ where
                         VmOffset::new(pltrel_off.get()),
                         parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::InvalidRelocTable {
-                        reason: RelocTableError::JmpRelSize,
+                    .ok_or(RelocTableError::InvalidTableSize {
+                        tag: ElfDynamicTag::JMPREL,
                     })?;
                 Ok(view)
             })
@@ -475,11 +505,10 @@ where
                             })?;
                     let expected = size_of::<ElfRela<Arch::Layout>>();
                     if entry_size != expected {
-                        return Err(ParseDynamicError::InvalidRelocTable {
-                            reason: RelocTableError::RelaEntrySize {
-                                expected,
-                                actual: entry_size,
-                            },
+                        return Err(RelocTableError::InvalidEntrySize {
+                            tag: ElfDynamicTag::RELAENT,
+                            expected,
+                            actual: entry_size,
                         }
                         .into());
                     }
@@ -492,11 +521,10 @@ where
                             })?;
                     let expected = size_of::<ElfRel<Arch::Layout>>();
                     if entry_size != expected {
-                        return Err(ParseDynamicError::InvalidRelocTable {
-                            reason: RelocTableError::RelEntrySize {
-                                expected,
-                                actual: entry_size,
-                            },
+                        return Err(RelocTableError::InvalidEntrySize {
+                            tag: ElfDynamicTag::RELENT,
+                            expected,
+                            actual: entry_size,
                         }
                         .into());
                     }
@@ -506,8 +534,12 @@ where
                         VmOffset::new(rel_off.get()),
                         parsed.rel_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::InvalidRelocTable {
-                        reason: RelocTableError::DynRelSize,
+                    .ok_or(RelocTableError::InvalidTableSize {
+                        tag: if parsed.is_rela.unwrap_or(false) {
+                            ElfDynamicTag::RELA
+                        } else {
+                            ElfDynamicTag::REL
+                        },
                     })?;
                 Ok(view)
             })
@@ -523,11 +555,10 @@ where
                         })?;
                 let expected = size_of::<ElfRelr<Arch::Layout>>();
                 if entry_size != expected {
-                    return Err(ParseDynamicError::InvalidRelocTable {
-                        reason: RelocTableError::RelrEntrySize {
-                            expected,
-                            actual: entry_size,
-                        },
+                    return Err(RelocTableError::InvalidEntrySize {
+                        tag: ElfDynamicTag::RELRENT,
+                        expected,
+                        actual: entry_size,
                     }
                     .into());
                 }
@@ -536,8 +567,8 @@ where
                         VmOffset::new(relr_off.get()),
                         parsed.relr_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::InvalidRelocTable {
-                        reason: RelocTableError::RelrSize,
+                    .ok_or(RelocTableError::InvalidTableSize {
+                        tag: ElfDynamicTag::RELR,
                     })?;
                 Ok(view)
             })
@@ -549,6 +580,18 @@ where
             ),
             (Some(dynrel_end), Some(pltrel_end)) if dynrel_end == pltrel_end
         );
+
+        // Expand an Android packed RELA stream (DT_ANDROID_RELA) into plain
+        // entries so the regular relocation pipeline can consume it.
+        let packed_rela = match (parsed.android_rela_off, parsed.android_rela_size) {
+            (Some(off), Some(size)) => {
+                let view = segments
+                    .read_view::<u8>(VmOffset::new(off.get()), size.get())
+                    .ok_or(RelocTableError::PackedRelaRange)?;
+                super::rel::decode_packed_rela::<Arch::Layout, Arch::Relocation>(view.as_slice())?
+            }
+            _ => Vec::new(),
+        };
 
         // Extract initialization and finalization functions
         let init_fn = parsed
@@ -585,6 +628,7 @@ where
             pltrel,
             dynrel,
             relr,
+            packed_rela,
             pltrel_is_dynrel_tail,
             init: LifecycleSpec::new(init_fn, parsed.init_array_off, init_array_size),
             fini: LifecycleSpec::new(fini_fn, parsed.fini_array_off, fini_array_size),
@@ -623,6 +667,7 @@ impl LifecycleSpec {
     pub(crate) fn resolve<L: ElfLayout, R: RegionAccess>(
         self,
         segments: &ElfSegments<R>,
+        tag: ElfDynamicTag,
         malformed: &'static str,
     ) -> Result<Lifecycle> {
         let array = self
@@ -630,7 +675,7 @@ impl LifecycleSpec {
             .map(|offset| -> Result<_> {
                 let words = segments
                     .read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
-                    .ok_or(ParseDynamicError::MalformedLifecycleTable { detail: malformed })?;
+                    .ok_or_else(|| ParseDynamicError::malformed_table(tag, malformed))?;
 
                 Ok(words
                     .as_slice()
@@ -685,6 +730,8 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub(crate) dynrel: Option<MappedView<ElfRelType<Arch>>>,
     /// RELR relocation entries.
     pub(crate) relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
+    /// Relocations expanded from an Android packed RELA stream.
+    pub(crate) packed_rela: Vec<ElfRelType<Arch>>,
     /// Whether PLT relocation entries are the tail of the dynamic relocation table.
     pub(crate) pltrel_is_dynrel_tail: bool,
     /// Count of relative relocations.

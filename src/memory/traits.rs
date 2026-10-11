@@ -147,10 +147,14 @@ pub trait ImageMemory: Send + Sync {
 
     /// Returns the address range owned by this image that contains `addr`.
     ///
-    /// The returned range may span multiple mapped subranges belonging to one
-    /// logical image. Implementations with no mapped address range return
-    /// `None`.
+    /// Returns the actual mapped interval containing `addr`, excluding holes.
+    /// Implementations with no mapping at `addr` return `None`.
     fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>>;
+
+    /// Enumerates every mapped interval, in the same precedence order as `range_at`.
+    /// Empty images invoke no callbacks. Indexed mappings must remain unchanged
+    /// until deregistration; changes require removing and registering the image again.
+    fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>));
 
     /// Translates an image VM address into a host-accessible pointer.
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
@@ -232,6 +236,11 @@ where
     #[inline]
     fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>> {
         (**self).range_at(addr)
+    }
+
+    #[inline]
+    fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>)) {
+        (**self).visit_ranges(visit)
     }
 
     #[inline]

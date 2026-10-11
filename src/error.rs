@@ -83,7 +83,11 @@ impl Display for IoError {
             }
             Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
             Self::OpenFailed { path, code } => {
-                write!(f, "open failed for {} with error: {code}", path.escape_ascii())
+                write!(
+                    f,
+                    "open failed for {} with error: {code}",
+                    path.escape_ascii()
+                )
             }
             Self::FileInfoFailed { code } => {
                 write!(f, "file information query failed with error: {code}")
@@ -217,31 +221,38 @@ impl Display for MmapError {
 
 /// Structured relocation-table parsing error details.
 pub enum RelocTableError {
-    /// `DT_JMPREL` table size is malformed.
-    JmpRelSize,
-    /// `DT_REL`/`DT_RELA` table size is malformed.
-    DynRelSize,
-    /// `DT_RELR` table size is malformed.
-    RelrSize,
-    /// `DT_RELAENT` does not match the selected `ElfRela` layout.
-    RelaEntrySize {
-        /// Expected `ElfRela` entry size.
-        expected: usize,
-        /// Actual `DT_RELAENT` value.
-        actual: usize,
+    /// A relocation count exceeds the available portion of the dynamic table.
+    CountOutOfRange {
+        /// Dynamic tag identifying the count or relocation table.
+        tag: ElfDynamicTag,
+        /// Requested number of relocation entries.
+        count: usize,
+        /// Number of entries available in that portion of the table.
+        available: usize,
     },
-    /// `DT_RELENT` does not match the selected `ElfRel` layout.
-    RelEntrySize {
-        /// Expected `ElfRel` entry size.
-        expected: usize,
-        /// Actual `DT_RELENT` value.
-        actual: usize,
+
+    /// A relocation table size is malformed.
+    InvalidTableSize {
+        /// Dynamic tag identifying the relocation table.
+        tag: ElfDynamicTag,
     },
-    /// `DT_RELRENT` does not match the selected `ElfRelr` layout.
-    RelrEntrySize {
-        /// Expected `ElfRelr` entry size.
+    /// The `DT_ANDROID_RELA` byte range is outside the mapped image.
+    PackedRelaRange,
+    /// The packed relocation stream does not start with the `APS2` signature.
+    InvalidPackedHeader,
+    /// The packed relocation stream ends before a field is complete.
+    PackedTruncated,
+    /// A packed relocation field exceeds the supported LEB128 width.
+    PackedLeb128Overflow,
+    /// A packed relocation group exceeds the declared relocation count.
+    PackedGroupCountOverflow,
+    /// The declared entry size does not match the selected ELF layout.
+    InvalidEntrySize {
+        /// Dynamic tag declaring the entry size.
+        tag: ElfDynamicTag,
+        /// Entry size required by the selected ELF layout.
         expected: usize,
-        /// Actual `DT_RELRENT` value.
+        /// Entry size declared by the dynamic section.
         actual: usize,
     },
 }
@@ -249,23 +260,54 @@ pub enum RelocTableError {
 impl Display for RelocTableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::JmpRelSize => f.write_str("DT_JMPREL relocation table size is malformed"),
-            Self::DynRelSize => f.write_str("DT_REL/DT_RELA relocation table size is malformed"),
-            Self::RelrSize => f.write_str("DT_RELR relocation table size is malformed"),
-            Self::RelaEntrySize { expected, actual } => write!(
+            Self::CountOutOfRange {
+                tag,
+                count,
+                available,
+            } => {
+                let table = if *tag == ElfDynamicTag::JMPREL {
+                    "remaining dynamic relocation length"
+                } else {
+                    "dynamic relocation table length"
+                };
+                write!(
+                    f,
+                    "{tag} relocation count {count} exceeds {table} {available}"
+                )
+            }
+            Self::InvalidTableSize { tag } => {
+                write!(f, "{tag} relocation table size is malformed")
+            }
+            Self::PackedRelaRange => {
+                f.write_str("DT_ANDROID_RELA relocation table is out of bounds")
+            }
+            Self::InvalidPackedHeader => {
+                f.write_str("invalid packed relocation header: expected APS2")
+            }
+            Self::PackedTruncated => f.write_str("packed relocation truncated"),
+            Self::PackedLeb128Overflow => f.write_str("packed relocation LEB128 overflow"),
+            Self::PackedGroupCountOverflow => {
+                f.write_str("packed relocation group overflows declared count")
+            }
+            Self::InvalidEntrySize {
+                tag,
+                expected,
+                actual,
+            } => write!(
                 f,
-                "DT_RELAENT relocation entry size {actual} does not match ElfRela size {expected}"
-            ),
-            Self::RelEntrySize { expected, actual } => write!(
-                f,
-                "DT_RELENT relocation entry size {actual} does not match ElfRel size {expected}"
-            ),
-            Self::RelrEntrySize { expected, actual } => write!(
-                f,
-                "DT_RELRENT relocation entry size {actual} does not match ElfRelr size {expected}"
+                "{tag} relocation entry size {actual} does not match expected size {expected}"
             ),
         }
     }
+}
+
+/// Malformed dynamic-table details stored separately to keep [`Error`] compact.
+#[derive(Debug)]
+pub struct MalformedTableError {
+    /// Dynamic tag identifying the table that failed validation.
+    pub tag: ElfDynamicTag,
+    /// Reason the table is malformed, without repeating the dynamic tag.
+    pub detail: &'static str,
 }
 
 /// Structured dynamic-section parsing error details.
@@ -284,24 +326,10 @@ pub enum ParseDynamicError {
         /// Size of one dynamic-table entry for the selected ELF layout.
         entry_size: usize,
     },
-    /// `DT_RELCOUNT`/`DT_RELACOUNT` exceeds the dynamic relocation table length.
-    RelativeRelocationCountOutOfRange {
-        /// Relative relocation count declared by the dynamic section.
-        count: usize,
-        /// Number of entries in the dynamic relocation table.
-        table_len: usize,
-    },
-    /// `DT_JMPREL` cannot fit as the tail of `DT_REL`/`DT_RELA`.
-    PltRelocationTailOutOfRange {
-        /// Number of PLT relocation entries.
-        plt_len: usize,
-        /// Number of dynamic relocation entries available after relative relocations.
-        dynrel_tail_len: usize,
-    },
     /// A relocation table described by the dynamic section is invalid.
     InvalidRelocTable {
         /// Structured reason why the relocation table is malformed.
-        reason: RelocTableError,
+        reason: Box<RelocTableError>,
     },
     /// A required dynamic hash subtable is empty.
     EmptyHashTable {
@@ -315,31 +343,15 @@ pub enum ParseDynamicError {
         /// GNU hash symbol bias declared by the hash header.
         symbol_bias: usize,
     },
-    /// A symbol hash table described by the dynamic section is malformed.
-    MalformedHashTable {
-        /// Static detail describing why the table is malformed.
-        detail: &'static str,
-    },
-    /// A symbol table described by the dynamic section is malformed.
-    MalformedSymbolTable {
-        /// Static detail describing why the table is malformed.
-        detail: &'static str,
-    },
-    /// A string table described by the dynamic section is malformed.
-    MalformedStringTable {
-        /// Static detail describing why the table is malformed.
-        detail: &'static str,
-    },
-    /// GNU symbol-version tables described by the dynamic section are malformed.
-    MalformedVersionTable {
-        /// Static detail describing why the tables are malformed.
-        detail: &'static str,
-    },
-    /// A lifecycle function table described by the dynamic section is malformed.
-    MalformedLifecycleTable {
-        /// Static detail describing why the table is malformed.
-        detail: &'static str,
-    },
+    /// A table described by the dynamic section is malformed.
+    MalformedTable(Box<MalformedTableError>),
+}
+
+impl ParseDynamicError {
+    #[inline]
+    pub(crate) fn malformed_table(tag: ElfDynamicTag, detail: &'static str) -> Self {
+        Self::MalformedTable(Box::new(MalformedTableError { tag, detail }))
+    }
 }
 
 impl Display for ParseDynamicError {
@@ -353,17 +365,6 @@ impl Display for ParseDynamicError {
                 f,
                 "dynamic table size {size} is not a multiple of entry size {entry_size}"
             ),
-            Self::RelativeRelocationCountOutOfRange { count, table_len } => write!(
-                f,
-                "relative relocation count {count} exceeds dynamic relocation table length {table_len}"
-            ),
-            Self::PltRelocationTailOutOfRange {
-                plt_len,
-                dynrel_tail_len,
-            } => write!(
-                f,
-                "PLT relocation tail length {plt_len} exceeds remaining dynamic relocation length {dynrel_tail_len}"
-            ),
             Self::InvalidRelocTable { reason } => Display::fmt(reason, f),
             Self::EmptyHashTable { table } => write!(f, "{table} is empty"),
             Self::GnuHashBucketBeforeSymbolBias {
@@ -373,11 +374,7 @@ impl Display for ParseDynamicError {
                 f,
                 "DT_GNU_HASH bucket symbol index {bucket_symbol} precedes symbol bias {symbol_bias}"
             ),
-            Self::MalformedHashTable { detail } => f.write_str(detail),
-            Self::MalformedSymbolTable { detail } => f.write_str(detail),
-            Self::MalformedStringTable { detail } => f.write_str(detail),
-            Self::MalformedVersionTable { detail } => f.write_str(detail),
-            Self::MalformedLifecycleTable { detail } => f.write_str(detail),
+            Self::MalformedTable(error) => write!(f, "{}: {}", error.tag, error.detail),
         }
     }
 }
@@ -501,18 +498,10 @@ pub enum ParseEhdrError {
         /// Static detail describing why the flags are unsupported.
         detail: &'static str,
     },
-    /// A shared object was required but the file type was different.
-    ExpectedDylib {
-        /// File type found in the ELF header.
-        found: ElfFileType,
-    },
-    /// An executable or PIE-compatible file was required but the file type was different.
-    ExpectedExecutable {
-        /// File type found in the ELF header.
-        found: ElfFileType,
-    },
-    /// A relocatable object was required but the file type was different.
-    ExpectedRelocatable {
+    /// The file type is not accepted by the requested loading operation.
+    UnexpectedFileType {
+        /// File types accepted by the operation.
+        expected: &'static [ElfFileType],
         /// File type found in the ELF header.
         found: ElfFileType,
     },
@@ -549,16 +538,15 @@ impl Display for ParseEhdrError {
                 f,
                 "invalid ELF header flags for {machine}: 0x{flags:x} ({detail})"
             ),
-            Self::ExpectedDylib { found } => {
-                write!(f, "file type mismatch: expected ET_DYN, found {found}")
-            }
-            Self::ExpectedExecutable { found } => write!(
-                f,
-                "file type mismatch: expected ET_EXEC or ET_DYN, found {}",
-                found,
-            ),
-            Self::ExpectedRelocatable { found } => {
-                write!(f, "file type mismatch: expected ET_REL, found {found}")
+            Self::UnexpectedFileType { expected, found } => {
+                f.write_str("file type mismatch: expected ")?;
+                for (index, file_type) in expected.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str(" or ")?;
+                    }
+                    Display::fmt(file_type, f)?;
+                }
+                write!(f, ", found {found}")
             }
             Self::RelocatableObjectsDisabled => {
                 f.write_str("file type ET_REL requires enabling the `object` feature")
@@ -1186,6 +1174,20 @@ impl From<RelocationFailure> for Error {
     }
 }
 
+impl From<RelocTableError> for ParseDynamicError {
+    fn from(reason: RelocTableError) -> Self {
+        Self::InvalidRelocTable {
+            reason: Box::new(reason),
+        }
+    }
+}
+
+impl From<RelocTableError> for Error {
+    fn from(err: RelocTableError) -> Self {
+        ParseDynamicError::from(err).into()
+    }
+}
+
 impl From<ParseDynamicError> for Error {
     fn from(err: ParseDynamicError) -> Self {
         Self::ParseDynamic(err)
@@ -1303,6 +1305,8 @@ debug_as_display!(
     CustomError,
     UnresolvedDependency,
     LinkerError,
+    LinkContextError,
+    LinkScanError,
     TlsError,
     Error,
 );

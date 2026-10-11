@@ -155,25 +155,30 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             .checked_add(bucket_size)
             .ok_or(ParseDynamicError::AddressOverflow)?;
 
-        let blooms = segments.read_view(blooms_off, bloom_size).ok_or(
-            ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH bloom filter size is malformed",
-            },
-        )?;
-        let buckets = segments.read_view(buckets_off, bucket_size).ok_or(
-            ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH bucket table size is malformed",
-            },
-        )?;
+        let blooms = segments.read_view(blooms_off, bloom_size).ok_or_else(|| {
+            ParseDynamicError::malformed_table(
+                crate::elf::ElfDynamicTag::GNU_HASH,
+                "bloom filter size is malformed",
+            )
+        })?;
+        let buckets = segments
+            .read_view(buckets_off, bucket_size)
+            .ok_or_else(|| {
+                ParseDynamicError::malformed_table(
+                    crate::elf::ElfDynamicTag::GNU_HASH,
+                    "bucket table size is malformed",
+                )
+            })?;
         let chain_count = Self::count_chain_entries(segments, chains_off, &header, &buckets)?;
         let chain_size = chain_count
             .checked_mul(size_of::<u32>())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let chains = segments.read_view(chains_off, chain_size).ok_or(
-            ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH chain table size is malformed",
-            },
-        )?;
+        let chains = segments.read_view(chains_off, chain_size).ok_or_else(|| {
+            ParseDynamicError::malformed_table(
+                crate::elf::ElfDynamicTag::GNU_HASH,
+                "chain table size is malformed",
+            )
+        })?;
 
         Ok(Self {
             header,
@@ -318,15 +323,17 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             // Check if this chain entry matches our hash (ignoring LSB)
             if hash | 1 == chain_hash | 1 {
                 let cur_symbol = table.get_raw(cur_symbol_idx)?;
-                let sym_name = table.strtab.get_str(cur_symbol.st_name());
+                let sym_name = table.strtab.get_cstr(cur_symbol.st_name()).to_bytes();
 
                 // Check if this is the symbol we're looking for
                 #[cfg(feature = "version")]
-                if sym_name == lookup.name() && table.check_match(dynsym_idx, lookup.version()) {
+                if sym_name == lookup.name().as_bytes()
+                    && table.check_match(dynsym_idx, lookup.version())
+                {
                     return Some(cur_symbol);
                 }
                 #[cfg(not(feature = "version"))]
-                if sym_name == lookup.name() {
+                if sym_name == lookup.name().as_bytes() {
                     return Some(cur_symbol);
                 }
             }

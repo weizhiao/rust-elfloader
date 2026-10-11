@@ -43,8 +43,11 @@ impl<L: ElfLayout> SymbolTable<L> {
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let symbols = segments
             .read_tail_view::<ElfSymbol<L>>(symtab_off)
-            .ok_or(ParseDynamicError::MalformedSymbolTable {
-                detail: "DT_SYMTAB is outside mapped ELF segments or has invalid alignment",
+            .ok_or_else(|| {
+                ParseDynamicError::malformed_table(
+                    crate::elf::ElfDynamicTag::SYMTAB,
+                    "table is outside mapped ELF segments or has invalid alignment",
+                )
             })?
             .as_slice();
 
@@ -59,8 +62,11 @@ impl<L: ElfLayout> SymbolTable<L> {
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let strtab = segments
             .read_view::<u8>(strtab_off, strtab_size.get())
-            .ok_or(ParseDynamicError::MalformedStringTable {
-                detail: "DT_STRTAB string table size is malformed",
+            .ok_or_else(|| {
+                ParseDynamicError::malformed_table(
+                    crate::elf::ElfDynamicTag::STRTAB,
+                    "string table size is malformed",
+                )
             })?;
         let strtab = ElfStringTable::new(strtab);
 
@@ -255,14 +261,16 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     pub(crate) fn resolve_lifecycle(&self) -> Result<(Lifecycle, Lifecycle)> {
         let segments = self.module.segments();
-        let init = self
-            .extra
-            .init
-            .resolve::<Arch::Layout, R>(segments, "DT_INIT_ARRAY size is malformed")?;
-        let fini = self
-            .extra
-            .fini
-            .resolve::<Arch::Layout, R>(segments, "DT_FINI_ARRAY size is malformed")?;
+        let init = self.extra.init.resolve::<Arch::Layout, R>(
+            segments,
+            crate::elf::ElfDynamicTag::INIT_ARRAY,
+            "size is malformed",
+        )?;
+        let fini = self.extra.fini.resolve::<Arch::Layout, R>(
+            segments,
+            crate::elf::ElfDynamicTag::FINI_ARRAY,
+            "size is malformed",
+        )?;
         Ok((init, fini))
     }
 
@@ -345,7 +353,7 @@ where
         let dynamic_addr = self
             .dynamic_addr
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &self.segments)?;
+        let mut dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &self.segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", self.path, dynamic);
 
@@ -353,6 +361,7 @@ where
             dynamic.pltrel.clone(),
             dynamic.dynrel.clone(),
             dynamic.relr.clone(),
+            core::mem::take(&mut dynamic.packed_rela),
             dynamic.rel_count,
             dynamic.pltrel_is_dynrel_tail,
         )?;

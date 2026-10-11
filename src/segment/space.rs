@@ -21,6 +21,10 @@ pub struct MappedRange {
 impl MappedRange {
     #[inline]
     const fn new(offset: VmOffset, len: usize) -> Self {
+        assert!(
+            offset.get().checked_add(len).is_some(),
+            "ELF mapped range overflowed",
+        );
         Self { offset, len }
     }
 
@@ -34,9 +38,7 @@ impl MappedRange {
 
     #[inline]
     fn end(self) -> VmOffset {
-        self.offset
-            .checked_add(self.len)
-            .expect("ELF mapped range overflowed")
+        VmOffset::new(self.offset.get() + self.len)
     }
 }
 
@@ -68,17 +70,13 @@ impl<R: RegionAccess> Display for ElfSegments<R> {
 
             let start = self.range_base(range);
             write!(f, "{}..", start)?;
-            if let Some(end_offset) = range.offset.checked_add(range.len) {
-                write!(
-                    f,
-                    "{} (+{} len 0x{:x})",
-                    self.base + end_offset,
-                    range.offset,
-                    range.len,
-                )?;
-            } else {
-                write!(f, "<overflow> (+{} len 0x{:x})", range.offset, range.len)?;
-            }
+            write!(
+                f,
+                "{} (+{} len 0x{:x})",
+                self.range_end(range),
+                range.offset,
+                range.len
+            )?;
         }
         f.write_str("]")
     }
@@ -128,6 +126,12 @@ impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
     fn range_base(&self, range: MappedRange) -> VmAddr {
         self.base + range.offset
+    }
+
+    /// Returns the exclusive end address of a mapped range.
+    #[inline]
+    fn range_end(&self, range: MappedRange) -> VmAddr {
+        self.base + range.end()
     }
 
     #[inline]
@@ -279,12 +283,16 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
     }
 
     fn range_at(&self, addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
-        if !self.contains_addr(addr) {
-            return None;
+        self.ranges.iter().find_map(|range| {
+            let mapped = self.range_base(*range)..self.range_end(*range);
+            mapped.contains(&addr).then_some(mapped)
+        })
+    }
+
+    fn visit_ranges(&self, visit: &mut dyn FnMut(core::ops::Range<VmAddr>)) {
+        for range in &self.ranges {
+            visit(self.range_base(*range)..self.range_end(*range));
         }
-        let first = *self.ranges.first()?;
-        let last = *self.ranges.last()?;
-        Some(self.range_base(first)..self.base.checked_add(last.end())?)
     }
 
     #[inline]

@@ -133,27 +133,41 @@ where
                 }
             }
             value if Arch::TLSDESC == Some(value) => {
-                let symbol = self.symbol_entry(rel);
-                let request = match self.find_symdef(&symbol) {
-                    None => {
-                        return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                let request = if r_sym == 0 {
+                    // By convention in ld.bfd and lld, an omitted symbol on a
+                    // TLS relocation is a reference to the current module.
+                    let Some(module) = self.core.tls() else {
+                        return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
+                    };
+                    TlsDescRequest::Defined {
+                        module,
+                        offset: VmAddr::new(0).wrapping_add_signed(r_addend).get(),
                     }
-                    Some(symdef) if symdef.is_weak_undef() => TlsDescRequest::UndefinedWeak {
-                        addend: r_addend as usize,
-                    },
-                    Some(symdef) => {
-                        effect = symdef.effect();
-                        let (sym, source) = symdef
-                            .definition()
-                            .expect("defined TLS symbol must retain its provider");
-                        let Some(tls) = source.tls() else {
-                            return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
-                        };
-                        TlsDescRequest::Defined {
-                            module: tls,
-                            offset: VmAddr::new(sym.st_value())
-                                .wrapping_add_signed(r_addend)
-                                .get(),
+                } else {
+                    let symbol = self.symbol_entry(rel);
+                    match self.find_symdef(&symbol) {
+                        None => {
+                            return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                        }
+                        Some(symdef) if symdef.is_weak_undef() => TlsDescRequest::UndefinedWeak {
+                            addend: r_addend as usize,
+                        },
+                        Some(symdef) => {
+                            effect = symdef.effect();
+                            let (sym, source) = symdef
+                                .definition()
+                                .expect("defined TLS symbol must retain its provider");
+                            let Some(tls) = source.tls() else {
+                                return Ok(TlsRelocOutcome::Failed(
+                                    RelocReason::MissingTlsModuleId,
+                                ));
+                            };
+                            TlsDescRequest::Defined {
+                                module: tls,
+                                offset: VmAddr::new(sym.st_value())
+                                    .wrapping_add_signed(r_addend)
+                                    .get(),
+                            }
                         }
                     }
                 };

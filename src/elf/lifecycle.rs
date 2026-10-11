@@ -22,6 +22,9 @@ impl Lifecycle {
         if let Some(array) = func_array {
             funcs.extend(array);
         }
+        // .init_array/.fini_array may carry 0 and -1 sentinel entries that
+        // bionic and glibc skip; calling them would jump to a null address.
+        funcs.retain(|addr| addr.get() != 0 && addr.get() != usize::MAX);
         Self { funcs }
     }
 

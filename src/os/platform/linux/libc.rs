@@ -12,7 +12,15 @@ use libc::{_SC_PAGESIZE, O_RDONLY, madvise, mmap, mprotect, munmap, pread, sysco
 
 #[inline]
 fn last_os_error_code() -> u32 {
-    unsafe { *libc::__errno_location() as u32 }
+    // bionic exposes __errno() rather than glibc's __errno_location().
+    #[cfg(target_os = "android")]
+    unsafe {
+        *libc::__errno() as u32
+    }
+    #[cfg(not(target_os = "android"))]
+    unsafe {
+        *libc::__errno_location() as u32
+    }
 }
 
 #[inline]

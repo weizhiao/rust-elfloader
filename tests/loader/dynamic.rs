@@ -99,7 +99,7 @@ fn loads_exec() {
         .expect_err("load_dylib should reject ET_EXEC");
     assert!(matches!(
         error,
-        Error::ParseEhdr(ParseEhdrError::ExpectedDylib { found })
+        Error::ParseEhdr(ParseEhdrError::UnexpectedFileType { expected: [ElfFileType::DYN], found })
             if found == ElfFileType::EXEC
     ));
 

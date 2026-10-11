@@ -1,11 +1,13 @@
-//! ELF relocation-entry wrappers.
+//! ELF relocation-entry wrappers and Android packed relocation decoding.
 
 use crate::{
     ByteRepr, Result,
     arch::NativeArch,
+    error::RelocTableError,
     memory::{ImageMemory, ImageMemoryExt, VmAddr, VmOffset},
     relocation::RelocationArch,
 };
+use alloc::vec::Vec;
 use core::fmt::{self, Display};
 
 use super::{
@@ -74,6 +76,12 @@ pub struct ElfRela<L: ElfLayout = NativeElfLayout> {
 }
 
 impl<L: ElfLayout> ElfRela<L> {
+    /// Wraps a raw layout relocation entry.
+    #[inline]
+    pub fn from_raw(rela: L::Rela) -> Self {
+        Self { rela }
+    }
+
     /// Returns the relocation type.
     #[inline]
     pub fn r_type(&self) -> ElfRelocationType {
@@ -152,10 +160,21 @@ pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
     where
         Memory: ImageMemory,
         L::Word: ByteRepr;
+
+    /// Builds an entry from raw `r_offset`/`r_info`/`r_addend` fields, used when
+    /// expanding Android packed relocations into plain entries.
+    fn from_fields(r_offset: usize, r_info: usize, r_addend: isize) -> Self;
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
     const SECTION_TYPE: ElfSectionType = ElfSectionType::RELA;
+
+    #[inline]
+    fn from_fields(r_offset: usize, r_info: usize, r_addend: isize) -> Self {
+        Self {
+            rela: <L::Rela as ElfRelaRaw>::from_fields(r_offset, r_info, r_addend),
+        }
+    }
 
     #[inline]
     fn r_type(&self) -> ElfRelocationType {
@@ -213,6 +232,12 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
+    #[inline]
+    fn from_fields(r_offset: usize, r_info: usize, _r_addend: isize) -> Self {
+        Self {
+            rel: <L::Rel as ElfRelRaw>::from_fields(r_offset, r_info),
+        }
+    }
     const SECTION_TYPE: ElfSectionType = ElfSectionType::REL;
 
     #[inline]
@@ -268,3 +293,178 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
 
 /// Relocation entry type selected by a target architecture.
 pub type ElfRelType<Arch = NativeArch> = <Arch as RelocationArch>::Relocation;
+
+const PACKED_MAGIC: &[u8; 4] = b"APS2";
+
+const GROUPED_BY_INFO: usize = 1;
+const GROUPED_BY_OFFSET_DELTA: usize = 2;
+const GROUPED_BY_ADDEND: usize = 4;
+const HAS_ADDEND: usize = 8;
+
+/// Sign-extending LEB128 reader over a byte slice, matching bionic's
+/// `sleb128_decoder` (used for every field of the packed stream).
+struct Sleb128<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Sleb128<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn read(&mut self) -> core::result::Result<isize, RelocTableError> {
+        let mut value: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            let byte = *self
+                .bytes
+                .get(self.pos)
+                .ok_or(RelocTableError::PackedTruncated)?;
+            self.pos += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            shift += 7;
+            if byte & 0x80 == 0 {
+                if shift < 64 && (byte & 0x40) != 0 {
+                    value |= !((1u64 << shift) - 1);
+                }
+                return Ok(value as isize);
+            }
+            if shift >= 64 {
+                return Err(RelocTableError::PackedLeb128Overflow);
+            }
+        }
+    }
+}
+
+/// Expands a `DT_ANDROID_RELA` / `SHT_ANDROID_RELA` packed stream into plain entries.
+///
+/// The LEB128-encoded groups follow bionic's
+/// `linker_reloc_iterators.h::for_all_packed_relocs` semantics.
+pub(crate) fn decode_packed_rela<L: ElfLayout, R: ElfRelEntry<L>>(
+    bytes: &[u8],
+) -> core::result::Result<Vec<R>, RelocTableError> {
+    let bytes = bytes
+        .strip_prefix(PACKED_MAGIC as &[u8])
+        .ok_or(RelocTableError::InvalidPackedHeader)?;
+    let mut reader = Sleb128::new(bytes);
+    let relocation_count = reader.read()? as usize;
+    let mut offset = reader.read()? as usize;
+    let mut addend: isize = 0;
+
+    let mut relocations = Vec::with_capacity(relocation_count.min(1 << 20));
+    while relocations.len() < relocation_count {
+        // Group headers store any fields shared by all entries in the group.
+        let group_size = reader.read()? as usize;
+        let group_flags = reader.read()? as usize;
+        let group_offset_delta = if group_flags & GROUPED_BY_OFFSET_DELTA != 0 {
+            Some(reader.read()? as usize)
+        } else {
+            None
+        };
+        let group_info = if group_flags & GROUPED_BY_INFO != 0 {
+            Some(reader.read()? as usize)
+        } else {
+            None
+        };
+
+        let has_addend = group_flags & HAS_ADDEND != 0;
+        let grouped_addend = group_flags & GROUPED_BY_ADDEND != 0;
+        if !has_addend {
+            addend = 0;
+        } else if grouped_addend {
+            addend = addend.wrapping_add(reader.read()?);
+        }
+
+        // Offset and addend are cumulative across group boundaries.
+        for _ in 0..group_size {
+            if relocations.len() == relocation_count {
+                return Err(RelocTableError::PackedGroupCountOverflow);
+            }
+            let offset_delta = match group_offset_delta {
+                Some(delta) => delta,
+                None => reader.read()? as usize,
+            };
+            offset = offset.wrapping_add(offset_delta);
+            let info = match group_info {
+                Some(info) => info,
+                None => reader.read()? as usize,
+            };
+            if has_addend && !grouped_addend {
+                addend = addend.wrapping_add(reader.read()?);
+            }
+            relocations.push(R::from_fields(offset, info, addend));
+        }
+    }
+    Ok(relocations)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::elf::Elf64Layout;
+
+    fn leb(value: isize, out: &mut Vec<u8>) {
+        // Sign-extended LEB128 encode, matching bionic's decoder.
+        let mut v = value as u64;
+        loop {
+            let mut byte = (v & 0x7f) as u8;
+            v >>= 7;
+            let sign_bit = (byte & 0x40) != 0;
+            if (v == 0 && !sign_bit) || (v == u64::MAX >> 7 && sign_bit) {
+                out.push(byte);
+                return;
+            }
+            byte |= 0x80;
+            out.push(byte);
+        }
+    }
+
+    #[test]
+    fn decodes_grouped_stream() {
+        // Two groups: (a) grouped-by info+offset-delta with per-reloc addends,
+        // (b) ungrouped info with a shared addend.
+        let mut b = PACKED_MAGIC.to_vec();
+        leb(3, &mut b); // num_relocs
+        leb(0x1000, &mut b); // initial r_offset
+        // group 1: size 2, flags = BY_INFO | BY_OFFSET_DELTA | HAS_ADDEND
+        leb(2, &mut b);
+        leb(
+            GROUPED_BY_INFO as isize | GROUPED_BY_OFFSET_DELTA as isize | HAS_ADDEND as isize,
+            &mut b,
+        );
+        leb(8, &mut b); // offset delta
+        leb(1, &mut b); // group info: type=1, sym=0
+        leb(10, &mut b); // addend reloc0
+        leb(20, &mut b); // addend reloc1
+        // group 2: size 1, flags = HAS_ADDEND | GROUPED_BY_ADDEND
+        leb(1, &mut b);
+        leb(HAS_ADDEND as isize | GROUPED_BY_ADDEND as isize, &mut b);
+        leb(5, &mut b); // group addend (cumulative)
+        leb(0x100, &mut b); // per-reloc offset delta
+        leb(2, &mut b); // per-reloc info: type=2
+
+        let rels = decode_packed_rela::<Elf64Layout, ElfRela<Elf64Layout>>(&b).unwrap();
+        assert_eq!(rels.len(), 3);
+        assert_eq!(rels[0].r_offset().get(), 0x1000 + 8);
+        assert_eq!(rels[0].r_type().raw(), 1);
+        assert_eq!(rels[0].r_addend(), 10);
+        assert_eq!(rels[1].r_offset().get(), 0x1000 + 16);
+        assert_eq!(rels[1].r_addend(), 30); // 10 (carried) + 20
+        assert_eq!(rels[2].r_offset().get(), 0x1010 + 0x100);
+        assert_eq!(rels[2].r_type().raw(), 2);
+        assert_eq!(rels[2].r_addend(), 30 + 5); // cumulative group addend
+    }
+
+    #[test]
+    fn rejects_truncated_stream() {
+        let mut b = PACKED_MAGIC.to_vec();
+        leb(4, &mut b);
+        leb(0x1000, &mut b);
+        leb(2, &mut b);
+        leb(GROUPED_BY_OFFSET_DELTA as isize, &mut b);
+        leb(8, &mut b);
+        // Missing per-reloc infos/offsets: stream ends mid-group.
+        assert!(decode_packed_rela::<Elf64Layout, ElfRela<Elf64Layout>>(&b).is_err());
+    }
+}

@@ -5,6 +5,7 @@ use crate::{
     arch::NativeArch,
     entity::EntitySet,
     image::{GlobalScope, Module, ModuleScope, SearchPathPool},
+    linker::{AddressIndex, AddressMatch},
     memory::VmAddr,
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
@@ -130,14 +131,21 @@ where
             .map(|slot| self.committed.make_module_id(slot))
     }
 
-    /// Returns the first committed module whose runtime memory contains `addr`.
+    /// Finds the committed mapping containing `addr`.
+    pub fn address_at(&self, addr: VmAddr) -> Option<AddressMatch> {
+        self.committed
+            .addresses
+            .find(addr)
+            .map(|(owner, range)| AddressMatch { owner, range })
+    }
+
+    /// Retains a read-only address index for the current committed modules.
     ///
-    /// Overlapping module ranges are resolved in load order.
-    pub fn module_id_at(&self, addr: VmAddr) -> Option<ModuleId> {
-        self.load_order().find(|id| {
-            self.module(*id)
-                .is_ok_and(|module| module.memory().range_at(addr).is_some())
-        })
+    /// Later commits and removals use copy-on-write. This snapshot does not keep
+    /// modules or mappings alive: the caller must retain their owners while
+    /// querying it.
+    pub fn address_index(&self) -> Arc<AddressIndex> {
+        self.committed.addresses.clone()
     }
 
     /// Returns the representative key associated with a committed module id.

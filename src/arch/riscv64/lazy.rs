@@ -5,8 +5,8 @@
 /// registers, calls the dynamic linker resolution function, and then restores
 /// the state before jumping to the resolved function.
 ///
-/// The function preserves all caller-saved integer registers (a0-a7, ra)
-/// and optionally floating-point registers depending on the target features.
+/// The function preserves integer argument registers a0-a7 and return address ra
+/// and optionally floating-point registers depending on the target calling ABI.
 ///
 /// # Safety
 /// This function uses naked assembly and must be called with the correct
@@ -16,8 +16,8 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
         "
         // 保存整数参数寄存器
-        // 18 * 8 = 144 bytes, 保持 16 字节对齐
-        addi sp,sp,-18*8
+        // ra + a0-a7 占 72 字节，浮点参数紧随其后，栈帧向上对齐到 16 字节
+        addi sp,sp,-{frame_size}
         sd ra,8*0(sp)
         sd a0,8*1(sp)
         sd a1,8*2(sp)
@@ -46,14 +46,14 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         "
         .option push
         .option arch, +f
-        fsw fa0,8*9(sp)
-        fsw fa1,8*10(sp)
-        fsw fa2,8*11(sp)
-        fsw fa3,8*12(sp)
-        fsw fa4,8*13(sp)
-        fsw fa5,8*14(sp)
-        fsw fa6,8*15(sp)
-        fsw fa7,8*16(sp)
+        fsw fa0,72+4*0(sp)
+        fsw fa1,72+4*1(sp)
+        fsw fa2,72+4*2(sp)
+        fsw fa3,72+4*3(sp)
+        fsw fa4,72+4*4(sp)
+        fsw fa5,72+4*5(sp)
+        fsw fa6,72+4*6(sp)
+        fsw fa7,72+4*7(sp)
         .option pop
         ",
         "
@@ -92,21 +92,28 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         "
         .option push
         .option arch, +f
-        flw fa0,8*9(sp)
-        flw fa1,8*10(sp)
-        flw fa2,8*11(sp)
-        flw fa3,8*12(sp)
-        flw fa4,8*13(sp)
-        flw fa5,8*14(sp)
-        flw fa6,8*15(sp)
-        flw fa7,8*16(sp)
+        flw fa0,72+4*0(sp)
+        flw fa1,72+4*1(sp)
+        flw fa2,72+4*2(sp)
+        flw fa3,72+4*3(sp)
+        flw fa4,72+4*4(sp)
+        flw fa5,72+4*5(sp)
+        flw fa6,72+4*6(sp)
+        flw fa7,72+4*7(sp)
         .option pop
         ",
         "
-        addi sp,sp,18*8
+        addi sp,sp,{frame_size}
         // 执行真正的函数
         jr t1
         ",
         sym crate::lazy::dl_fixup,
+        frame_size = const if cfg!(riscv_float_abi = "d") {
+            144 // 72 integer + 64 floating-point bytes, rounded up.
+        } else if cfg!(riscv_float_abi = "f") {
+            112 // 72 integer + 32 floating-point bytes, rounded up.
+        } else {
+            80 // 72 integer bytes, rounded up.
+        },
     )
 }

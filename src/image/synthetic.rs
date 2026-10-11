@@ -230,6 +230,8 @@ impl ImageMemory for UnmappedImageMemory {
         None
     }
 
+    fn visit_ranges(&self, _visit: &mut dyn FnMut(core::ops::Range<VmAddr>)) {}
+
     #[inline]
     fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
         None

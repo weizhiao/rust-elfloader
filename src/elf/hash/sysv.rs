@@ -95,19 +95,23 @@ impl ElfHash {
         let chains_off = buckets_off
             .checked_add(bucket_size)
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let buckets = segments.read_view(buckets_off, bucket_size).ok_or(
-            ParseDynamicError::MalformedHashTable {
-                detail: "DT_HASH bucket table size is malformed",
-            },
-        )?;
+        let buckets = segments
+            .read_view(buckets_off, bucket_size)
+            .ok_or_else(|| {
+                ParseDynamicError::malformed_table(
+                    crate::elf::ElfDynamicTag::HASH,
+                    "bucket table size is malformed",
+                )
+            })?;
         let chain_size = (header.nchain as usize)
             .checked_mul(size_of::<u32>())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let chains = segments.read_view(chains_off, chain_size).ok_or(
-            ParseDynamicError::MalformedHashTable {
-                detail: "DT_HASH chain table size is malformed",
-            },
-        )?;
+        let chains = segments.read_view(chains_off, chain_size).ok_or_else(|| {
+            ParseDynamicError::malformed_table(
+                crate::elf::ElfDynamicTag::HASH,
+                "chain table size is malformed",
+            )
+        })?;
 
         Ok(ElfHash {
             header,
@@ -169,15 +173,17 @@ impl ElfHash {
             // Get the current symbol and its name
             let next_chain = *chains.get(chain_idx)? as usize;
             let cur_symbol = table.get_raw(chain_idx)?;
-            let sym_name = table.strtab.get_str(cur_symbol.st_name());
+            let sym_name = table.strtab.get_cstr(cur_symbol.st_name()).to_bytes();
 
             // Check if this is the symbol we're looking for
             #[cfg(feature = "version")]
-            if sym_name == lookup.name() && table.check_match(chain_idx, lookup.version()) {
+            if sym_name == lookup.name().as_bytes()
+                && table.check_match(chain_idx, lookup.version())
+            {
                 return Some(cur_symbol);
             }
             #[cfg(not(feature = "version"))]
-            if sym_name == lookup.name() {
+            if sym_name == lookup.name().as_bytes() {
                 return Some(cur_symbol);
             }
 

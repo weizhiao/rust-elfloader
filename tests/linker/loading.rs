@@ -189,7 +189,10 @@ fn commits_resolver_modules() {
         .base()
         .checked_add(first_range.offset)
         .expect("mapped address must not overflow");
-    assert_eq!(context.module_id_at(mapped_addr), Some(root.root()));
+    assert_eq!(
+        context.address_at(mapped_addr).map(|matched| matched.owner),
+        Some(root.root())
+    );
     let _: &() = elf.user_data();
 
     assert!(dep.state().is_initialized());

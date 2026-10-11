@@ -8,6 +8,7 @@
 //! or implement [`KeyResolver`] when dependencies come from custom registries,
 //! memory blobs, package stores, or host-specific search rules.
 
+mod address;
 mod context;
 mod driver;
 mod import;
@@ -19,6 +20,7 @@ mod session;
 mod storage;
 mod unload;
 
+pub use address::{AddressIndex, AddressMatch};
 pub use context::LinkContext;
 pub use driver::{Linker, LoadResult};
 pub use import::GraphModule;

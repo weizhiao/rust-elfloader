@@ -242,6 +242,7 @@ impl SearchPathResolver {
 
     /// Opens and validates a target-compatible ELF candidate.
     fn try_candidate<Arch: RelocationArch>(
+        &self,
         path: &Path,
         dir: Option<&SharedDir>,
         skip_incompatible: bool,
@@ -254,7 +255,10 @@ impl SearchPathResolver {
                 }
                 file
             }
-            Err(Error::Io(IoError::OpenFailed { .. })) => {
+            Err(err @ Error::Io(IoError::OpenFailed { .. })) => {
+                if !skip_incompatible {
+                    return Err(err);
+                }
                 if let Some(dir) = dir.filter(|dir| dir.needs_check()) {
                     if path_is_dir(dir.path()) {
                         dir.mark_existing();
@@ -278,6 +282,7 @@ impl SearchPathResolver {
     }
 
     fn try_dir<Arch: RelocationArch>(
+        &self,
         dir: &SharedDir,
         requested: &Path,
         candidate: &mut PathBuf,
@@ -287,17 +292,18 @@ impl SearchPathResolver {
             return Ok(None);
         }
         candidate.set_joined(dir.path(), requested);
-        Self::try_candidate::<Arch>(candidate, Some(dir), true, incompatible)
+        self.try_candidate::<Arch>(candidate, Some(dir), true, incompatible)
     }
 
     fn try_dirs<Arch: RelocationArch>(
+        &self,
         dirs: &[SharedDir],
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
     ) -> Result<Option<ElfFile>> {
         for dir in dirs {
-            if let Some(file) = Self::try_dir::<Arch>(dir, requested, candidate, incompatible)? {
+            if let Some(file) = self.try_dir::<Arch>(dir, requested, candidate, incompatible)? {
                 return Ok(Some(file));
             }
         }
@@ -342,7 +348,8 @@ where
             .as_ref()
             .map_or_else(|| request.requested(), PathBuf::as_path);
         if requested.has_dir_separator() {
-            return Self::try_candidate::<Arch>(requested, None, false, &mut incompatible)?
+            return self
+                .try_candidate::<Arch>(requested, None, false, &mut incompatible)?
                 .map(ResolvedKey::load)
                 .ok_or_else(|| req.unresolved());
         }
@@ -360,7 +367,7 @@ where
                         let Some(dirs) = owner.rpath_dirs() else {
                             return Ok(true);
                         };
-                        found = Self::try_dirs::<Arch>(
+                        found = self.try_dirs::<Arch>(
                             dirs,
                             requested,
                             &mut candidate,
@@ -377,14 +384,14 @@ where
                         continue;
                     };
                     if let Some(file) =
-                        Self::try_dirs::<Arch>(dirs, requested, &mut candidate, &mut incompatible)?
+                        self.try_dirs::<Arch>(dirs, requested, &mut candidate, &mut incompatible)?
                     {
                         return Ok(ResolvedKey::load(file));
                     }
                 }
                 SearchPathEntry::Dir(dir) => {
                     if let Some(file) =
-                        Self::try_dir::<Arch>(dir, requested, &mut candidate, &mut incompatible)?
+                        self.try_dir::<Arch>(dir, requested, &mut candidate, &mut incompatible)?
                     {
                         return Ok(ResolvedKey::load(file));
                     }
@@ -395,7 +402,7 @@ where
                     for dir in &provided {
                         candidate.set_joined(dir, requested);
                         if let Some(file) =
-                            Self::try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
+                            self.try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
                         {
                             return Ok(ResolvedKey::load(file));
                         }
@@ -406,7 +413,7 @@ where
                     provider(request, &mut provided)?;
                     for candidate in &provided {
                         if let Some(file) =
-                            Self::try_candidate::<Arch>(candidate, None, true, &mut incompatible)?
+                            self.try_candidate::<Arch>(candidate, None, true, &mut incompatible)?
                         {
                             return Ok(ResolvedKey::load(file));
                         }

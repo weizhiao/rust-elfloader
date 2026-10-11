@@ -22,6 +22,8 @@ const fn native_float_abi() -> u32 {
     } else if cfg!(riscv_float_abi = "f") {
         EF_RISCV_FLOAT_ABI_SINGLE
     } else {
+        // build.rs requires an explicit ABI for native RISC-V targets.
+        // On other architectures this native-only validation is not called.
         EF_RISCV_FLOAT_ABI_SOFT
     }
 }

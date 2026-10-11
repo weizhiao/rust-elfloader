@@ -1,6 +1,6 @@
 use crate::{
     ByteRepr, ParseDynamicError, Result,
-    elf::{ElfLayout, ElfStringTable, SymbolTableView, hash::sysv_hash},
+    elf::{ElfDynamicTag, ElfLayout, ElfStringTable, SymbolTableView, hash::sysv_hash},
     memory::{ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
@@ -102,11 +102,12 @@ impl VersionIndexTable {
         let offset = addr
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let entries = segments.read_tail_view(offset).ok_or(
-            ParseDynamicError::MalformedVersionTable {
-                detail: "DT_VERSYM table is outside mapped ELF segments or has invalid alignment",
-            },
-        )?;
+        let entries = segments.read_tail_view(offset).ok_or_else(|| {
+            ParseDynamicError::malformed_table(
+                ElfDynamicTag::VERSYM,
+                "table is outside mapped ELF segments or has invalid alignment",
+            )
+        })?;
         Ok(Self(entries))
     }
 
@@ -179,10 +180,11 @@ impl ELFVersion {
 fn read_record<T: ByteRepr, R: RegionAccess>(
     segments: &ElfSegments<R>,
     addr: VmAddr,
+    tag: ElfDynamicTag,
     detail: &'static str,
 ) -> Result<T> {
     if !segments.contains_range(addr, size_of::<T>()) {
-        return Err(ParseDynamicError::MalformedVersionTable { detail }.into());
+        return Err(ParseDynamicError::malformed_table(tag, detail).into());
     }
     unsafe { segments.read_value(addr) }
 }
@@ -204,14 +206,16 @@ fn parse_verdefs<R: RegionAccess>(
         let verdef: VerDef = read_record(
             segments,
             addr,
-            "DT_VERDEF entry is outside mapped ELF segments",
+            ElfDynamicTag::VERDEF,
+            "entry is outside mapped ELF segments",
         )?;
 
         if verdef.vd_flags & VER_FLG_BASE == 0 {
             let aux: VerDefAux = read_record(
                 segments,
                 addr + VmOffset::new(verdef.vd_aux as usize),
-                "DT_VERDEF auxiliary entry is outside mapped ELF segments",
+                ElfDynamicTag::VERDEF,
+                "auxiliary entry is outside mapped ELF segments",
             )?;
             insert_version(
                 versions,
@@ -240,12 +244,14 @@ fn parse_verneeds<R: RegionAccess>(
     let mut verneed: VerNeed = read_record(
         segments,
         addr,
-        "DT_VERNEED entry is outside mapped ELF segments",
+        ElfDynamicTag::VERNEED,
+        "entry is outside mapped ELF segments",
     )?;
     if verneed.vn_version != VERSION_CURRENT {
-        return Err(ParseDynamicError::MalformedVersionTable {
-            detail: "DT_VERNEED entry has an unsupported revision",
-        }
+        return Err(ParseDynamicError::malformed_table(
+            ElfDynamicTag::VERNEED,
+            "entry has an unsupported revision",
+        )
         .into());
     }
 
@@ -255,7 +261,8 @@ fn parse_verneeds<R: RegionAccess>(
             let aux: VerNeedAux = read_record(
                 segments,
                 aux_addr,
-                "DT_VERNEED auxiliary entry is outside mapped ELF segments",
+                ElfDynamicTag::VERNEED,
+                "auxiliary entry is outside mapped ELF segments",
             )?;
             insert_version(
                 versions,
@@ -279,7 +286,8 @@ fn parse_verneeds<R: RegionAccess>(
         verneed = read_record(
             segments,
             addr,
-            "DT_VERNEED entry is outside mapped ELF segments",
+            ElfDynamicTag::VERNEED,
+            "entry is outside mapped ELF segments",
         )?;
     }
     Ok(())

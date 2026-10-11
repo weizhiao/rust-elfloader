@@ -4,6 +4,7 @@ use crate::{
     entity::{PrimaryMap, entity_ref},
     image::{ModuleHandle, ModuleInstanceId, ModuleScope},
     input::{ModuleSourceId, Path, PathBuf},
+    linker::AddressIndex,
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{Arc, AtomicUsize, Ordering},
@@ -338,6 +339,7 @@ pub(crate) struct CommittedStorage<
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
+    pub(super) addresses: Arc<AddressIndex>,
 }
 
 impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
@@ -354,6 +356,7 @@ where
             sources: BTreeMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
+            addresses: Arc::new(AddressIndex::default()),
         }
     }
 
@@ -537,6 +540,16 @@ where
             order.iter().all(|slot| !self.lifecycle.contains(slot)),
             "lifecycle entries must only be recorded once"
         );
+        let entries = &self.entries;
+        let context = self.context;
+        Arc::make_mut(&mut self.addresses).extend(order.iter().map(|&slot| {
+            let cell = &entries[slot];
+            let entry = cell.entry.as_ref().expect("published module must exist");
+            (
+                ModuleId::from_slot(context, slot, cell.generation),
+                entry.module.memory(),
+            )
+        }));
         self.lifecycle.extend_from_slice(order);
     }
 
@@ -565,6 +578,8 @@ where
         &mut self,
         slot: ModuleSlot,
     ) -> (ModuleHandle<Arch, Tls>, ModuleScope<Arch, Tls>, Meta) {
+        let id = self.make_module_id(slot);
+        Arc::make_mut(&mut self.addresses).remove(id);
         let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell

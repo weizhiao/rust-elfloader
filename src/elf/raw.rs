@@ -428,6 +428,9 @@ pub trait ElfRelRaw: 'static {
     fn set_r_offset(&mut self, value: usize);
     fn r_offset(&self) -> usize;
     fn r_info(&self) -> usize;
+
+    /// Builds an entry from raw `r_offset`/`r_info` fields.
+    fn from_fields(r_offset: usize, r_info: usize) -> Self;
 }
 
 macro_rules! impl_rel_raw {
@@ -447,6 +450,14 @@ macro_rules! impl_rel_raw {
             fn r_info(&self) -> usize {
                 self.r_info as usize
             }
+
+            #[inline]
+            fn from_fields(r_offset: usize, r_info: usize) -> Self {
+                Self {
+                    r_offset: r_offset as _,
+                    r_info: r_info as _,
+                }
+            }
         }
     };
 }
@@ -457,6 +468,10 @@ impl_rel_raw!(elf::relocation::Elf64_Rel);
 pub trait ElfRelaRaw: ElfRelRaw {
     fn set_r_addend(&mut self, value: isize);
     fn r_addend(&self) -> isize;
+
+    /// Builds an entry from its raw `r_offset`/`r_info`/`r_addend` fields, used
+    /// when expanding Android packed relocations into plain entries.
+    fn from_fields(r_offset: usize, r_info: usize, r_addend: isize) -> Self;
 }
 
 macro_rules! impl_rela_raw {
@@ -476,6 +491,15 @@ macro_rules! impl_rela_raw {
             fn r_info(&self) -> usize {
                 self.r_info as usize
             }
+
+            #[inline]
+            fn from_fields(r_offset: usize, r_info: usize) -> Self {
+                Self {
+                    r_offset: r_offset as _,
+                    r_info: r_info as _,
+                    r_addend: 0 as _,
+                }
+            }
         }
 
         impl ElfRelaRaw for $ty {
@@ -487,6 +511,15 @@ macro_rules! impl_rela_raw {
             #[inline]
             fn r_addend(&self) -> isize {
                 self.r_addend as isize
+            }
+
+            #[inline]
+            fn from_fields(r_offset: usize, r_info: usize, r_addend: isize) -> Self {
+                Self {
+                    r_offset: r_offset as _,
+                    r_info: r_info as _,
+                    r_addend: r_addend as _,
+                }
             }
         }
     };

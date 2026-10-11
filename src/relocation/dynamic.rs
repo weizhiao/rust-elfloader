@@ -1,8 +1,9 @@
 //! Relocation of elf objects
 use crate::{
-    ByteRepr, ParseDynamicError, RelocReason, Result,
+    ByteRepr, RelocReason, Result,
     arch::NativeArch,
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
+    elf::{ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfSectionType, ElfWord},
+    error::RelocTableError,
     hint::{likely, unlikely},
     image::{GlobalScope, LoadedCore, RawDynamic},
     lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
@@ -14,6 +15,7 @@ use crate::{
     tls::{TlsRelocOutcome, TlsResolver},
 };
 use alloc::vec;
+use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -109,7 +111,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             );
         }
 
-        self.apply_relro(lazy)?;
         let mut dynamic_event =
             DynamicRelocatedEvent::new(&self, self.dynamic_addr(), initializer, finalizer);
         observer.on_dynamic_relocated(&mut dynamic_event)?;
@@ -123,6 +124,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         if run_init {
             self.initialize()?;
         }
+
+        // Protect RELRO only after every write path (relocations, ifunc GOT
+        // fill, initializer runs) has completed, matching bionic's ordering.
+        self.apply_relro(lazy)?;
 
         logging::info!("Relocation completed for {}", self.name().escape_ascii());
 
@@ -217,6 +222,8 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = NativeArch> {
     pub(in crate::relocation) pltrel: MappedView<ElfRelType<Arch>>,
     /// Other dynamic relocations
     dynrel: MappedView<ElfRelType<Arch>>,
+    /// Relocations expanded from an Android packed RELA stream
+    packed_rela: Vec<ElfRelType<Arch>>,
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -325,7 +332,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
         // Process each dynamic relocation entry
         let dynrel = reloc.dynrel.as_slice();
-        for rel in dynrel {
+        for rel in dynrel.iter().chain(reloc.packed_rela.iter()) {
             if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
             }
@@ -336,6 +343,13 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
             if r_type == Arch::NONE {
+                continue;
+            }
+
+            // Apply relative relocations outside the preprocessed prefix,
+            // including those decoded from packed streams.
+            if r_type == Arch::RELATIVE {
+                Arch::apply_relative(rel, helper.memory())?;
                 continue;
             }
 
@@ -399,6 +413,7 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
         pltrel: Option<MappedView<ElfRelType<Arch>>>,
         dynrel: Option<MappedView<ElfRelType<Arch>>>,
         relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
+        packed_rela: Vec<ElfRelType<Arch>>,
         rela_count: Option<NonZeroUsize>,
         pltrel_is_dynrel_tail: bool,
     ) -> Result<Self> {
@@ -411,16 +426,30 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
                 relative: RelativeRel::Relr(relr),
                 pltrel,
                 dynrel,
+                packed_rela,
             })
         } else {
             // Use traditional REL/RELA relocations
             // nrelative indicates the count of REL_RELATIVE relocation types
-            let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
+            let mut nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
+
+            // DT_ANDROID_RELA carries the whole table, including the relative
+            // prefix counted by DT_RELACOUNT, while the plain table is absent.
+            // bionic ignores relcount in that case; the packed entries reach
+            // the generic pass below, which applies relative types too.
+            if dynrel.is_empty() && !packed_rela.is_empty() {
+                nrelative = 0;
+            }
 
             let Some((relative, dynrel)) = dynrel.split_at(nrelative) else {
-                return Err(ParseDynamicError::RelativeRelocationCountOutOfRange {
+                return Err(RelocTableError::CountOutOfRange {
+                    tag: if Arch::Relocation::SECTION_TYPE == ElfSectionType::RELA {
+                        ElfDynamicTag::RELACOUNT
+                    } else {
+                        ElfDynamicTag::RELCOUNT
+                    },
                     count: nrelative,
-                    table_len: dynrel.len(),
+                    available: dynrel.len(),
                 }
                 .into());
             };
@@ -429,9 +458,10 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
             let dynrel = if pltrel_is_dynrel_tail {
                 // If contiguous, exclude pltrel entries from dynrel
                 let dynrel_len = dynrel.len().checked_sub(pltrel.len()).ok_or(
-                    ParseDynamicError::PltRelocationTailOutOfRange {
-                        plt_len: pltrel.len(),
-                        dynrel_tail_len: dynrel.len(),
+                    RelocTableError::CountOutOfRange {
+                        tag: ElfDynamicTag::JMPREL,
+                        count: pltrel.len(),
+                        available: dynrel.len(),
                     },
                 )?;
                 let Some((dynrel, _)) = dynrel.split_at(dynrel_len) else {
@@ -447,6 +477,7 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
                 relative: RelativeRel::Rel(relative),
                 pltrel,
                 dynrel,
+                packed_rela,
             })
         }
     }
@@ -465,14 +496,17 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
 
 #[cfg(test)]
 mod tests {
-    use super::DynamicRelocation;
+    use super::{
+        DynamicRelocation, ElfDynamicTag, ElfRelEntry, ElfSectionType, RelocTableError,
+        RelocationArch,
+    };
     use crate::{
         ByteRepr, Error, ParseDynamicError,
         arch::NativeArch,
         elf::ElfRelType,
         memory::{MappedRegion, MappedView},
     };
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec::Vec};
     use core::num::NonZeroUsize;
 
     fn zeroed_rel() -> ElfRelType {
@@ -494,6 +528,7 @@ mod tests {
             None,
             Some(mapped_view(&dynrel[..])),
             None,
+            Vec::new(),
             NonZeroUsize::new(2),
             false,
         ) {
@@ -503,7 +538,13 @@ mod tests {
 
         assert!(matches!(
             err,
-            Error::ParseDynamic(ParseDynamicError::RelativeRelocationCountOutOfRange { .. })
+            Error::ParseDynamic(ParseDynamicError::InvalidRelocTable { reason })
+                if matches!(*reason, RelocTableError::CountOutOfRange { tag, .. }
+                    if tag == if <NativeArch as RelocationArch>::Relocation::SECTION_TYPE == ElfSectionType::RELA {
+                        ElfDynamicTag::RELACOUNT
+                    } else {
+                        ElfDynamicTag::RELCOUNT
+                    })
         ));
     }
 
@@ -514,6 +555,7 @@ mod tests {
             Some(mapped_view(&dynrel[..])),
             Some(mapped_view(&dynrel[..])),
             None,
+            Vec::new(),
             NonZeroUsize::new(1),
             true,
         ) {
@@ -523,7 +565,8 @@ mod tests {
 
         assert!(matches!(
             err,
-            Error::ParseDynamic(ParseDynamicError::PltRelocationTailOutOfRange { .. })
+            Error::ParseDynamic(ParseDynamicError::InvalidRelocTable { reason })
+                if matches!(*reason, RelocTableError::CountOutOfRange { tag: ElfDynamicTag::JMPREL, .. })
         ));
     }
 }

@@ -240,7 +240,11 @@ where
                     Ok(RawElf::Dylib(dynamic.into()))
                 }
             }
-            other => Err(ParseEhdrError::ExpectedExecutable { found: other }.into()),
+            other => Err(ParseEhdrError::UnexpectedFileType {
+                expected: &[ElfFileType::EXEC, ElfFileType::DYN],
+                found: other,
+            }
+            .into()),
         }
     }
 

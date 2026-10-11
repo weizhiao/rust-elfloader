@@ -104,11 +104,12 @@ impl ExpectedElf {
 
     #[inline]
     pub(crate) const fn error(self, found: ElfFileType) -> ParseEhdrError {
-        match self {
-            Self::Dylib => ParseEhdrError::ExpectedDylib { found },
-            Self::Dynamic | Self::Executable => ParseEhdrError::ExpectedExecutable { found },
+        let expected: &'static [ElfFileType] = match self {
+            Self::Dylib => &[ElfFileType::DYN],
+            Self::Dynamic | Self::Executable => &[ElfFileType::EXEC, ElfFileType::DYN],
             #[cfg(feature = "object")]
-            Self::Relocatable => ParseEhdrError::ExpectedRelocatable { found },
-        }
+            Self::Relocatable => &[ElfFileType::REL],
+        };
+        ParseEhdrError::UnexpectedFileType { expected, found }
     }
 }
