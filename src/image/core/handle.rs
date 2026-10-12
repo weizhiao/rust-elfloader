@@ -224,9 +224,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     ) -> Result<Self> {
         segments.set_base(base);
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
-        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
+        let symtab = Arc::new(SymbolTable::from_dynamic(&dynamic, &segments)?);
         let exports = symtab.clone();
-        let lazy_symtab = symtab.clone();
         let needed_libs = dynamic
             .needed_libs
             .iter()
@@ -243,14 +242,14 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
-        let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
+        let plt = PltRelocInfo::new(dynamic.pltrel, symtab);
         let inner = Arc::new(ElfModule {
-            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             search,
             state: ModuleState::initialized(source_id, DomainId::PROCESS),
             lifecycle: OnceCell::new(),
-            exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
+            exports: arc_unsize!(exports => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),

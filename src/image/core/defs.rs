@@ -24,14 +24,15 @@ use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 #[repr(C)]
 pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
     core: OnceCell<VmAddr>,
-    lazy_plt: Option<PltRelocInfo<Arch>>,
+    /// Immutable PLT metadata, independent of the selected binding mode.
+    plt: Option<PltRelocInfo<Arch>>,
     /// Lazy-binding values and state retained for the module lifetime.
     lazy: OnceCell<LazySetup>,
     module: for<'a> unsafe fn(&'a Self) -> &'a dyn CoreRuntimeModule<Arch>,
 }
 
 impl<Arch: RelocationArch> CoreRuntime<Arch> {
-    pub(crate) fn new<D, R, Tls>(lazy_plt: Option<PltRelocInfo<Arch>>) -> Self
+    pub(crate) fn new<D, R, Tls>(plt: Option<PltRelocInfo<Arch>>) -> Self
     where
         D: Send + Sync + 'static,
         R: RegionAccess,
@@ -39,7 +40,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     {
         Self {
             core: OnceCell::new(),
-            lazy_plt,
+            plt,
             lazy: OnceCell::new(),
             module: core_module::<D, Arch, R, Tls>,
         }
@@ -62,8 +63,8 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     }
 
     #[inline]
-    pub(crate) fn lazy_plt(&self) -> Option<&PltRelocInfo<Arch>> {
-        self.lazy_plt.as_ref()
+    pub(crate) fn plt(&self) -> Option<&PltRelocInfo<Arch>> {
+        self.plt.as_ref()
     }
 
     #[inline]

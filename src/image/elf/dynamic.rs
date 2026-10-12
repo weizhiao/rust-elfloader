@@ -91,19 +91,20 @@ impl<L: ElfLayout> SymbolTable<L> {
 
 pub(crate) struct PltRelocInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) relocs: MappedView<ElfRelType<Arch>>,
-    pub(crate) symbols: SymbolTable<Arch::Layout>,
+    pub(crate) symbols: Arc<SymbolTable<Arch::Layout>>,
 }
 
 impl<Arch: RelocationArch> PltRelocInfo<Arch> {
     #[inline]
     pub(crate) fn new(
         pltrel: Option<MappedView<ElfRelType<Arch>>>,
-        symtab: SymbolTable<Arch::Layout>,
-    ) -> Self {
-        Self {
-            relocs: pltrel.unwrap_or_else(MappedView::empty),
+        symtab: Arc<SymbolTable<Arch::Layout>>,
+    ) -> Option<Self> {
+        let relocs = pltrel.filter(|relocs| !relocs.is_empty())?;
+        Some(Self {
+            relocs,
             symbols: symtab,
-        }
+        })
     }
 }
 
@@ -143,8 +144,8 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Finalization functions to resolve after relocation.
     fini: LifecycleSpec,
 
-    /// Relocation-only dynamic symbol table.
-    symtab: SymbolTable<Arch::Layout>,
+    /// Shared dynamic symbol table retained through relocation.
+    symtab: Arc<SymbolTable<Arch::Layout>>,
 }
 
 impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
@@ -367,9 +368,8 @@ where
         )?;
 
         let static_tls = self.static_tls | dynamic.static_tls;
-        let symtab = SymbolTable::from_dynamic(&dynamic, &self.segments)?;
+        let symtab = Arc::new(SymbolTable::from_dynamic(&dynamic, &self.segments)?);
         let exports = symtab.clone();
-        let lazy_symtab = symtab.clone();
         let needed_libs: Vec<&'static [u8]> = dynamic
             .needed_libs
             .iter()
@@ -411,19 +411,18 @@ where
         } else {
             CoreTlsState::without_module(self.tls_resolver.clone())
         };
-        let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
-
+        let plt = PltRelocInfo::new(dynamic.pltrel.clone(), symtab.clone());
         let state = ModuleState::new(self.source_id, self.domain);
         if dynamic.nodelete {
             state.pin_self();
         }
         let inner = Arc::new(ElfModule {
-            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
             executor: self.executor,
             state,
             lifecycle: OnceCell::new(),
             search,
-            exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
+            exports: arc_unsize!(exports => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,
