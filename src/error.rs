@@ -1095,6 +1095,42 @@ impl Display for TlsError {
     }
 }
 
+/// Invalid or unsupported glibc dynamic-linker cache data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ParseLdCacheError {
+    /// Neither supported cache magic was found.
+    InvalidMagic,
+    /// The modern cache does not use format version 1.1.
+    UnsupportedVersion,
+    /// The modern cache has an invalid byte-order marker.
+    InvalidByteOrder,
+    /// A header, entry array or string table exceeds the input.
+    Truncated,
+    /// A string offset points outside the declared string table.
+    InvalidStringOffset,
+    /// A string has no NUL terminator within the string table.
+    UnterminatedString,
+    /// An entry has an empty or non-SONAME key, or a non-absolute path.
+    InvalidEntry,
+    /// A cache path cannot be represented by this platform's path type.
+    InvalidPath,
+}
+
+impl Display for ParseLdCacheError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidMagic => "unrecognized ld.so.cache magic",
+            Self::UnsupportedVersion => "unsupported ld.so.cache version",
+            Self::InvalidByteOrder => "invalid ld.so.cache byte order",
+            Self::Truncated => "truncated ld.so.cache header or table",
+            Self::InvalidStringOffset => "ld.so.cache string offset is outside the string table",
+            Self::UnterminatedString => "unterminated ld.so.cache string",
+            Self::InvalidEntry => "invalid ld.so.cache library name or path",
+            Self::InvalidPath => "ld.so.cache path is not representable on this platform",
+        })
+    }
+}
+
 /// Error types used throughout the `elf_loader` library.
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
@@ -1121,6 +1157,9 @@ pub enum Error {
 
     /// An error occurred while parsing the ELF header.
     ParseEhdr(ParseEhdrError),
+
+    /// An error occurred while parsing a dynamic-linker cache.
+    ParseLdCache(ParseLdCacheError),
 
     /// An error occurred while parsing section headers.
     ParseShdr(ParseShdrError),
@@ -1194,6 +1233,12 @@ impl From<ParseDynamicError> for Error {
     }
 }
 
+impl From<ParseLdCacheError> for Error {
+    fn from(err: ParseLdCacheError) -> Self {
+        Self::ParseLdCache(err)
+    }
+}
+
 impl From<ParseEhdrError> for Error {
     fn from(err: ParseEhdrError) -> Self {
         Self::ParseEhdr(err)
@@ -1254,6 +1299,7 @@ impl Display for Error {
             Self::Relocation(err) => write!(f, "Relocation error: {err}"),
             Self::ParseDynamic(err) => write!(f, "Dynamic section parsing error: {err}"),
             Self::ParseEhdr(err) => write!(f, "ELF header parsing error: {err}"),
+            Self::ParseLdCache(err) => write!(f, "Dynamic-linker cache parsing error: {err}"),
             Self::ParseShdr(err) => write!(f, "Section header parsing error: {err}"),
             Self::ParsePhdr(err) => write!(f, "Program header parsing error: {err}"),
             Self::ParseNote(err) => write!(f, "ELF note parsing error: {err}"),
@@ -1294,6 +1340,7 @@ debug_as_display!(
     RelocTableError,
     ParseDynamicError,
     ParseEhdrError,
+    ParseLdCacheError,
     ParseShdrError,
     ParsePhdrError,
     ParseNoteError,

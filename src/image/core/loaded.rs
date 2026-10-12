@@ -7,7 +7,7 @@ use crate::{
         GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
         SymbolLookup, module::lookup_symbol,
     },
-    input::PathBuf,
+    input::{ModuleSourceId, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
@@ -323,7 +323,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     /// describe a valid loaded ELF image.
     ///
     /// # Arguments
-    /// * `path` - Loader source path or caller-provided source identifier
+    /// * `path` - Loader source path or diagnostic name
+    /// * `source_id` - Identity of the original source backing the loaded image.
+    ///   Preserve the reader's identity for file-backed images; use a stable opaque
+    ///   identity for other sources, or `ModuleSourceId::fresh()` for a new anonymous source.
     /// * `phdrs` - The program headers
     /// * `segments` - The mapped ELF segments and their module-relative ranges
     /// * `tls_tp_offset` - TLS thread pointer offset
@@ -334,6 +337,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     #[inline]
     pub unsafe fn new_unchecked(
         path: impl Into<PathBuf>,
+        source_id: ModuleSourceId,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         segments: ElfSegments,
         tls_resolver: Tls,
@@ -407,6 +411,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         let core = unsafe {
             ElfCore::from_raw(
                 path.into(),
+                source_id,
                 base,
                 dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?,
                 dynamic_addr.ok_or(ParsePhdrError::MissingDynamicSection)?,

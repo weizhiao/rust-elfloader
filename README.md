@@ -77,7 +77,7 @@ elf_loader = { version = "0.17.0", default-features = false, features = ["libc"]
 use elf_loader::{
     LinkContext, Linker, Result,
     input::PathBuf,
-    linker::SearchPathResolver,
+    linker::{LdCache, SearchConfig, SearchPathResolver},
 };
 
 const LINKER: Linker = Linker::new();
@@ -85,9 +85,12 @@ const LINKER: Linker = Linker::new();
 fn main() -> Result<()> {
     let root = PathBuf::from("path/to/plugin.so");
     let mut context = LinkContext::for_process();
-    let mut resolver = SearchPathResolver::new();
-    resolver.push_rpath();
-    resolver.push_runpath();
+    // Supply paths appropriate for your target system.
+    let config = SearchConfig::new()
+        .library_path("$ORIGIN/plugins:/opt/app/lib", "/opt/app/bin")
+        .cache(LdCache::load_system()?)
+        .default_dirs(["/lib", "/usr/lib"]);
+    let resolver = SearchPathResolver::with_config(config);
 
     let loaded = LINKER
         .resolver(resolver)
@@ -109,27 +112,12 @@ fn main() -> Result<()> {
 
 ## Benchmarks
 
-The table below is a GitHub Actions performance snapshot. Use it only as a reference for the current test suite. Full environment details are in [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388). The fixture is the repository's `leaf -> middle -> base` test chain.
-
-Lower is better for loading. `scan_first` includes dependency scanning and section planning, so it is not a direct `dlopen` replacement.
-
-| Benchmark | Time | Relative time |
-| --- | ---: | --- |
-| `elf_loader/memory` | `89.531 µs` | `0.78x` |
-| `elf_loader/file` | `101.01 µs` | `0.88x` |
-| `linker/runtime` | `111.32 µs` | `0.97x` |
-| `libloading/lazy` | `115.34 µs` | `1.00x` |
-| `libloading/now` | `115.77 µs` | `1.00x` |
-| `linker/scan_first` | `288.92 µs` | `2.51x` |
-
-Symbol lookup was measured after both loaders had already loaded the fixture chain:
-
-| Benchmark | Time | Relative time |
-| --- | ---: | --- |
-| `symbol/elf_loader/hit` | `10.280 ns` | `0.13x` |
-| `symbol/libloading/hit` | `80.154 ns` | `1.00x` |
-| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` |
-| `symbol/libloading/miss` | `375.49 ns` | `1.00x` |
+`bash ci/bench.sh` compares Relink with libloading using installed zlib, LZ4,
+Zstd, SQLite, PNG and FreeType libraries and their real dependencies. It times
+loading and complete unloading; symbol lookup and function calls validate
+correctness before timing.
+See [the benchmark guide](benches/README.md) for the timing boundaries,
+host-runtime bridge, system-cache snapshot, validation and CI artifacts.
 
 ## Feature Flags
 

@@ -1,0 +1,57 @@
+name: End-to-end benchmarks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'benches/**'
+      - 'ci/bench*'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmarks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'benches/**'
+      - 'ci/bench*'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmarks.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-libraries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install real shared libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g liblz4-1 libzstd1 libsqlite3-0 libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0
+      - name: Measure load and unload
+        run: bash ci/bench.sh
+      - name: Publish summary
+        if: always()
+        run: |
+          if test -f target/benchmark-report/summary.md; then
+            cat target/benchmark-report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: end-to-end-${{ github.sha }}
+          path: |
+            target/benchmark-report/
+            target/criterion/
+          retention-days: 30

@@ -93,17 +93,6 @@ impl<L: ElfLayout> Clone for ElfGnuHash<L> {
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
-    /// Compute the GNU hash value for a symbol name.
-    #[inline]
-    pub(crate) fn hash(name: &[u8]) -> u64 {
-        let mut hash = 5381u32;
-
-        for byte in name {
-            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
-        }
-        u64::from(hash)
-    }
-
     /// Parse a GNU hash table from raw memory
     ///
     /// This method creates an ElfGnuHash instance by parsing the hash table data
@@ -312,8 +301,6 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         }
 
         // Traverse the chain to find the symbol
-        #[cfg(feature = "version")]
-        let mut dynsym_idx = chain_start_idx;
         let mut chain_idx = chain_start_idx.checked_sub(table_start_idx)?;
         let mut cur_symbol_idx = chain_start_idx;
 
@@ -327,7 +314,8 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 
                 // Check if this is the symbol we're looking for
                 #[cfg(feature = "version")]
-                if sym_name == lookup.name() && table.check_match(dynsym_idx, lookup.version()) {
+                if sym_name == lookup.name() && table.check_match(cur_symbol_idx, lookup.version())
+                {
                     return Some(cur_symbol);
                 }
                 #[cfg(not(feature = "version"))]
@@ -344,10 +332,6 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             // Move to the next entry in the chain
             chain_idx += 1;
             cur_symbol_idx += 1;
-            #[cfg(feature = "version")]
-            {
-                dynsym_idx += 1;
-            }
         }
 
         // Symbol not found in the chain

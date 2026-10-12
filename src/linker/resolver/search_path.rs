@@ -1,6 +1,8 @@
 #[cfg(test)]
 use super::request::LoaderVisitor;
-use super::{KeyResolver, ResolveInput, ResolveRequest, ResolvedKey, request::LoaderProvider};
+use super::{
+    KeyResolver, LdCache, ResolveInput, ResolveRequest, ResolvedKey, request::LoaderProvider,
+};
 use crate::{
     Error, IoError, ParseEhdrError, Result,
     image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
@@ -126,6 +128,60 @@ impl fmt::Debug for CandidateRequest<'_> {
     }
 }
 
+/// Explicit inputs for [`SearchPathResolver::with_config`].
+///
+/// No environment variables, cache files, or host directory lists are read by
+/// this configuration. Its default has no environment path, cache or default
+/// directories. Supply the target system's inputs, including any distribution
+/// specific ABI directories, in their intended preference order.
+#[derive(Clone, Debug, Default)]
+pub struct SearchConfig {
+    library_path: Option<(PathBuf, PathBuf)>,
+    cache: Option<LdCache>,
+    default_dirs: Vec<PathBuf>,
+}
+
+impl SearchConfig {
+    /// Creates a configuration with only module-owned RPATH and RUNPATH sources.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the raw `LD_LIBRARY_PATH` value and the main executable's directory.
+    ///
+    /// Both `:` and `;` separate directories; empty components mean the current
+    /// working directory, while an entirely empty value adds no directories.
+    /// `$ORIGIN` uses `executable_dir`, not the requesting library's directory.
+    /// `$LIB` and `$PLATFORM` use the link context's [`SearchPathPool`](crate::image::SearchPathPool)
+    /// token settings. Entries with unavailable token values are skipped.
+    ///
+    /// The caller must omit this input in secure-execution mode. This preset
+    /// does not implement glibc's complete privileged-process loading policy.
+    pub fn library_path(
+        mut self,
+        value: impl AsRef<Path>,
+        executable_dir: impl AsRef<Path>,
+    ) -> Self {
+        self.library_path = Some((value.as_ref().into(), executable_dir.as_ref().into()));
+        self
+    }
+
+    /// Sets a shared cache snapshot. Omit it when the target has no usable cache.
+    pub fn cache(mut self, cache: LdCache) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    /// Sets the final fallback directories in target-specific search order.
+    ///
+    /// These are literal directories, without dynamic token expansion. No
+    /// architecture or distribution directory list is hard-coded by Relink.
+    pub fn default_dirs<P: AsRef<Path>>(mut self, dirs: impl IntoIterator<Item = P>) -> Self {
+        self.default_dirs = dirs.into_iter().map(|dir| dir.as_ref().into()).collect();
+        self
+    }
+}
+
 /// Filesystem-backed dependency resolver for [`Linker`](crate::Linker).
 ///
 /// `SearchPathResolver` is an opt-in convenience resolver for callers whose
@@ -136,8 +192,8 @@ impl fmt::Debug for CandidateRequest<'_> {
 ///
 /// This resolver intentionally does not model the host dynamic linker's global
 /// policy: it does not read `LD_LIBRARY_PATH`, system cache files, or default
-/// system library directories unless callers add runtime directory providers
-/// for them.
+/// system library directories automatically. Callers can add an explicit
+/// [`LdCache`] snapshot or directory providers in their chosen search order.
 ///
 /// Module-owned `DT_RPATH` and `DT_RUNPATH` entries have their dynamic string
 /// tokens expanded by the loader and are shared between modules. Absolute
@@ -163,6 +219,51 @@ impl SearchPathResolver {
         Self {
             entries: Vec::new(),
         }
+    }
+
+    /// Creates a resolver with glibc-style search ordering from explicit inputs.
+    ///
+    /// Searches inherited RPATH (unless the direct loader has RUNPATH), the
+    /// supplied environment path, direct RUNPATH, the cache, then default dirs.
+    /// Names containing a directory separator are still opened directly.
+    ///
+    /// This composes the existing providers; it does not reproduce glibc's
+    /// process namespace, main-executable RPATH fallback, hardware-capability
+    /// selection, `DF_1_NODEFLIB`, auditing, or secure-execution policy.
+    pub fn with_config(config: SearchConfig) -> Self {
+        let mut resolver = Self::new();
+        resolver.push_rpath();
+        if let Some((value, origin)) = config
+            .library_path
+            .filter(|(value, _)| !value.as_bytes().is_empty())
+        {
+            for component in value.as_bytes().split(|byte| matches!(byte, b':' | b';')) {
+                if component.is_empty() {
+                    resolver.push_fixed_dir(".");
+                } else if let Some(path) = Path::from_elf_bytes(component) {
+                    if component.contains(&b'$') {
+                        let path = PathBuf::from(path);
+                        let origin = origin.clone();
+                        resolver.push_search_dir_provider(move |request, dirs| {
+                            if let Some(path) = request.tokens().expand(&path, &origin) {
+                                dirs.push(path);
+                            }
+                            Ok(())
+                        });
+                    } else {
+                        resolver.push_fixed_dir(path);
+                    }
+                }
+            }
+        }
+        resolver.push_runpath();
+        if let Some(cache) = config.cache {
+            resolver.push_ld_cache(cache);
+        }
+        for dir in config.default_dirs {
+            resolver.push_fixed_dir(dir);
+        }
+        resolver
     }
 
     fn push_entry(&mut self, entry: SearchPathEntry) -> &mut Self {
@@ -192,6 +293,23 @@ impl SearchPathResolver {
     /// Appends a fixed search directory.
     pub fn push_fixed_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
         self.push_entry(SearchPathEntry::Dir(SharedDir::new(normalize_dir(dir))))
+    }
+
+    /// Appends generic library candidates from an explicit glibc cache snapshot.
+    ///
+    /// The snapshot is queried at this position in the search order. Candidate
+    /// files are opened and checked against the selected relocation architecture.
+    /// Missing or incompatible files are skipped. See [`LdCache`] for hardware
+    /// capability and snapshot-lifetime semantics.
+    pub fn push_ld_cache(&mut self, cache: LdCache) -> &mut Self {
+        self.push_candidate_provider(move |request, candidates| {
+            candidates.extend(
+                cache
+                    .candidates(request.requested().as_bytes())
+                    .map(PathBuf::from),
+            );
+            Ok(())
+        })
     }
 
     /// Appends a callback that can provide search directories per request.

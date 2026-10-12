@@ -589,7 +589,7 @@ impl<'symbol> SymbolLookup<'symbol> {
 
     #[inline]
     pub(crate) fn from_info(info: SymbolInfo<'symbol>) -> Self {
-        let precompute = PreCompute::new(info.name());
+        let precompute = PreCompute::new();
         Self { info, precompute }
     }
 
@@ -614,8 +614,14 @@ impl<'symbol> SymbolLookup<'symbol> {
     }
 
     #[inline]
-    pub(crate) fn gnu_hash(&self) -> u32 {
-        self.precompute.gnuhash
+    pub(crate) fn gnu_hash(&mut self) -> u32 {
+        if let Some(hash) = self.precompute.gnuhash {
+            hash
+        } else {
+            let hash = super::hash::gnu_hash(self.name());
+            self.precompute.gnuhash = Some(hash);
+            hash
+        }
     }
 
     #[inline]

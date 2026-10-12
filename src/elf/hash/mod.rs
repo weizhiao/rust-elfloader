@@ -17,6 +17,14 @@ use core::fmt::Debug;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;
 
+/// Compute the layout-independent GNU hash of a symbol name.
+#[inline]
+pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
+    name.iter().fold(5381u32, |hash, byte| {
+        hash.wrapping_mul(33).wrapping_add(u32::from(*byte))
+    })
+}
+
 mod gnu;
 mod sysv;
 
@@ -84,14 +92,11 @@ impl<L: ElfLayout> Debug for HashTable<L> {
     }
 }
 
-/// Precomputed hash values for symbol lookup optimization.
-///
-/// This structure holds precomputed hash values and related data that can
-/// be used to speed up symbol lookups in hash tables. Precomputing these
-/// values avoids repeated calculations during the lookup process.
+/// Hash values computed on demand and reused across a symbol lookup scope.
+/// Unused table formats do not incur hashing work.
 pub(in crate::elf) struct PreCompute {
     /// GNU hash value for the symbol name
-    pub(in crate::elf) gnuhash: u32,
+    pub(in crate::elf) gnuhash: Option<u32>,
 
     /// Traditional hash value (used for SYSV hash tables)
     pub(in crate::elf) hash: Option<u32>,
@@ -102,10 +107,9 @@ pub(in crate::elf) struct PreCompute {
 
 impl PreCompute {
     #[inline]
-    pub(in crate::elf) fn new(name: &[u8]) -> Self {
-        let gnuhash = ElfGnuHash::<NativeElfLayout>::hash(name) as u32;
+    pub(in crate::elf) fn new() -> Self {
         Self {
-            gnuhash,
+            gnuhash: None,
             hash: None,
             #[cfg(feature = "object")]
             custom: None,

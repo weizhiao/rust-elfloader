@@ -418,7 +418,9 @@ where
             let (module, retained, meta) = self.committed.remove(slot);
             modules.push(UnloadedModule::new(id, module, retained, meta));
         }
-        self.committed.prune_lifecycle();
+        if !modules.is_empty() {
+            self.committed.prune_removed();
+        }
         Ok(UnloadGroup::new(modules))
     }
 

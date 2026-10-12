@@ -212,6 +212,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn from_raw(
         path: PathBuf,
+        source_id: ModuleSourceId,
         base: VmAddr,
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         dynamic_addr: VmAddr,
@@ -243,12 +244,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
-        let source = ModuleSourceId::fresh();
         let inner = Arc::new(ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             search,
-            state: ModuleState::initialized(source, DomainId::PROCESS),
+            state: ModuleState::initialized(source_id, DomainId::PROCESS),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {

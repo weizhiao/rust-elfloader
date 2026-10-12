@@ -339,6 +339,7 @@ pub(crate) struct CommittedStorage<
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
+    free_slots: Vec<ModuleSlot>,
     pub(super) addresses: Arc<AddressIndex>,
 }
 
@@ -356,6 +357,7 @@ where
             sources: BTreeMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
+            free_slots: Vec::new(),
             addresses: Arc::new(AddressIndex::default()),
         }
     }
@@ -554,6 +556,9 @@ where
     }
 
     pub(crate) fn alloc_module(&mut self) -> ModuleSlot {
+        if let Some(slot) = self.free_slots.pop() {
+            return slot;
+        }
         self.entries.push(ModuleCell {
             generation: 0,
             entry: None,
@@ -578,8 +583,6 @@ where
         &mut self,
         slot: ModuleSlot,
     ) -> (ModuleHandle<Arch, Tls>, ModuleScope<Arch, Tls>, Meta) {
-        let id = self.make_module_id(slot);
-        Arc::make_mut(&mut self.addresses).remove(id);
         let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell
@@ -607,13 +610,20 @@ where
             .remove(&entry.module.source_id())
             .expect("committed module must have a source entry");
         assert_eq!(indexed, slot, "module source must refer to its slot");
+        self.free_slots.push(slot);
         (entry.module, entry.retained, entry.meta)
     }
 
-    pub(crate) fn prune_lifecycle(&mut self) {
+    pub(crate) fn prune_removed(&mut self) {
         let entries = &self.entries;
         self.lifecycle
             .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
+        // One pass for the whole unload group, preserving exported snapshots.
+        Arc::make_mut(&mut self.addresses).retain(|id| {
+            entries
+                .get(id.slot)
+                .is_some_and(|cell| cell.entry.is_some() && cell.generation == id.generation)
+        });
     }
 }
 
