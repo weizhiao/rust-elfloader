@@ -1,6 +1,6 @@
 use crate::{
     IoError, Result,
-    input::{ElfReader, ModuleSourceId, Path},
+    input::{ModuleSourceId, Path},
 };
 use core::ffi::c_void;
 
@@ -30,29 +30,19 @@ impl RawFile {
         Err(IoError::FileAccessUnsupported.into())
     }
 
-    pub(crate) fn from_owned_fd(_path: &Path, _raw_fd: i32) -> Result<Self> {
+    pub(crate) fn from_owned_fd(_raw_fd: i32) -> Result<Self> {
         Err(IoError::FileAccessUnsupported.into())
     }
-}
 
-impl ElfReader for RawFile {
-    fn path(&self) -> &Path {
+    pub(crate) fn metadata(&self) -> Result<(usize, ModuleSourceId)> {
         match *self {}
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn read(&self, _buf: &mut [u8], _offset: usize) -> Result<()> {
         match *self {}
     }
 
-    fn read(&self, _buf: &mut [u8], _offset: usize) -> Result<()> {
-        match *self {}
-    }
-
-    fn source_id(&self) -> ModuleSourceId {
-        match *self {}
-    }
-
-    fn as_fd(&self) -> Option<isize> {
+    pub(crate) fn mapping_handle(&self) -> isize {
         match *self {}
     }
 }

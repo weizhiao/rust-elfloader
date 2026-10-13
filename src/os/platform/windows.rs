@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, ModuleSourceId, Path, PathBuf},
+    input::{ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
@@ -20,11 +20,11 @@ use windows_sys::Win32::{
         OPEN_EXISTING, ReadFile,
     },
     System::Memory::{
-        self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
-        MEM_REPLACE_PLACEHOLDER, MEM_RESERVE, MEM_RESERVE_PLACEHOLDER, MapViewOfFile3,
-        PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
-        PAGE_NOACCESS, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
-        VirtualFree,
+        self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_MAPPED, MEM_PRESERVE_PLACEHOLDER,
+        MEM_PRIVATE, MEM_RELEASE, MEM_REPLACE_PLACEHOLDER, MEM_RESERVE, MEM_RESERVE_PLACEHOLDER,
+        MEMORY_BASIC_INFORMATION, MapViewOfFile3, PAGE_EXECUTE, PAGE_EXECUTE_READ,
+        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
+        PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VirtualFree, VirtualQuery,
     },
     System::Threading::GetCurrentProcess,
     System::{
@@ -41,6 +41,73 @@ impl DefaultMmap {
     pub const fn new() -> Self {
         Self
     }
+}
+
+fn query_memory(addr: usize) -> Result<MEMORY_BASIC_INFORMATION> {
+    let mut info = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+    if unsafe {
+        VirtualQuery(
+            addr as _,
+            info.as_mut_ptr(),
+            size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    } == 0
+    {
+        return Err(MmapError::VirtualQuery {
+            code: unsafe { GetLastError() },
+        }
+        .into());
+    }
+    Ok(unsafe { info.assume_init() })
+}
+
+fn region_end(info: &MEMORY_BASIC_INFORMATION) -> Result<usize> {
+    (info.BaseAddress as usize)
+        .checked_add(info.RegionSize)
+        .filter(|end| *end > info.BaseAddress as usize)
+        .ok_or_else(|| MmapError::InvalidMappedRegionRange.into())
+}
+
+/// Isolates a mapping range without releasing its address reservation.
+/// The caller must own the enclosing placeholder created by `create_space`.
+unsafe fn prepare_placeholder(addr: VmAddr, len: usize) -> Result<()> {
+    let start = addr.get();
+    let page_size = DefaultMmap.page_size().bytes();
+    let end = start
+        .checked_add(len)
+        .filter(|_| len != 0 && start.is_multiple_of(page_size) && len.is_multiple_of(page_size))
+        .ok_or(MmapError::InvalidMappedRegionRange)?;
+    let info = query_memory(start)?;
+    let base = info.AllocationBase as usize;
+    let reserved_end = region_end(&info)?;
+    if info.State != MEM_RESERVE
+        || info.Type != MEM_PRIVATE
+        || info.AllocationProtect != PAGE_NOACCESS
+        || base > start
+        || end > reserved_end
+    {
+        return Err(MmapError::InvalidMappedRegionRange.into());
+    }
+
+    // Split off the prefix first, leaving a placeholder starting at `start`.
+    // These operations preserve both sides, including on a later mapping failure.
+    if base < start {
+        unsafe { split_placeholder(base, start - base) }?;
+    }
+    if end < reserved_end {
+        unsafe { split_placeholder(start, len) }?;
+    }
+    Ok(())
+}
+
+unsafe fn split_placeholder(addr: usize, len: usize) -> Result<()> {
+    if unsafe { VirtualFree(addr as _, len, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0 {
+        return Err(MmapError::VirtualFree {
+            code: unsafe { GetLastError() },
+        }
+        .into());
+    }
+    Ok(())
 }
 
 pub(crate) fn current_thread_id() -> usize {
@@ -87,10 +154,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 pub(crate) struct RawFile {
-    path: PathBuf,
     fd: HANDLE,
-    len: usize,
-    source_id: ModuleSourceId,
     /// Stores the mapping handle for the file.
     mapping: HANDLE,
 }
@@ -189,6 +253,7 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: isize,
     ) -> Result<()> {
+        unsafe { prepare_placeholder(addr, len) }?;
         let ptr = unsafe {
             MapViewOfFile3(
                 fd as HANDLE,
@@ -216,6 +281,7 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         _flags: MapFlags,
     ) -> Result<()> {
+        unsafe { prepare_placeholder(addr, len) }?;
         let ptr = unsafe {
             Memory::VirtualAlloc2(
                 GetCurrentProcess(),
@@ -228,13 +294,6 @@ impl Mmap for DefaultMmap {
             )
         };
 
-        if !ptr.is_null() {
-            return Ok(());
-        }
-
-        let ptr = unsafe {
-            Memory::VirtualAlloc(addr.as_mut_ptr(), len, MEM_COMMIT, prot_win(prot, false))
-        };
         if ptr.is_null() {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
@@ -242,15 +301,65 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn munmap(&self, addr: VmAddr, _len: usize) -> Result<()> {
-        unsafe {
-            windows_sys::Win32::System::Memory::UnmapViewOfFile(
-                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                    Value: addr.as_mut_ptr(),
-                },
-            )
-        };
-        Ok(())
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
+        let page_size = self.page_size().bytes();
+        let end = addr
+            .get()
+            .checked_add(len)
+            .and_then(|end| end.checked_add(page_size - 1))
+            .map(|end| end & !(page_size - 1))
+            .ok_or(MmapError::InvalidMappedRegionRange)?;
+        let mut cursor = addr.get();
+        let mut first_error = None;
+        while cursor < end {
+            let info = query_memory(cursor)?;
+            if info.AllocationBase as usize != cursor
+                || !matches!(info.Type, MEM_MAPPED | MEM_PRIVATE)
+            {
+                return Err(MmapError::InvalidMappedRegionRange.into());
+            }
+
+            // Protection changes can split VirtualQuery regions within one
+            // allocation. Find its full extent before releasing it once.
+            let mut next = region_end(&info)?;
+            while next < end {
+                let following = query_memory(next)?;
+                if following.AllocationBase != info.AllocationBase {
+                    break;
+                }
+                next = region_end(&following)?;
+            }
+            if next > end {
+                return Err(MmapError::InvalidMappedRegionRange.into());
+            }
+
+            let error = if info.Type == MEM_MAPPED {
+                if unsafe {
+                    Memory::UnmapViewOfFile(Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                        Value: cursor as _,
+                    })
+                } == 0
+                {
+                    Some(MmapError::UnmapViewOfFile {
+                        code: unsafe { GetLastError() },
+                    })
+                } else {
+                    None
+                }
+            } else if unsafe { VirtualFree(cursor as _, 0, MEM_RELEASE) } == 0 {
+                Some(MmapError::VirtualFree {
+                    code: unsafe { GetLastError() },
+                })
+            } else {
+                None
+            };
+            // Keep cleaning up other allocations if one release fails.
+            if first_error.is_none() {
+                first_error = error;
+            }
+            cursor = next;
+        }
+        first_error.map_or(Ok(()), |error| Err(error.into()))
     }
 
     unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
@@ -285,8 +394,8 @@ impl Drop for RawFile {
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        Self::from_handle(path, raw_fd as isize as HANDLE)
+    pub(crate) fn from_owned_fd(raw_fd: i32) -> Result<Self> {
+        Self::from_handle(raw_fd as isize as HANDLE)
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -313,17 +422,10 @@ impl RawFile {
             .into());
         }
 
-        Self::from_handle(path, handle)
+        Self::from_handle(handle)
     }
 
-    fn from_handle(path: &Path, handle: HANDLE) -> Result<Self> {
-        let (len, source_id) = match Self::query(handle) {
-            Ok(info) => info,
-            Err(err) => {
-                unsafe { CloseHandle(handle) };
-                return Err(err);
-            }
-        };
+    fn from_handle(handle: HANDLE) -> Result<Self> {
         let mapping = unsafe {
             CreateFileMappingW(
                 handle,
@@ -341,15 +443,13 @@ impl RawFile {
         }
 
         Ok(Self {
-            path: PathBuf::from(path),
             fd: handle,
-            len,
-            source_id,
             mapping,
         })
     }
 
-    fn query(handle: HANDLE) -> Result<(usize, ModuleSourceId)> {
+    pub(crate) fn metadata(&self) -> Result<(usize, ModuleSourceId)> {
+        let handle = self.fd;
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
             return Err(IoError::FileInfoFailed {
@@ -394,35 +494,14 @@ fn win_read_at(handle: HANDLE, bytes: &mut [u8], offset: usize) -> Result<usize>
     }
 }
 
-pub(crate) fn virtual_free(addr: usize, len: usize) -> Result<()> {
-    if unsafe { VirtualFree(addr as _, len, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0 {
-        let err_code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-        return Err(MmapError::VirtualFree { code: err_code }.into());
-    }
-    Ok(())
-}
-
-impl ElfReader for RawFile {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+impl RawFile {
+    pub(crate) fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         super::read_exact_at(buf, offset, |bytes, offset| {
             win_read_at(self.fd as HANDLE, bytes, offset)
         })
     }
 
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.source_id
-    }
-
-    fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    fn as_fd(&self) -> Option<isize> {
-        Some(self.mapping as isize)
+    pub(crate) fn mapping_handle(&self) -> isize {
+        self.mapping as isize
     }
 }

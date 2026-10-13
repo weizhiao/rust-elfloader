@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, ModuleSourceId, Path, PathBuf},
+    input::{ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
@@ -97,10 +97,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 pub(crate) struct RawFile {
-    path: PathBuf,
     fd: isize,
-    len: usize,
-    source_id: ModuleSourceId,
 }
 
 impl Mmap for DefaultMmap {
@@ -251,30 +248,17 @@ impl RawFile {
             }
             .into());
         }
-        Self::from_fd(path, fd as isize)
+        Self::from_owned_fd(fd as i32)
     }
 
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        Self::from_fd(path, raw_fd as isize)
-    }
-
-    fn from_fd(path: &Path, fd: isize) -> Result<Self> {
-        let (len, source_id) = match Self::query(fd) {
-            Ok(info) => info,
-            Err(err) => {
-                unsafe { libc::close(fd as i32) };
-                return Err(err);
-            }
-        };
+    pub(crate) fn from_owned_fd(raw_fd: i32) -> Result<Self> {
         Ok(Self {
-            path: PathBuf::from(path),
-            fd,
-            len,
-            source_id,
+            fd: raw_fd as isize,
         })
     }
 
-    fn query(fd: isize) -> Result<(usize, ModuleSourceId)> {
+    pub(crate) fn metadata(&self) -> Result<(usize, ModuleSourceId)> {
+        let fd = self.fd;
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(fd as i32, stat.as_mut_ptr()) } != 0 {
             return Err(IoError::FileInfoFailed {
@@ -289,12 +273,8 @@ impl RawFile {
     }
 }
 
-impl ElfReader for RawFile {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+impl RawFile {
+    pub(crate) fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         super::read_exact_at(buf, offset, |bytes, offset| {
             let result = unsafe {
                 pread(
@@ -316,16 +296,7 @@ impl ElfReader for RawFile {
         })
     }
 
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.source_id
-    }
-
-    fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    fn as_fd(&self) -> Option<isize> {
-        Some(self.fd)
+    pub(crate) fn mapping_handle(&self) -> isize {
+        self.fd
     }
 }

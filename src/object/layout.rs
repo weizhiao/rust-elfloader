@@ -15,7 +15,10 @@ use crate::{
     observer::{LoadObserver, SectionLayoutEvent},
     os::{MapFlags, Mmap, ProtFlags},
     relocation::{ObjectArch, RelocationArch},
-    segment::{ElfSegment, ElfSegments, FileMapInfo, MemoryProtection, SegmentBuilder},
+    segment::{
+        CopyRegion, ElfSegment, ElfSegments, MemoryProtection, SegmentContent, populate_segments,
+        protect_segments,
+    },
     sync::Arc,
 };
 use alloc::vec::Vec;
@@ -567,10 +570,7 @@ impl SectionSegmentSet {
         }
         Ok(())
     }
-}
-
-impl SegmentBuilder for SectionSegmentSet {
-    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
+    fn create_space<M>(&self, mapper: &M) -> Result<ElfSegments<M::Region>>
     where
         M: Mmap + ?Sized,
     {
@@ -595,16 +595,14 @@ impl SegmentBuilder for SectionSegmentSet {
         Ok(ElfSegments::new(region, base, VmOffset::new(0)))
     }
 
-    fn create_segments(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn segments_mut(&mut self) -> &mut [ElfSegment] {
-        &mut self.segments
-    }
-
-    fn segments(&self) -> &[ElfSegment] {
-        &self.segments
+    fn load_segments<M: Mmap + ?Sized>(
+        &self,
+        mapper: &M,
+        object: &impl ElfReader,
+    ) -> Result<ElfSegments<M::Region>> {
+        let space = self.create_space(mapper)?;
+        populate_segments(mapper, object, &space, &self.segments, None)?;
+        Ok(space)
     }
 }
 
@@ -679,7 +677,7 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
     }
 
     fn load_segments<M>(
-        &mut self,
+        &self,
         mapper: &M,
         object: &impl ElfReader,
     ) -> Result<ObjectSegments<M::Region>>
@@ -699,9 +697,9 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
     where
         R: RegionAccess,
     {
-        self.core.mprotect(segments.core())?;
+        protect_segments(segments.core(), &self.core.segments)?;
         if let Some(init) = segments.init() {
-            self.init.mprotect(init)?;
+            protect_segments(init, &self.init.segments)?;
         }
         Ok(())
     }
@@ -1015,35 +1013,35 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
         let segment_start = *base_offset;
 
         let mut current_offset = segment_start;
-        let mut map_info = Vec::new();
+        let mut copy_regions = Vec::new();
         for shdr in &mut self.content_sections {
             if shdr.sh_size() == 0 {
                 continue;
             }
             current_offset = roundup(current_offset, shdr.sh_addralign());
             shdr.set_sh_addr(current_offset);
-            map_info.push(FileMapInfo {
-                filesz: shdr.sh_size(),
-                offset: shdr.sh_offset(),
-                start: current_offset - segment_start,
+            copy_regions.push(CopyRegion {
+                len: shdr.sh_size(),
+                file_offset: shdr.sh_offset(),
+                segment_offset: current_offset - segment_start,
             });
             current_offset += shdr.sh_size();
         }
 
-        if map_info.len() == 1 {
-            let info = &mut map_info[0];
-            let file_offset = rounddown(info.offset, page_size);
-            let align_len = info.offset - file_offset;
+        if copy_regions.len() == 1 {
+            let info = &mut copy_regions[0];
+            let file_offset = rounddown(info.file_offset, page_size);
+            let align_len = info.file_offset - file_offset;
 
             let shdr = self
                 .content_sections
                 .iter_mut()
-                .find(|shdr| shdr.sh_offset() == info.offset)
+                .find(|shdr| shdr.sh_offset() == info.file_offset)
                 .unwrap();
 
             shdr.add_sh_addr(align_len);
-            info.filesz += align_len;
-            info.offset = file_offset;
+            info.len += align_len;
+            info.file_offset = file_offset;
             current_offset += align_len;
         }
 
@@ -1068,12 +1066,9 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
             prot: self.init_prot,
             len: total_size,
             page_size,
-            content_size,
             zero_size: unaligned_total_size - content_size,
-            need_copy: false,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
-            map_info,
-            from_object: true,
+            content: SegmentContent::Scattered(copy_regions),
         })
     }
 }

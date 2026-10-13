@@ -19,7 +19,7 @@ use crate::{
     runtime::{CodeExecutor, NativeCodeExecutor},
     segment::{
         ElfSegments,
-        program::{ProgramSegments, parse_segments},
+        program::{load_segments, parse_segments},
     },
     tls::TlsResolver,
 };
@@ -321,7 +321,7 @@ where
         }
 
         let page_size = self.loader.page_size()?.bytes();
-        let segments = ProgramSegments::load(
+        let segments = load_segments(
             phdrs,
             ehdr.is_dylib(),
             self.loader.mapper(),
@@ -381,7 +381,7 @@ where
             &mut user_data,
         ))?;
         let page_size = self.loader.page_size()?.bytes();
-        let segments = ProgramSegments::load(
+        let segments = load_segments(
             &phdrs,
             ehdr.is_dylib(),
             self.loader.mapper(),
@@ -524,7 +524,7 @@ where
         let has_dynamic = event.is_dynamic();
         self.observer.on_before_load(event)?;
         let page_size = self.loader.page_size()?.bytes();
-        let segments = ProgramSegments::load(
+        let segments = load_segments(
             phdrs,
             ehdr.is_dylib(),
             self.loader.mapper(),
@@ -739,10 +739,6 @@ mod tests {
         fn source_id(&self) -> ModuleSourceId {
             ModuleSourceId::opaque(0, 1)
         }
-
-        fn as_fd(&self) -> Option<isize> {
-            None
-        }
     }
 
     impl UnalignedBorrowReader {
@@ -775,10 +771,6 @@ mod tests {
         fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
             let offset = offset + 1;
             Ok(Some(&self.bytes[offset..offset + len]))
-        }
-
-        fn as_fd(&self) -> Option<isize> {
-            None
         }
     }
 

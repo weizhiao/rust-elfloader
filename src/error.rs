@@ -175,6 +175,18 @@ pub enum MmapError {
         /// Windows error code returned by `VirtualFree`.
         code: u32,
     },
+    #[cfg(windows)]
+    /// Failed to query the process's virtual memory layout.
+    VirtualQuery {
+        /// Windows error code returned by `VirtualQuery`.
+        code: u32,
+    },
+    #[cfg(windows)]
+    /// Failed to unmap a file view.
+    UnmapViewOfFile {
+        /// Windows error code returned by `UnmapViewOfFile`.
+        code: u32,
+    },
 }
 
 impl Display for MmapError {
@@ -214,6 +226,14 @@ impl Display for MmapError {
             #[cfg(windows)]
             Self::VirtualFree { code } => {
                 write!(f, "VirtualFree failed with error: {code}")
+            }
+            #[cfg(windows)]
+            Self::VirtualQuery { code } => {
+                write!(f, "VirtualQuery failed with error: {code}")
+            }
+            #[cfg(windows)]
+            Self::UnmapViewOfFile { code } => {
+                write!(f, "UnmapViewOfFile failed with error: {code}")
             }
         }
     }

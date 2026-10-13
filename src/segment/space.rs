@@ -187,13 +187,6 @@ impl<R: RegionAccess> ElfSegments<R> {
         self.base = base;
     }
 
-    /// Returns the mapped region, when this object owns one.
-    #[inline]
-    #[cfg(windows)]
-    pub(crate) fn primary_region(&self) -> Option<(*mut core::ffi::c_void, usize)> {
-        Some((self.region.addr().get() as *mut _, self.region.len()))
-    }
-
     /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {

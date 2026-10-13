@@ -1,4 +1,4 @@
-use crate::input::{ElfReader, ModuleSourceId, Path, PathBuf};
+use crate::input::{ModuleSourceId, Path};
 #[cfg(target_pointer_width = "32")]
 use crate::os::PageSize;
 use crate::{
@@ -102,10 +102,7 @@ fn try_getauxval(at: usize) -> Result<usize> {
 }
 
 pub(crate) struct RawFile {
-    path: PathBuf,
     fd: isize,
-    len: usize,
-    source_id: ModuleSourceId,
 }
 
 #[repr(C)]
@@ -320,8 +317,10 @@ unsafe fn pread64(fd: isize, buf: *mut u8, len: usize, offset: usize) -> usize {
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        Self::from_fd(path, raw_fd as isize)
+    pub(crate) fn from_owned_fd(raw_fd: i32) -> Result<Self> {
+        Ok(Self {
+            fd: raw_fd as isize,
+        })
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -360,26 +359,11 @@ impl RawFile {
             }
             res
         };
-        Self::from_fd(path, fd as isize)
+        Self::from_owned_fd(fd as i32)
     }
 
-    fn from_fd(path: &Path, fd: isize) -> Result<Self> {
-        let (len, source_id) = match Self::query(fd) {
-            Ok(info) => info,
-            Err(err) => {
-                unsafe { syscalls::raw_syscall!(Sysno::close, fd) };
-                return Err(err);
-            }
-        };
-        Ok(Self {
-            path: PathBuf::from(path),
-            fd,
-            len,
-            source_id,
-        })
-    }
-
-    fn query(fd: isize) -> Result<(usize, ModuleSourceId)> {
+    pub(crate) fn metadata(&self) -> Result<(usize, ModuleSourceId)> {
+        let fd = self.fd;
         const AT_EMPTY_PATH: usize = 0x1000;
         const STATX_BASIC_STATS: usize = 0x07ff;
         const STATX_INO: u32 = 0x0100;
@@ -441,25 +425,12 @@ impl Drop for RawFile {
     }
 }
 
-impl ElfReader for RawFile {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+impl RawFile {
+    pub(crate) fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         super::read_exact_at(buf, offset, |bytes, offset| self.read_some(bytes, offset))
     }
 
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.source_id
-    }
-
-    fn path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    fn as_fd(&self) -> Option<isize> {
-        Some(self.fd as isize)
+    pub(crate) fn mapping_handle(&self) -> isize {
+        self.fd
     }
 }

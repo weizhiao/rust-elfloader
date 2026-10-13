@@ -1,20 +1,11 @@
-use crate::input::ElfReader;
-use crate::memory::{ImageMemory, RegionAccess, VmAddr, VmOffset};
+use crate::input::{ElfReader, FileBacking};
+use crate::memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, roundup};
 use crate::os::{MapFlags, Mmap, ProtFlags};
 use crate::{Result, logging};
 
-use super::{ElfSegment, ElfSegments};
+use super::{CopyRegion, ElfSegment, ElfSegments, SegmentContent};
 
 impl ElfSegment {
-    #[inline]
-    fn mapping_prot(&self) -> ProtFlags {
-        if self.from_object {
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
-        } else {
-            self.prot
-        }
-    }
-
     #[inline]
     fn vm_addr(&self, base: VmAddr) -> VmAddr {
         base + self.offset
@@ -27,115 +18,78 @@ impl ElfSegment {
             .expect("ELF segment offset overflowed")
     }
 
-    /// Map the segment into memory and copy bytes when direct file mapping is unavailable.
-    ///
-    /// This method maps the segment into memory using the appropriate
-    /// memory mapping operations based on the segment's properties.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to map data from
-    ///
-    /// # Returns
-    /// * `Ok(())` - If mapping succeeds
-    /// * `Err(Error)` - If mapping fails
-    fn map_segment<M>(
-        &mut self,
+    /// Maps the contiguous file data of a program-header segment.
+    fn map_file<M: Mmap + ?Sized>(
+        &self,
         mapper: &M,
-        object: &impl ElfReader,
         space: &ElfSegments<M::Region>,
-    ) -> Result<()>
-    where
-        M: Mmap + ?Sized,
-    {
-        let len = self.len;
-        let base = space.base();
-        let addr = self.vm_addr(base);
-        let prot = self.mapping_prot();
-
-        debug_assert!(len.is_multiple_of(self.page_size));
-
-        self.need_copy = true;
-        // ET_REL segments combine separately laid-out sections and must be
-        // populated piece by piece. A program-header segment has one contiguous
-        // file range, so it can be mapped directly when an fd is available.
-        if !self.from_object {
-            debug_assert_eq!(self.map_info.len(), 1);
-            debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
-            if let Some(fd) = object.as_fd() {
-                unsafe {
-                    mapper.map_file_at(addr, len, prot, self.flags, self.map_info[0].offset, fd)
-                }?;
-                self.need_copy = false;
-            }
-        }
-
-        if self.need_copy {
-            for info in &self.map_info {
-                let addr = space.base() + self.segment_offset(info.start);
-                let dst = space
-                    .host_ptr_range(addr, info.filesz)
-                    .expect("segment copy target is not host-accessible");
-                let dst = unsafe { core::slice::from_raw_parts_mut(dst.as_ptr(), info.filesz) };
-                object.read(dst, info.offset)?;
-            }
-        }
-
-        logging::trace!(
-            "[Mmap] address: {}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
-            addr,
-            len,
-            prot,
-            self.zero_size,
-            self.map_info
-        );
-
-        Ok(())
-    }
-
-    /// Change memory protection of the segment
-    ///
-    /// This method adjusts the memory protection of the segment
-    /// after initial mapping, typically to make it executable
-    /// or read-only as required.
-    ///
-    /// # Returns
-    /// * `Ok(())` - If protection change succeeds
-    /// * `Err(Error)` - If protection change fails
-    fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
-    where
-        R: RegionAccess,
-    {
-        if self.need_copy || self.from_object {
-            let len = self.len;
-            debug_assert!(len.is_multiple_of(self.page_size));
-            let addr = self.vm_addr(space.base());
-            space.mprotect(addr, len, self.prot)?;
-
-            logging::trace!(
-                "[Mprotect] address: {}, length: {}, prot: {:?}",
-                addr,
-                len,
-                self.prot,
-            );
+        backing: FileBacking,
+        file_offset: usize,
+        file_size: usize,
+    ) -> Result<()> {
+        debug_assert!(self.len.is_multiple_of(self.page_size));
+        debug_assert!(file_offset.is_multiple_of(self.page_size));
+        if file_size != 0 {
+            let offset = backing
+                .offset
+                .checked_add(file_offset)
+                .ok_or(crate::IoError::ReadBufferTooLarge)?;
+            unsafe {
+                mapper.map_file_at(
+                    self.vm_addr(space.base()),
+                    roundup(file_size, self.page_size),
+                    self.prot,
+                    self.flags,
+                    offset,
+                    backing.fd,
+                )
+            }?;
         }
         Ok(())
     }
 
-    /// Fill zero-initialized areas of the segment
-    ///
-    /// This method fills any zero-initialized areas of the segment
-    /// with zeros, either by writing directly or by mapping
-    /// anonymous pages.
-    ///
-    /// # Returns
-    /// * `Ok(())` - If filling succeeds
-    /// * `Err(Error)` - If filling fails
-    fn fill_zero<M>(&self, mapper: &M, space: &ElfSegments<M::Region>) -> Result<()>
-    where
-        M: Mmap + ?Sized,
-    {
+    /// Copies the segment's file regions into an existing writable space.
+    fn copy_data<R: RegionAccess>(
+        &self,
+        object: &impl ElfReader,
+        space: &ElfSegments<R>,
+    ) -> Result<()> {
+        let copy = |region: &CopyRegion| -> Result<()> {
+            let addr = space.base() + self.segment_offset(region.segment_offset);
+            let dst = space
+                .host_ptr_range(addr, region.len)
+                .expect("segment copy target is not host-accessible");
+            let dst = unsafe { core::slice::from_raw_parts_mut(dst.as_ptr(), region.len) };
+            object.read(dst, region.file_offset)
+        };
+        match &self.content {
+            SegmentContent::Contiguous {
+                file_offset,
+                file_size,
+            } => copy(&CopyRegion {
+                file_offset: *file_offset,
+                segment_offset: 0,
+                len: *file_size,
+            })?,
+            SegmentContent::Scattered(regions) => {
+                for region in regions {
+                    copy(region)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Clears the partial data page and populates the remaining BSS pages.
+    fn fill_zero<M: Mmap + ?Sized>(
+        &self,
+        mapper: &M,
+        space: &ElfSegments<M::Region>,
+        prot: ProtFlags,
+        file_size: usize,
+    ) -> Result<()> {
         if self.zero_size > 0 {
-            let zero_start = space.base() + self.segment_offset(self.content_size);
+            let zero_start = space.base() + self.segment_offset(file_size);
             let zero_end = zero_start.roundup(self.page_size);
             let write_len = zero_end
                 .checked_offset_from(zero_start)
@@ -144,128 +98,78 @@ impl ElfSegment {
             space.zero_bytes(zero_start, write_len)?;
 
             if write_len < self.zero_size {
-                let zero_mmap_addr = zero_end;
-                let zero_mmap_len = self.zero_size - write_len;
-                let prot = self.mapping_prot();
-
                 unsafe {
                     mapper.map_zero_at(
-                        zero_mmap_addr,
-                        zero_mmap_len,
+                        zero_end,
+                        self.len - roundup(file_size, self.page_size),
                         prot,
                         MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
-                    )?;
-                }
+                    )
+                }?;
             }
         }
         Ok(())
     }
 }
 
-/// Trait for building ELF segments
-///
-/// This trait provides the interface for creating and managing
-/// ELF segments during the loading process.
-pub(crate) trait SegmentBuilder {
-    /// Create the address space for the segments
-    ///
-    /// # Returns
-    /// * `Ok(ElfSegments)` - The created segment space
-    /// * `Err(Error)` - If creation fails
-    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
-    where
-        M: Mmap + ?Sized;
-
-    /// Create the individual segments
-    ///
-    /// # Returns
-    /// * `Ok(())` - If creation succeeds
-    /// * `Err(Error)` - If creation fails
-    fn create_segments(&mut self) -> Result<()>;
-
-    /// Get mutable reference to segments
-    ///
-    /// # Returns
-    /// Mutable reference to the segment array
-    fn segments_mut(&mut self) -> &mut [ElfSegment];
-
-    /// Get reference to segments
-    ///
-    /// # Returns
-    /// Reference to the segment array
-    fn segments(&self) -> &[ElfSegment];
-
-    /// Load segments into memory
-    ///
-    /// This method orchestrates the loading of all segments
-    /// into memory, including mapping, data copying, and
-    /// zero-filling.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load segments from
-    ///
-    /// # Returns
-    /// * `Ok(ElfSegments)` - The loaded segments
-    /// * `Err(Error)` - If loading fails
-    fn load_segments<M>(
-        &mut self,
-        mapper: &M,
-        object: &impl ElfReader,
-    ) -> Result<ElfSegments<M::Region>>
-    where
-        M: Mmap + ?Sized,
-    {
-        let space = self.create_space(mapper)?;
-        self.create_segments()?;
-        let segments = self.segments_mut();
-
-        #[cfg(windows)]
-        let base = space.base();
-        #[cfg(windows)]
-        let mut last_addr = space
-            .primary_region()
-            .map(|(memory, _)| memory as usize)
-            .unwrap_or_else(|| base.get());
-
-        for segment in segments.iter_mut() {
-            #[cfg(windows)]
-            if object.as_fd().is_some() {
-                let addr = segment.vm_addr(base).get();
-                let len = segment.len;
-                if addr > last_addr {
-                    crate::os::virtual_free(last_addr, addr - last_addr)?;
-                }
-                let mapped_span_end = space
-                    .primary_region()
-                    .map(|(memory, len)| memory as usize + len)
-                    .expect("Windows mapped spaces must own a primary region");
-                if addr + len < mapped_span_end {
-                    crate::os::virtual_free(addr + len, mapped_span_end - (addr + len))?;
-                }
-                last_addr = addr + len;
-            }
-            segment.map_segment(mapper, object, &space)?;
-            segment.fill_zero(mapper, &space)?;
-        }
-        Ok(space)
-    }
-
-    /// Change memory protection of all segments
-    ///
-    /// This method adjusts the memory protection of all segments
-    /// after initial mapping.
-    ///
-    /// # Returns
-    /// * `Ok(())` - If protection changes succeed
-    /// * `Err(Error)` - If protection changes fail
-    fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
-    where
-        R: RegionAccess,
-    {
-        let segments = self.segments();
+/// Populates a reserved image from immutable segment layouts.
+/// File-backed program segments use direct mappings; other inputs copy into
+/// writable, zero-initialized memory created with `populate_later = false`.
+/// Callers retain control of subsequent protection changes.
+pub(crate) fn populate_segments<M: Mmap + ?Sized>(
+    mapper: &M,
+    object: &impl ElfReader,
+    space: &ElfSegments<M::Region>,
+    segments: &[ElfSegment],
+    backing: Option<FileBacking>,
+) -> Result<()> {
+    if let Some(backing) = backing {
         for segment in segments {
-            segment.mprotect(space)?;
+            let SegmentContent::Contiguous {
+                file_offset,
+                file_size,
+            } = &segment.content
+            else {
+                unreachable!("scattered segment content requires a writable copy space");
+            };
+            segment.map_file(mapper, space, backing, *file_offset, *file_size)?;
+            segment.fill_zero(mapper, space, segment.prot, *file_size)?;
+            logging::trace!(
+                "[Mmap] address: {}, length: {}, flags: {:?}",
+                segment.vm_addr(space.base()),
+                segment.len,
+                segment.prot
+            );
         }
-        Ok(())
+    } else {
+        for segment in segments {
+            segment.copy_data(object, space)?;
+            logging::trace!(
+                "[Copy] address: {}, length: {}, content: {:?}",
+                segment.vm_addr(space.base()),
+                segment.len,
+                segment.content
+            );
+        }
     }
+    Ok(())
+}
+
+/// Applies the segment permissions at the caller's chosen lifecycle stage.
+pub(crate) fn protect_segments<R: RegionAccess>(
+    space: &ElfSegments<R>,
+    segments: &[ElfSegment],
+) -> Result<()> {
+    for segment in segments {
+        debug_assert!(segment.len.is_multiple_of(segment.page_size));
+        let addr = segment.vm_addr(space.base());
+        space.mprotect(addr, segment.len, segment.prot)?;
+        logging::trace!(
+            "[Mprotect] address: {}, length: {}, prot: {:?}",
+            addr,
+            segment.len,
+            segment.prot
+        );
+    }
+    Ok(())
 }

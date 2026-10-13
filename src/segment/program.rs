@@ -1,10 +1,10 @@
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    input::ElfReader,
+    elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
+    input::{ElfReader, check_read_range},
     memory::{VmAddr, VmOffset, rounddown, roundup},
     os::{MapFlags, Mmap, ProtFlags},
-    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
+    segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
 use alloc::vec::Vec;
 
@@ -24,53 +24,54 @@ fn segment_prot(flags: ElfProgramFlags) -> ProtFlags {
     prot
 }
 
-/// Manages segments parsed from ELF program headers
-pub(crate) struct ProgramSegments<'phdr, L: ElfLayout = NativeElfLayout> {
-    phdrs: &'phdr [ElfPhdr<L>],
-    segments: Vec<ElfSegment>,
+/// Validates program headers, creates the address space, and populates its segments.
+pub(crate) fn load_segments<M>(
+    phdrs: &[ElfPhdr<impl ElfLayout>],
     is_dylib: bool,
-    use_file: bool,
+    mapper: &M,
+    object: &impl ElfReader,
     page_size: usize,
-}
-
-impl<'phdr, L: ElfLayout> ProgramSegments<'phdr, L> {
-    /// Create a new [`ProgramSegments`] instance.
-    pub(crate) fn new(
-        phdrs: &'phdr [ElfPhdr<L>],
-        is_dylib: bool,
-        use_file: bool,
-        page_size: usize,
-    ) -> Self {
-        Self {
-            phdrs,
-            segments: Vec::new(),
-            is_dylib,
-            use_file,
-            page_size,
+) -> Result<ElfSegments<M::Region>>
+where
+    M: Mmap + ?Sized,
+{
+    for phdr in phdrs {
+        if phdr.program_type() == ElfProgramType::LOAD && phdr.p_filesz() != 0 {
+            check_read_range(phdr.p_offset(), phdr.p_filesz(), object.len())?;
         }
     }
+    let file_backing = match object.file_backing() {
+        Some(range) => range.for_mapping(page_size)?,
+        None => None,
+    };
+    let layout = parse_segments(phdrs, is_dylib, page_size)?;
+    let segments: Vec<_> = phdrs
+        .iter()
+        .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
+        .map(|phdr| phdr.create_segment(page_size))
+        .collect();
 
-    pub(crate) fn load<M>(
-        phdrs: &'phdr [ElfPhdr<L>],
-        is_dylib: bool,
-        mapper: &M,
-        object: &impl ElfReader,
-        page_size: usize,
-    ) -> Result<ElfSegments<M::Region>>
-    where
-        M: Mmap + ?Sized,
-    {
-        let mut segments = Self::new(phdrs, is_dylib, object.as_fd().is_some(), page_size);
-        let loaded = segments.load_segments(mapper, object)?;
-        segments.mprotect(&loaded)?;
-        Ok(loaded)
+    let use_file = file_backing.is_some();
+    let prot = if use_file {
+        ProtFlags::PROT_NONE
+    } else {
+        ProtFlags::PROT_WRITE
+    };
+    let region =
+        unsafe { mapper.create_space(layout.preferred_addr, layout.mapped_len, prot, use_file) }?;
+    let base = region.addr() - layout.min_vaddr;
+    let loaded = ElfSegments::new(region, base, layout.min_vaddr);
+    populate_segments(mapper, object, &loaded, &segments, file_backing)?;
+    if !use_file {
+        protect_segments(&loaded, &segments)?;
     }
+    Ok(loaded)
 }
 
 /// Memory layout requirements derived from LOAD program headers.
 pub(crate) struct ProgramSegmentLayout {
     /// Preferred address passed to `mmap`; `None` lets the OS choose.
-    pub(crate) preferred_addr: Option<VmAddr>,
+    preferred_addr: Option<VmAddr>,
     /// Total page-aligned memory range covered by LOAD segments.
     pub(crate) mapped_len: usize,
     /// Lowest page-aligned virtual address among LOAD segments.
@@ -143,53 +144,6 @@ pub(crate) fn parse_segments(
     })
 }
 
-impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
-    /// Reserve memory space for all segments
-    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
-    where
-        M: Mmap + ?Sized,
-    {
-        let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
-        let prot = if self.use_file {
-            ProtFlags::PROT_NONE
-        } else {
-            ProtFlags::PROT_WRITE
-        };
-        let region = unsafe {
-            mapper.create_space(
-                layout.preferred_addr,
-                layout.mapped_len,
-                prot,
-                self.use_file,
-            )
-        }?;
-        let base = region.addr() - layout.min_vaddr;
-        Ok(ElfSegments::new(region, base, layout.min_vaddr))
-    }
-
-    /// Create individual segments from program headers
-    fn create_segments(&mut self) -> Result<()> {
-        for phdr in self
-            .phdrs
-            .iter()
-            .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
-        {
-            self.segments.push(phdr.create_segment(self.page_size));
-        }
-        Ok(())
-    }
-
-    /// Get mutable reference to segments
-    fn segments_mut(&mut self) -> &mut [ElfSegment] {
-        &mut self.segments
-    }
-
-    /// Get reference to segments
-    fn segments(&self) -> &[ElfSegment] {
-        &self.segments
-    }
-}
-
 impl<L: ElfLayout> ElfPhdr<L> {
     /// Create an ElfSegment from an ELF program header
     #[inline]
@@ -213,15 +167,11 @@ impl<L: ElfLayout> ElfPhdr<L> {
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,
             page_size,
-            content_size: filesz,
             zero_size: self.p_memsz() - self.p_filesz(),
-            map_info: alloc::vec![FileMapInfo {
-                start: 0,
-                filesz,
-                offset,
-            }],
-            need_copy: false,
-            from_object: false,
+            content: SegmentContent::Contiguous {
+                file_offset: offset,
+                file_size: filesz,
+            },
         }
     }
 }

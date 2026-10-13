@@ -3,7 +3,7 @@ use crate::{
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
-use alloc::alloc::{dealloc, handle_alloc_error};
+use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
 use core::{alloc::Layout, slice::from_raw_parts_mut};
 
 /// Allocator-backed mapping for host-addressable memory.
@@ -11,6 +11,9 @@ use core::{alloc::Layout, slice::from_raw_parts_mut};
 /// `AllocMmap` uses the global allocator and treats the allocation address as
 /// the image VM address. It is the default mapper on bare-metal targets, but it
 /// can also be selected explicitly on other platforms.
+/// A non-null address passed to `create_space` selects caller-owned storage;
+/// that storage is cleared when `populate_later` is false. Use `alias_space`
+/// to preserve the contents of an existing image.
 #[derive(Clone, Copy, Default)]
 pub struct AllocMmap;
 
@@ -30,9 +33,12 @@ impl Mmap for AllocMmap {
         addr: Option<VmAddr>,
         len: usize,
         _prot: ProtFlags,
-        _populate_later: bool,
+        populate_later: bool,
     ) -> Result<MappedRegion<Self::Region>> {
         if let Some(addr) = addr.filter(|addr| *addr != VmAddr::null()) {
+            if !populate_later {
+                unsafe { core::ptr::write_bytes(addr.as_mut_ptr::<u8>(), 0, len) };
+            }
             return Ok(MappedRegion::local_alias(
                 addr.as_mut_ptr::<u8>().cast(),
                 len,
@@ -41,7 +47,7 @@ impl Mmap for AllocMmap {
         }
 
         let layout = unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
-        let memory = unsafe { alloc::alloc::alloc(layout) };
+        let memory = unsafe { alloc_zeroed(layout) };
         if memory.is_null() {
             handle_alloc_error(layout);
         }

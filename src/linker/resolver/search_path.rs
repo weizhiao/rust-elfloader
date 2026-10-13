@@ -6,20 +6,22 @@ use super::{
 use crate::{
     Error, IoError, ParseEhdrError, Result,
     image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
-    input::{ElfFile, Path, PathBuf},
+    input::{ElfFile, ElfReader, Path, PathBuf},
     loader::read_ehdr,
     os::path_is_dir,
     relocation::RelocationArch,
     sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
 type PathProvider = dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
     + Send
     + Sync
     + 'static;
+
+type Opener = dyn Fn(&Path) -> Result<Box<dyn ElfReader>> + Send + Sync + 'static;
 
 #[derive(Clone)]
 enum SearchPathEntry {
@@ -182,7 +184,10 @@ impl SearchConfig {
     }
 }
 
-/// Filesystem-backed dependency resolver for [`Linker`](crate::Linker).
+/// Path-based dependency resolver for [`Linker`](crate::Linker).
+///
+/// Opens ordinary files by default; [`Self::with_opener`] supports custom input
+/// sources while retaining search order and ELF architecture validation.
 ///
 /// `SearchPathResolver` is an opt-in convenience resolver for callers whose
 /// linker keys can be viewed as loader paths and constructed from resolved
@@ -202,12 +207,14 @@ impl SearchConfig {
 #[derive(Clone, Default)]
 pub struct SearchPathResolver {
     entries: Vec<SearchPathEntry>,
+    opener: Option<Arc<Opener>>,
 }
 
 impl fmt::Debug for SearchPathResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SearchPathResolver")
             .field("entries", &self.entries)
+            .field("custom_opener", &self.opener.is_some())
             .finish()
     }
 }
@@ -218,6 +225,7 @@ impl SearchPathResolver {
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
+            opener: None,
         }
     }
 
@@ -264,6 +272,24 @@ impl SearchPathResolver {
             resolver.push_fixed_dir(dir);
         }
         resolver
+    }
+
+    /// Replaces the candidate opener while retaining the configured search order.
+    ///
+    /// Container/virtual paths can be interpreted by the opener without changing
+    /// path generation or ELF validation. The callback handles all candidates,
+    /// including ordinary files; no filesystem fallback is applied. Native
+    /// directory existence checks and their cache are disabled for this resolver.
+    ///
+    /// Return [`crate::error::IoError::OpenFailed`] for unavailable candidates that should allow
+    /// a search to continue. Other errors stop lookup. Direct-path errors are
+    /// always returned to the caller.
+    pub fn with_opener<F>(mut self, opener: F) -> Self
+    where
+        F: Fn(&Path) -> Result<Box<dyn ElfReader>> + Send + Sync + 'static,
+    {
+        self.opener = Some(arc_unsize!(Arc::new(opener) => Opener));
+        self
     }
 
     fn push_entry(&mut self, entry: SearchPathEntry) -> &mut Self {
@@ -365,8 +391,13 @@ impl SearchPathResolver {
         dir: Option<&SharedDir>,
         skip_incompatible: bool,
         incompatible: &mut Option<Error>,
-    ) -> Result<Option<ElfFile>> {
-        let file = match ElfFile::from_path(path) {
+    ) -> Result<Option<Box<dyn ElfReader>>> {
+        let dir = dir.filter(|_| self.opener.is_none());
+        let opened = match &self.opener {
+            Some(open) => open(path),
+            None => ElfFile::from_path(path).map(|file| Box::new(file) as Box<dyn ElfReader>),
+        };
+        let file = match opened {
             Ok(file) => {
                 if let Some(dir) = dir {
                     dir.mark_existing();
@@ -405,8 +436,8 @@ impl SearchPathResolver {
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
-    ) -> Result<Option<ElfFile>> {
-        if dir.is_missing() {
+    ) -> Result<Option<Box<dyn ElfReader>>> {
+        if self.opener.is_none() && dir.is_missing() {
             return Ok(None);
         }
         candidate.set_joined(dir.path(), requested);
@@ -419,7 +450,7 @@ impl SearchPathResolver {
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
-    ) -> Result<Option<ElfFile>> {
+    ) -> Result<Option<Box<dyn ElfReader>>> {
         for dir in dirs {
             if let Some(file) = self.try_dir::<Arch>(dir, requested, candidate, incompatible)? {
                 return Ok(Some(file));
@@ -470,7 +501,7 @@ where
         if requested.has_dir_separator() {
             return self
                 .try_candidate::<Arch>(requested, None, false, &mut incompatible)?
-                .map(ResolvedKey::load)
+                .map(ResolvedKey::load_boxed)
                 .ok_or_else(|| req.unresolved());
         }
 
@@ -496,7 +527,7 @@ where
                         Ok(found.is_none())
                     })?;
                     if let Some(file) = found {
-                        return Ok(ResolvedKey::load(file));
+                        return Ok(ResolvedKey::load_boxed(file));
                     }
                 }
                 SearchPathEntry::Runpath => {
@@ -506,14 +537,14 @@ where
                     if let Some(file) =
                         self.try_dirs::<Arch>(dirs, requested, &mut candidate, &mut incompatible)?
                     {
-                        return Ok(ResolvedKey::load(file));
+                        return Ok(ResolvedKey::load_boxed(file));
                     }
                 }
                 SearchPathEntry::Dir(dir) => {
                     if let Some(file) =
                         self.try_dir::<Arch>(dir, requested, &mut candidate, &mut incompatible)?
                     {
-                        return Ok(ResolvedKey::load(file));
+                        return Ok(ResolvedKey::load_boxed(file));
                     }
                 }
                 SearchPathEntry::DirProvider(provider) => {
@@ -524,7 +555,7 @@ where
                         if let Some(file) =
                             self.try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
                         {
-                            return Ok(ResolvedKey::load(file));
+                            return Ok(ResolvedKey::load_boxed(file));
                         }
                     }
                 }
@@ -535,7 +566,7 @@ where
                         if let Some(file) =
                             self.try_candidate::<Arch>(candidate, None, true, &mut incompatible)?
                         {
-                            return Ok(ResolvedKey::load(file));
+                            return Ok(ResolvedKey::load_boxed(file));
                         }
                     }
                 }

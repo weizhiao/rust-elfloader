@@ -362,10 +362,6 @@ mod tests {
         fn source_id(&self) -> ModuleSourceId {
             ModuleSourceId::opaque(0, 3)
         }
-
-        fn as_fd(&self) -> Option<isize> {
-            None
-        }
     }
 
     fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {

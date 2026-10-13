@@ -52,8 +52,13 @@ impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, Arch,
     /// Creates a result that loads a new module from the provided reader.
     #[inline]
     pub fn load(reader: impl ElfReader + 'cfg) -> Self {
+        Self::load_boxed(Box::new(reader))
+    }
+
+    #[inline]
+    pub(super) fn load_boxed(reader: Box<dyn ElfReader + 'cfg>) -> Self {
         Self {
-            kind: ResolvedKind::Load(Box::new(reader)),
+            kind: ResolvedKind::Load(reader),
             pinned: false,
         }
     }

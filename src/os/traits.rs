@@ -51,6 +51,15 @@ pub trait Mmap: Send + Sync + 'static {
 
     /// Creates the owning virtual address space for a loaded image or arena.
     ///
+    /// With `populate_later = false`, the entire returned range must be
+    /// initialized to zero with the requested initial protection. This includes
+    /// backends using an allocator or caller-owned storage. Callers populating
+    /// the space through writes must request writable protection.
+    ///
+    /// With `populate_later = true`, the backend may only reserve address space;
+    /// callers must populate it through file or zero mappings before access.
+    /// No initial contents are required in that case.
+    ///
     /// # Arguments
     /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
     /// * `len` - Size of the space in bytes.
@@ -59,6 +68,8 @@ pub trait Mmap: Send + Sync + 'static {
     ///
     /// # Safety
     /// Manipulates address space. `addr` must be page-aligned if specified.
+    /// For backends using caller-owned storage, the selected range must be
+    /// valid and exclusively available for initialization and loading.
     unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
@@ -73,6 +84,7 @@ pub trait Mmap: Send + Sync + 'static {
     /// control. The returned region must not unmap the range on drop, but it
     /// should still support operations such as [`RegionAccess::mprotect`] when
     /// the backend can apply them.
+    /// Creating an alias must preserve the existing contents.
     ///
     /// # Safety
     /// `addr..addr + len` must describe a valid mapped range for the returned
@@ -82,7 +94,8 @@ pub trait Mmap: Send + Sync + 'static {
     /// Maps file-backed pages into an already-created space.
     ///
     /// The mapped range is owned by the surrounding space created with
-    /// [`Mmap::create_space`].
+    /// [`Mmap::create_space`]. The backend must prepare the target subrange,
+    /// including splitting address reservations when the platform requires it.
     ///
     /// # Safety
     /// `addr..addr + len` must be inside a region previously created by this
@@ -101,7 +114,8 @@ pub trait Mmap: Send + Sync + 'static {
     /// Maps or commits anonymous zero-filled pages into an already-created space.
     ///
     /// The mapped range is owned by the surrounding space created with
-    /// [`Mmap::create_space`].
+    /// [`Mmap::create_space`]. The backend must prepare the target subrange,
+    /// including splitting address reservations when the platform requires it.
     ///
     /// # Safety
     /// `addr..addr + len` must be inside a region previously created by this

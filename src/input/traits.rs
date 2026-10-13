@@ -9,6 +9,38 @@ use alloc::boxed::Box;
 
 use super::{ModuleSourceId, Path};
 
+/// A borrowed file range backing an ELF reader, with offsets relative to the file.
+/// The descriptor must remain valid while the reader is borrowed. This range
+/// must describe exactly the same bytes as `read(0..len)`. Creating the descriptor
+/// does not duplicate the handle or transfer ownership.
+///
+/// `len` bounds ELF data, not the page-rounded mapping. Mapping a boundary page
+/// may expose bytes outside this range. Readers requiring byte-level isolation
+/// must return `None` from [`ElfReader::file_backing`] and use copying instead.
+#[derive(Clone, Copy, Debug)]
+pub struct FileBacking {
+    /// Borrowed platform file descriptor/handle.
+    pub fd: isize,
+    /// File offset corresponding to ELF offset zero.
+    pub offset: usize,
+    /// Number of bytes in the ELF source.
+    pub len: usize,
+}
+
+impl FileBacking {
+    pub(crate) fn for_mapping(self, page_size: usize) -> Result<Option<Self>> {
+        self.offset
+            .checked_add(self.len)
+            .ok_or(IoError::ReadBufferTooLarge)?;
+        // Windows subrange reservation has additional allocation-granularity
+        // constraints. Use bounded reads there until range mapping supports them.
+        if (cfg!(windows) && self.offset != 0) || !self.offset.is_multiple_of(page_size) {
+            return Ok(None);
+        }
+        Ok(Some(self))
+    }
+}
+
 /// A trait for reading ELF data from various sources.
 ///
 /// `ElfReader` abstracts the underlying storage (memory, file system, etc.)
@@ -26,8 +58,9 @@ pub trait ElfReader {
     /// Returns the stable identity of the underlying source.
     ///
     /// Implementations must derive this from the opened source rather than
-    /// resolving the path separately. Memory and remote readers can allocate
-    /// an identity with [`ModuleSourceId::fresh`] or provide a stable opaque ID.
+    /// resolving the path separately. File regions, memory and remote readers
+    /// can provide a stable opaque ID, or use [`ModuleSourceId::fresh`] when
+    /// independently opened readers should represent different sources.
     fn source_id(&self) -> ModuleSourceId;
 
     /// Borrows bytes directly from the ELF object when the backend can provide
@@ -39,11 +72,14 @@ pub trait ElfReader {
         Ok(None)
     }
 
-    /// Returns the underlying file descriptor if the source is a file.
+    /// Returns the backing range for direct page-granularity mapping.
     ///
-    /// This is used by the loader to perform efficient memory mapping (`mmap`).
-    /// Returns `None` for memory-based sources.
-    fn as_fd(&self) -> Option<isize>;
+    /// The range must describe the same source and length as this reader.
+    /// Unaligned ranges and unsupported platform mappings use reads instead.
+    /// The default provides no file backing and uses copying.
+    fn file_backing(&self) -> Option<FileBacking> {
+        None
+    }
 
     /// Returns the final path component of the ELF source path.
     fn file_name(&self) -> &[u8] {
@@ -186,8 +222,8 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     }
 
     #[inline]
-    fn as_fd(&self) -> Option<isize> {
-        (**self).as_fd()
+    fn file_backing(&self) -> Option<FileBacking> {
+        (**self).file_backing()
     }
 }
 

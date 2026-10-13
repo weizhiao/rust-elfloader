@@ -41,7 +41,7 @@ cfg_if::cfg_if! {
 
         pub use windows::DefaultMmap;
         pub(crate) use windows::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use windows::{RawFile, path_is_dir, virtual_free};
+        pub(crate) use windows::{RawFile, path_is_dir};
     } else if #[cfg(any(
         feature = "use-syscall",
         all(any(target_os = "linux", target_os = "android"), feature = "libc"),

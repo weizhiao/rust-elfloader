@@ -3,7 +3,11 @@ use crate::{IoError, ReadBoundsError, Result, logging, os::RawFile};
 use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::ops::Range;
 
-fn checked_read_range(offset: usize, len: usize, available: usize) -> Result<Range<usize>> {
+pub(crate) fn checked_read_range(
+    offset: usize,
+    len: usize,
+    available: usize,
+) -> Result<Range<usize>> {
     let Some(end) = offset.checked_add(len).filter(|&end| end <= available) else {
         return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
             offset, len, available,
@@ -95,32 +99,40 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
         let range = checked_read_range(offset, len, bytes.len())?;
         Ok(Some(&bytes[range]))
     }
-
-    /// Returns `None` since memory-based objects don't have file descriptors.
-    fn as_fd(&self) -> Option<isize> {
-        None
-    }
 }
 
-/// An ELF object source backed by a file on the filesystem.
+/// An owned file or file region used as an ELF source.
 ///
-/// This implementation uses standard file I/O to read ELF data. It also
-/// provides access to the underlying file descriptor for memory mapping.
+/// Reads are bounded by the view and use offsets relative to its start.
+/// Direct mappings use page granularity; bytes outside the view in a boundary
+/// page are not isolated from the rest of the backing file.
 pub struct ElfFile {
-    /// The underlying OS-specific file handle.
     inner: RawFile,
+    path: PathBuf,
+    offset: usize,
+    len: usize,
+    source_id: ModuleSourceId,
 }
 
 impl ElfFile {
+    fn from_raw(path: &Path, inner: RawFile) -> Result<Self> {
+        let (len, source_id) = inner.metadata()?;
+        Ok(Self {
+            len,
+            source_id,
+            inner,
+            path: PathBuf::from(path),
+            offset: 0,
+        })
+    }
+
     /// Creates a new file-based ELF object from an owned file descriptor.
     ///
     /// # Safety
     /// The caller must ensure that `raw_fd` is valid and owned by this object.
     pub unsafe fn from_owned_fd(path: impl AsRef<Path>, raw_fd: i32) -> Result<Self> {
         let path = path.as_ref();
-        Ok(ElfFile {
-            inner: RawFile::from_owned_fd(path, raw_fd)?,
-        })
+        Self::from_raw(path, RawFile::from_owned_fd(raw_fd)?)
     }
 
     /// Creates a new file-based ELF object by opening a file at the given path.
@@ -129,34 +141,61 @@ impl ElfFile {
         logging::debug!("Opening ELF file: {}", path);
 
         let inner = RawFile::from_path(path)?;
-        Ok(ElfFile { inner })
+        Self::from_raw(path, inner)
+    }
+
+    /// Restricts this file view to a checked region and gives it a loader path.
+    ///
+    /// `offset` is relative to the current view. The caller supplies the region's
+    /// identity: reuse it when opening the same source, and use distinct IDs for
+    /// different regions or files. The path is descriptive and does not affect
+    /// source identity. [`ModuleSourceId::fresh`] can be used when reuse is unwanted.
+    ///
+    /// Unaligned views remain readable but use copying instead of direct mapping.
+    pub fn into_range(
+        mut self,
+        path: impl Into<PathBuf>,
+        offset: usize,
+        len: usize,
+        source_id: ModuleSourceId,
+    ) -> Result<Self> {
+        checked_read_range(offset, len, self.len)?;
+        self.offset += offset;
+        self.len = len;
+        self.path = path.into();
+        self.source_id = source_id;
+        Ok(self)
     }
 }
 
 impl ElfReader for ElfFile {
     /// Returns the path of the ELF file.
     fn path(&self) -> &Path {
-        self.inner.path()
+        &self.path
     }
 
     /// Returns the byte length of the file-backed ELF object.
     fn len(&self) -> usize {
-        self.inner.len()
+        self.len
     }
 
     /// Reads data from the file-based ELF object.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        self.inner.read(buf, offset)
+        checked_read_range(offset, buf.len(), self.len)?;
+        self.inner.read(buf, self.offset + offset)
     }
 
     #[inline]
     fn source_id(&self) -> ModuleSourceId {
-        self.inner.source_id()
+        self.source_id
     }
 
-    /// Returns the raw file descriptor for the underlying file.
-    fn as_fd(&self) -> Option<isize> {
-        self.inner.as_fd()
+    fn file_backing(&self) -> Option<super::FileBacking> {
+        Some(super::FileBacking {
+            fd: self.inner.mapping_handle(),
+            offset: self.offset,
+            len: self.len,
+        })
     }
 }
 

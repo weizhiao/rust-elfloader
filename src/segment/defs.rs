@@ -6,18 +6,29 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-/// Information about a file mapping within a segment
-///
-/// This structure describes how a portion of a file is mapped
-/// into a memory segment.
+/// A file range copied into a segment.
 #[derive(Debug)]
-pub(crate) struct FileMapInfo {
-    /// Start offset within the segment
-    pub(crate) start: usize,
-    /// Size of the file data in bytes
-    pub(crate) filesz: usize,
-    /// Offset within the file
-    pub(crate) offset: usize,
+pub(crate) struct CopyRegion {
+    /// Offset within the input file.
+    pub(crate) file_offset: usize,
+    /// Destination offset within the segment.
+    pub(crate) segment_offset: usize,
+    /// Number of bytes to copy.
+    pub(crate) len: usize,
+}
+
+/// File content used to populate a segment.
+#[derive(Debug)]
+pub(crate) enum SegmentContent {
+    /// One contiguous file range starting at the segment's beginning.
+    /// The range includes any prefix introduced by page alignment.
+    Contiguous {
+        file_offset: usize,
+        file_size: usize,
+    },
+    /// Independently placed sections, copied into zero-initialized memory.
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
+    Scattered(Vec<CopyRegion>),
 }
 
 /// A page-aligned memory protection change applied after mapping.
@@ -74,12 +85,6 @@ pub(crate) struct ElfSegment {
     pub(crate) page_size: usize,
     /// Size of zero-filled area at the end of the segment
     pub(crate) zero_size: usize,
-    /// Size of content (non-zero) area in the segment
-    pub(crate) content_size: usize,
-    /// Information about file mappings within this segment
-    pub(crate) map_info: Vec<FileMapInfo>,
-    /// Indicates if data needs to be copied manually
-    pub(crate) need_copy: bool,
-    /// Indicates if this segment comes from a relocatable object
-    pub(crate) from_object: bool,
+    /// File content layout used for mapping or copying.
+    pub(crate) content: SegmentContent,
 }
