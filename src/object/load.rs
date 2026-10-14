@@ -88,7 +88,7 @@ where
             &object,
             &mut user_data,
         ))?;
-        let (section_segments, segments) = SectionSegments::<Arch>::load::<D, _, _>(
+        let (section_segments, segments, pltgot) = SectionSegments::<Arch>::load::<D, _, _>(
             &mut sections,
             &object,
             page_size,
@@ -102,6 +102,7 @@ where
             sections,
             segments,
             section_segments,
+            pltgot,
             user_data,
             executor,
             self.loader.domain_id(),

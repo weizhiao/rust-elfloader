@@ -23,7 +23,7 @@ use crate::{
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
     sync::{Arc, OnceCell, arc_unsize},
-    tls::{CoreTlsState, TlsResolver},
+    tls::{ImageTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::{fmt::Debug, ops::Deref};
@@ -83,9 +83,8 @@ where
     Arch: ObjectArch,
     R: RegionAccess,
 {
-    pub(crate) fn build_object(mut self) -> RawObject<D, Arch, R, Tls> {
+    pub(crate) fn build_object(self) -> RawObject<D, Arch, R, Tls> {
         let (segments, init_segments) = self.segments.into_parts();
-        let pltgot = self.section_segments.take_pltgot();
         let exports = Arc::new(ObjectExportsCell::new());
         let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
@@ -97,7 +96,7 @@ where
             user_data: self.user_data,
             dynamic_info: None,
             lazy_lookup: OnceCell::new(),
-            tls: CoreTlsState::without_module(self.tls_resolver),
+            tls: ImageTlsState::without_module(self.tls_resolver),
             segments,
         };
         let inner = Arc::new(inner);
@@ -108,7 +107,7 @@ where
             symtab: self.symtab,
             exports,
             sections: self.sections,
-            pltgot,
+            pltgot: self.pltgot,
             section_segments: self.section_segments,
             init_segments,
             init: self.init,

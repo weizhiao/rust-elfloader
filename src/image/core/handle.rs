@@ -13,7 +13,7 @@ use crate::{
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak, arc_unsize},
-    tls::{CoreTlsState, TlsImageProvider, TlsImageSource, TlsResolver},
+    tls::{ImageTlsState, TlsImageProvider, TlsImageSource, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ops::Deref, ptr::NonNull};
@@ -219,7 +219,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments<R>,
-        tls: CoreTlsState<Arch, Tls>,
+        tls: ImageTlsState<Arch, Tls>,
         user_data: D,
     ) -> Result<Self> {
         segments.set_base(base);

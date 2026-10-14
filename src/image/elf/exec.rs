@@ -17,7 +17,7 @@ use crate::{
     runtime::DomainId,
     segment::ElfSegments,
     sync::{Arc, arc_unsize},
-    tls::{ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver},
+    tls::{ImageTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -81,7 +81,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns TLS metadata when this image owns a TLS block.
     pub fn tls(&self) -> Option<ModuleTls> {
-        self.inner.tls
+        self.inner.tls.module()
     }
 
     /// Returns user data associated with the image.
@@ -111,6 +111,9 @@ struct StaticExecInner<
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
+    // Keep TLS first so it unregisters before user data and mapped memory drop.
+    tls: ImageTlsState<Arch, Tls>,
+
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
 
@@ -126,36 +129,15 @@ struct StaticExecInner<
     /// Program headers
     phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
 
-    /// TLS module placement.
-    tls: Option<ModuleTls>,
-
-    /// Resolver that owns the TLS registration.
-    tls_resolver: Tls,
-
     /// Runtime domain in which this executable was loaded.
     domain: DomainId,
-
-    /// Keeps the static TLS image source alive while the executable is alive.
-    _tls_image: Option<Arc<StaticTlsImage>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
-    for StaticExecInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    TlsImageProvider for StaticExecInner<D, Arch, R, Tls>
 {
-    fn drop(&mut self) {
-        if let Some(tls) = self.tls {
-            self.tls_resolver.unregister(tls.mod_id());
-        }
-    }
-}
-
-struct StaticTlsImage {
-    image: &'static [u8],
-}
-
-impl TlsImageProvider for StaticTlsImage {
     fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        f(self.image)
+        self.tls.with_image(f)
     }
 }
 
@@ -456,25 +438,24 @@ where
         self.parse_phdrs(phdrs)?;
 
         let entry = self.entry;
-        let mut tls_image = None;
-        let module_tls = if let Some(info) = &self.tls_info {
+        let tls = if let Some(info) = &self.tls_info {
             let image = self
                 .segments
                 .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
                 .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
-            tls_image = Some(Arc::new(StaticTlsImage {
-                image: image.as_slice(),
-            }));
             // Static executables always use static TLS if PT_TLS is present.
-            Some(
+            ImageTlsState::with_module(
+                self.tls_resolver.clone(),
                 self.tls_resolver
                     .register(*info, TlsRequest::Static(None))?,
+                image,
             )
         } else {
-            None
+            ImageTlsState::without_module(self.tls_resolver)
         };
 
         let inner = Arc::new(StaticExecInner {
+            tls,
             entry,
             path: self.path,
             user_data: self.user_data,
@@ -484,19 +465,15 @@ where
             } else {
                 Some(phdrs.to_vec())
             },
-            tls: module_tls,
-            tls_resolver: self.tls_resolver.clone(),
             domain: self.domain,
-            _tls_image: tls_image.clone(),
         });
 
-        if let Some(image) = tls_image.as_ref() {
-            let provider = arc_unsize!(image.clone() => dyn TlsImageProvider);
-            let mod_id = module_tls
-                .expect("static TLS image must have registered module metadata")
-                .mod_id();
-            self.tls_resolver
-                .publish(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)?;
+        if inner.tls.module().is_some() {
+            // Upgrading this provider retains the mapping for the whole template read.
+            let provider = arc_unsize!(inner.clone() => dyn TlsImageProvider);
+            inner
+                .tls
+                .publish(TlsImageSource::new(Arc::downgrade(&provider)))?;
         }
 
         Ok(StaticExec { inner })

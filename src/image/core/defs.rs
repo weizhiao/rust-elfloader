@@ -15,7 +15,7 @@ use crate::{
     runtime::{CodeContext, CodeExecutor, DomainId},
     segment::{ElfSegments, MappedRange},
     sync::{Arc, OnceCell, Weak},
-    tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
+    tls::{ImageTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
@@ -210,7 +210,7 @@ pub struct ElfModule<
     pub(crate) lazy_lookup: OnceCell<LazyLookup<Arch, Tls>>,
 
     /// TLS runtime state for this loaded object.
-    pub(crate) tls: CoreTlsState<Arch, Tls>,
+    pub(crate) tls: ImageTlsState<Arch, Tls>,
 
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,

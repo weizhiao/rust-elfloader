@@ -12,7 +12,7 @@ use crate::{
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
     sync::Arc,
-    tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
+    tls::{ImageTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ops::Deref};
@@ -400,13 +400,13 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             } else {
                 TlsRequest::Dynamic
             };
-            CoreTlsState::with_module(
+            ImageTlsState::with_module(
                 tls_resolver.clone(),
                 tls_resolver.register(info, request)?,
                 template,
             )
         } else {
-            CoreTlsState::without_module(tls_resolver)
+            ImageTlsState::without_module(tls_resolver)
         };
         let core = unsafe {
             ElfCore::from_raw(

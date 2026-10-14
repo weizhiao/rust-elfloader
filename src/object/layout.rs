@@ -44,7 +44,6 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 pub(crate) struct SectionSegments<Arch: ObjectArch = NativeArch> {
     core: SectionSegmentSet,
     init: SectionSegmentSet,
-    pltgot: Option<PltGotSection>,
     _arch: core::marker::PhantomData<fn() -> Arch>,
 }
 
@@ -630,7 +629,7 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
         groups: Arc<SectionGroups>,
         observer: &mut Obs,
         mapper: &M,
-    ) -> Result<(Self, ObjectSegments<M::Region>)>
+    ) -> Result<(Self, ObjectSegments<M::Region>, PltGotSection)>
     where
         D: Send + Sync + 'static,
         Obs: LoadObserver<D, Arch>,
@@ -674,22 +673,17 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
         let mut section_segments = Self {
             core,
             init,
-            pltgot: None,
             _arch: core::marker::PhantomData,
         };
         let segments = section_segments.load_segments(mapper, object)?;
         section_segments.rebase_loaded_sections(sections.headers_mut(), &plan, &segments)?;
-        section_segments.pltgot = Some(PltGotSection::new(
+        let pltgot = PltGotSection::new(
             pltgot_shdrs.got_addr(sections),
             pltgot_shdrs.got_plt_addr(sections),
             pltgot_shdrs.plt_addr(sections),
-        ));
+        );
         sections.set_layout_metadata(&plan.placements);
-        Ok((section_segments, segments))
-    }
-
-    pub(crate) fn take_pltgot(&mut self) -> PltGotSection {
-        self.pltgot.take().expect("PLTGOT already taken")
+        Ok((section_segments, segments, pltgot))
     }
 
     fn load_segments<M>(

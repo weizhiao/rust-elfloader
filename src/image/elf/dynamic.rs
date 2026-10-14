@@ -17,7 +17,7 @@ use crate::{
     runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, OnceCell, arc_unsize},
-    tls::{CoreTlsState, TlsRequest, TlsResolver},
+    tls::{ImageTlsState, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ops::Deref, ptr::NonNull};
@@ -401,13 +401,13 @@ where
             } else {
                 TlsRequest::Dynamic
             };
-            CoreTlsState::with_module(
+            ImageTlsState::with_module(
                 self.tls_resolver.clone(),
                 self.tls_resolver.register(*info, request)?,
                 image,
             )
         } else {
-            CoreTlsState::without_module(self.tls_resolver.clone())
+            ImageTlsState::without_module(self.tls_resolver.clone())
         };
         let plt = PltRelocInfo::new(dynamic.pltrel.clone(), symtab.clone());
         let state = ModuleState::new(self.source_id, self.domain);

@@ -5,11 +5,11 @@ use super::{
 use crate::{Result, TlsError, memory::MappedView, relocation::RelocationArch};
 use core::marker::PhantomData;
 
-/// TLS runtime state attached to a loaded ELF core.
+/// TLS runtime state attached to a loaded ELF image.
 ///
 /// This stores resolver-provided TLS metadata independently of the built-in
 /// same-process TLS manager.
-pub(crate) struct CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct ImageTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     resolver: Tls,
     registration: Option<TlsRegistration>,
     arch: PhantomData<fn() -> Arch>,
@@ -20,7 +20,7 @@ struct TlsRegistration {
     image: &'static [u8],
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> CoreTlsState<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ImageTlsState<Arch, Tls> {
     #[inline]
     pub(crate) fn without_module(resolver: Tls) -> Self {
         Self {
@@ -77,7 +77,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> CoreTlsState<Arch, Tls> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Drop for CoreTlsState<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Drop for ImageTlsState<Arch, Tls> {
     fn drop(&mut self) {
         if let Some(registration) = &self.registration {
             self.resolver.unregister(registration.module.mod_id());

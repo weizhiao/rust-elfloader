@@ -5,17 +5,24 @@ use crate::{
     arch::NativeArch,
     elf::{
         ElfDyn, ElfDynamicTag, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags,
-        ElfSectionId, ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout,
-        parse_dynamic_entries,
+        ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout, parse_dynamic_entries,
     },
     image::{ModuleSearch, SearchPathPool},
     input::{ElfReader, ElfReaderExt, ModuleSourceId, Path, PathBuf},
     loader::ScanBuilder,
-    memory::MappedView,
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt, mem::size_of, num::NonZeroUsize};
+use core::{ffi::CStr, fmt, mem::size_of, num::NonZeroUsize};
+
+fn string_at(bytes: &[u8], offset: usize) -> &CStr {
+    assert!(
+        offset <= bytes.len(),
+        "ELF string table offset is out of bounds"
+    );
+    CStr::from_bytes_until_nul(&bytes[offset..])
+        .expect("ELF string table entry is missing a NUL terminator")
+}
 
 struct DynamicScanParts {
     strtab: Box<[u8]>,
@@ -114,22 +121,13 @@ impl<L: ElfLayout> SectionTable<L> {
         let header = self.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
-            self.shstrtab()
-                .get_cstr(header.sh_name() as usize)
-                .to_bytes(),
+            string_at(&self.shstrtab, header.sh_name() as usize).to_bytes(),
             header,
         ))
     }
 
     fn sections(&self) -> ScannedSections<'_, L> {
         ScannedSections::new(Some(self))
-    }
-
-    #[inline]
-    fn shstrtab(&self) -> ElfStringTable {
-        let bytes =
-            unsafe { core::slice::from_raw_parts(self.shstrtab.as_ptr(), self.shstrtab.len()) };
-        ElfStringTable::new(MappedView::from_slice(bytes))
     }
 }
 
@@ -167,8 +165,7 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     ehdr: ElfHeader<Arch::Layout>,
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
-    _strtab_bytes: Box<[u8]>,
-    strtab: ElfStringTable,
+    strtab: Box<[u8]>,
     section_table: Option<SectionTable<Arch::Layout>>,
     needed_libs: Box<[usize]>,
     capability: ModuleCapability,
@@ -554,11 +551,9 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             runpath,
         } = DynamicScanParts::new(reader.as_mut(), &phdrs)?;
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
-        let strtab_bytes = unsafe { core::slice::from_raw_parts(strtab.as_ptr(), strtab.len()) };
-        let strtab_view = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
-        let soname = soname.map(|offset| strtab_view.get_cstr(offset).to_bytes());
-        let runpath = runpath.map(|offset| strtab_view.get_cstr(offset).to_bytes());
-        let rpath = rpath.map(|offset| strtab_view.get_cstr(offset).to_bytes());
+        let soname = soname.map(|offset| string_at(&strtab, offset).to_bytes());
+        let runpath = runpath.map(|offset| string_at(&strtab, offset).to_bytes());
+        let rpath = rpath.map(|offset| string_at(&strtab, offset).to_bytes());
         let search = match search_paths {
             Some(paths) => paths.module_search(path, soname, runpath, rpath),
             None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
@@ -575,8 +570,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             ehdr,
             phdrs,
             interp,
-            _strtab_bytes: strtab,
-            strtab: strtab_view,
+            strtab,
             section_table,
             needed_libs,
             capability,
@@ -643,7 +637,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub fn needed_lib(&self, index: usize) -> Option<&[u8]> {
         self.needed_libs
             .get(index)
-            .map(|offset| self.strtab.get_cstr(*offset).to_bytes())
+            .map(|offset| string_at(&self.strtab, *offset).to_bytes())
     }
 
     /// Iterates over the `DT_NEEDED` entries.
@@ -651,7 +645,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub fn needed_libs(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
         self.needed_libs
             .iter()
-            .map(|offset| self.strtab.get_cstr(*offset).to_bytes())
+            .map(|offset| string_at(&self.strtab, *offset).to_bytes())
     }
 
     /// Returns the planning capability of this module.

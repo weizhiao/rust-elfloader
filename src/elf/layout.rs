@@ -78,8 +78,8 @@ pub trait ElfLayout: 'static {
     /// Size of this layout's ELF header.
     const EHDR_SIZE: usize;
 
-    /// Raw program-header type for this class.
-    type Phdr: ElfPhdrRaw;
+    /// Raw program-header type for this class, retained by shared runtime images.
+    type Phdr: ElfPhdrRaw + Send + Sync;
     /// Raw section-header type for this class.
     type Shdr: ElfShdrRaw;
     /// Raw dynamic-entry type for this class.

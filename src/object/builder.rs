@@ -1,6 +1,6 @@
 use super::{
     ObjectSections, ObjectSymbolTable,
-    layout::{ObjectSegments, SectionSegments},
+    layout::{ObjectSegments, PltGotSection, SectionSegments},
     section_entries,
 };
 use crate::{
@@ -31,6 +31,7 @@ pub(crate) struct ObjectBuilder<
     pub(crate) fini: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
     pub(crate) section_segments: SectionSegments<Arch>,
+    pub(crate) pltgot: PltGotSection,
     pub(crate) user_data: D,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     pub(crate) domain: DomainId,
@@ -96,6 +97,7 @@ where
         sections: ObjectSections<Arch::Layout>,
         segments: ObjectSegments<R>,
         section_segments: SectionSegments<Arch>,
+        pltgot: PltGotSection,
         user_data: D,
         executor: Arc<dyn CodeExecutor<Arch>>,
         domain: DomainId,
@@ -114,6 +116,7 @@ where
             symtab,
             segments,
             section_segments,
+            pltgot,
             init,
             fini,
             user_data,

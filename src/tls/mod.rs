@@ -13,7 +13,7 @@ mod thread;
 mod traits;
 
 pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider};
-pub(crate) use state::CoreTlsState;
+pub(crate) use state::ImageTlsState;
 
 pub use defs::{
     ModuleTls, TlsDescBinding, TlsDescRequest, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId,

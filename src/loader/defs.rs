@@ -4,7 +4,7 @@ use crate::{
     input::{ElfReader, ElfReaderExt},
     relocation::RelocationArch,
 };
-use core::mem::{MaybeUninit, align_of, size_of};
+use core::mem::{MaybeUninit, align_of};
 
 pub(crate) struct ElfBuf {
     buf: AlignedBytes,
@@ -30,8 +30,7 @@ pub(crate) fn read_ehdr<Arch: RelocationArch>(
 impl ElfBuf {
     pub(crate) fn new() -> Self {
         Self {
-            buf: AlignedBytes::with_len(size_of::<elf::file::Elf64_Ehdr>())
-                .expect("failed to initialize ElfBuf"),
+            buf: AlignedBytes::default(),
         }
     }
 
