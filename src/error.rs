@@ -761,9 +761,7 @@ impl Display for RelocationError {
 
 /// Structured lazy binding failure details.
 pub enum LazyBindingError {
-    /// Lazy binding was requested without installing a binder.
-    MissingBinder,
-    /// The target architecture does not support the requested lazy binding operation.
+    /// The configured binder cannot provide lazy binding for the target environment.
     Unsupported,
     /// The image has no GOT/PLTGOT entry to install lazy binding state.
     MissingGotPlt,
@@ -778,7 +776,6 @@ pub enum LazyBindingError {
 impl Display for LazyBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingBinder => f.write_str("missing lazy binder"),
             Self::Unsupported => {
                 f.write_str("lazy binding operation is not supported for this target architecture")
             }

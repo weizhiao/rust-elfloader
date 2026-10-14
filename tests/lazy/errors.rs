@@ -30,9 +30,7 @@ fn requires_binder() {
 
         assert!(matches!(
             error,
-            Error::Relocation(RelocationError::LazyBinding(
-                LazyBindingError::MissingBinder
-            ))
+            Error::Relocation(RelocationError::LazyBinding(LazyBindingError::Unsupported))
         ));
     }
 }

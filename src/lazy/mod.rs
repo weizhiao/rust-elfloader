@@ -7,12 +7,15 @@
 mod defs;
 #[cfg(feature = "lazy-binding")]
 mod native;
+mod relocation;
+mod runtime;
 mod traits;
 
-pub use defs::{LazyPlacement, LazyPltReloc, LazyRuntime, LazySetup, LazySlots, LazyValues};
+pub use defs::{LazyPlacement, LazySetup, LazyValues};
 #[cfg(feature = "lazy-binding")]
 pub use native::NativeLazyBinder;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use native::dl_fixup;
+pub(crate) use relocation::{install_plt, relocate_jump_slot};
+pub use runtime::{LazyPltReloc, LazyRuntime};
 pub use traits::{LazyBinder, SupportLazy};
-pub(crate) use traits::{prepare_plt, relocate_jump_slot};

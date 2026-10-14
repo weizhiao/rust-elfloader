@@ -1,16 +1,7 @@
 //! Traits implemented by custom lazy PLT binders.
 
-use super::defs::{LazyPlacement, LazyRuntime, LazySetup};
-use crate::{
-    ByteRepr, LazyBindingError, RelocationError, Result,
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-    image::RawDynamic,
-    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
-    relocation::RelocationArch,
-    sync::Arc,
-    tls::TlsResolver,
-};
-use core::mem::size_of;
+use super::{LazyRuntime, LazySetup};
+use crate::{Result, relocation::RelocationArch, sync::Arc};
 
 /// Marker trait for raw image types that support lazy-binding fixup hooks.
 pub trait SupportLazy {}
@@ -42,8 +33,8 @@ impl SupportLazy for () {}
 /// }
 ///
 /// impl<Arch: RelocationArch> LazyBinder<Arch> for RemoteLazyBinder {
-///     fn prepare_slots(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
-///         Ok(LazySetup::new(self.context, self.resolver))
+///     fn prepare(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<Option<LazySetup>> {
+///         Ok(Some(LazySetup::new(self.context, self.resolver)))
 ///     }
 /// }
 ///
@@ -53,28 +44,20 @@ impl SupportLazy for () {}
 /// });
 /// ```
 pub trait LazyBinder<Arch: RelocationArch>: Send + Sync + 'static {
-    /// Reports whether this binder can provide a lazy resolver for this architecture.
-    /// Binding policy is applied by the relocation flow, not by the binder.
-    #[inline]
-    fn supports_lazy(&self) -> bool {
-        true
-    }
-
-    /// Builds the values installed into this image's lazy binding slots.
-    /// The runtime is borrowed only for setup. Stored raw context addresses do
-    /// not keep the module alive; resolvers must ensure validity before using them.
-    fn prepare_slots(&self, runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup>;
+    /// Prepares the lazy runtime, or returns `None` when this binder cannot
+    /// support the target environment. Preparation errors are propagated;
+    /// they do not trigger a fallback to eager binding.
+    ///
+    /// Binding policy is applied by the relocation flow. The runtime is borrowed
+    /// only for setup. Stored raw context addresses do not keep the module alive;
+    /// resolvers must ensure validity before using them.
+    fn prepare(&self, runtime: LazyRuntime<'_, Arch>) -> Result<Option<LazySetup>>;
 }
 
 impl<Arch: RelocationArch> LazyBinder<Arch> for () {
     #[inline]
-    fn supports_lazy(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    fn prepare_slots(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
-        Err(RelocationError::LazyBinding(LazyBindingError::MissingBinder).into())
+    fn prepare(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<Option<LazySetup>> {
+        Ok(None)
     }
 }
 
@@ -84,83 +67,7 @@ where
     B: LazyBinder<Arch> + ?Sized,
 {
     #[inline]
-    fn supports_lazy(&self) -> bool {
-        (**self).supports_lazy()
+    fn prepare(&self, runtime: LazyRuntime<'_, Arch>) -> Result<Option<LazySetup>> {
+        (**self).prepare(runtime)
     }
-
-    #[inline]
-    fn prepare_slots(&self, runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
-        (**self).prepare_slots(runtime)
-    }
-}
-
-pub(crate) fn prepare_plt<Arch, Binder, D, R, Tls>(
-    binder: &Binder,
-    lazy: bool,
-    image: &RawDynamic<D, Arch, R, Tls>,
-) -> Result<()>
-where
-    Arch: RelocationArch,
-    Binder: LazyBinder<Arch> + ?Sized,
-    D: Send + Sync + 'static,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
-    if !lazy || image.relocation().pltrel().is_empty() {
-        return Ok(());
-    }
-
-    let placement = Arch::LAZY_BINDING;
-    if placement == LazyPlacement::Unsupported {
-        return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
-    }
-
-    let runtime = LazyRuntime::<Arch>::new(&image.inner.runtime);
-    let setup = binder.prepare_slots(runtime)?;
-
-    if let LazyPlacement::Slots(slots) = placement {
-        let values = setup.values();
-        let word_size = size_of::<<Arch::Layout as ElfLayout>::Word>();
-        let got_plt = image.got_plt().ok_or(RelocationError::LazyBinding(
-            LazyBindingError::MissingGotPlt,
-        ))?;
-        let context_slot = got_plt + VmOffset::new(slots.context() * word_size);
-        let resolver_slot = got_plt + VmOffset::new(slots.resolver() * word_size);
-        let context = <Arch::Layout as ElfLayout>::Word::from_usize(values.context().get());
-        let resolver = <Arch::Layout as ElfLayout>::Word::from_usize(values.resolver().get());
-        unsafe {
-            runtime.memory().write_value(context_slot, context)?;
-            runtime.memory().write_value(resolver_slot, resolver)?;
-        }
-    }
-    runtime.core().set_lazy(setup);
-    Ok(())
-}
-
-pub(crate) fn relocate_jump_slot<Arch, Memory>(
-    lazy: bool,
-    memory: &Memory,
-    base: VmAddr,
-    rel: &ElfRelType<Arch>,
-) -> Result<bool>
-where
-    Arch: RelocationArch,
-    Memory: ImageMemory,
-    <Arch::Layout as ElfLayout>::Word: ByteRepr,
-{
-    if !lazy {
-        return Ok(false);
-    }
-
-    unsafe {
-        memory.update_value(
-            base + rel.r_offset(),
-            |word: <Arch::Layout as ElfLayout>::Word| {
-                <Arch::Layout as ElfLayout>::Word::from_usize(
-                    (base + VmOffset::new(word.to_usize())).get(),
-                )
-            },
-        )?
-    };
-    Ok(true)
 }

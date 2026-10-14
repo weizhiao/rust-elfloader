@@ -4,7 +4,7 @@ use elf::abi::EM_LOONGARCH;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::{LazyPlacement, LazySlots};
+use crate::lazy::LazyPlacement;
 use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
@@ -42,7 +42,10 @@ impl RelocationArch for LoongArch64Arch {
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_LARCH_TLS_TPREL64);
     // LoongArch 64-bit does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
-    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 0));
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots {
+        context: 1,
+        resolver: 0,
+    };
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "loongarch64");

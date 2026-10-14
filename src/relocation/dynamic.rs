@@ -6,7 +6,7 @@ use crate::{
     error::RelocTableError,
     hint::{likely, unlikely},
     image::{GlobalScope, LoadedCore, RawDynamic},
-    lazy::{LazyBinder, LazyPlacement, prepare_plt, relocate_jump_slot},
+    lazy::{LazyBinder, LazyRuntime, install_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
@@ -67,29 +67,24 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             logging::debug!("No relocations needed for {}", self.name().escape_ascii());
         }
 
-        let lazy = match binding {
+        let wants_lazy = match binding {
             BindingMode::Eager => false,
-            BindingMode::Default => {
-                self.is_lazy()
-                    && Arch::LAZY_BINDING != LazyPlacement::Unsupported
-                    && lazy_binder.supports_lazy()
-            }
-            BindingMode::Lazy => {
-                if Arch::LAZY_BINDING == LazyPlacement::Unsupported {
-                    return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
-                }
-                if !lazy_binder.supports_lazy() {
-                    return Err(
-                        RelocationError::LazyBinding(LazyBindingError::MissingBinder).into(),
-                    );
-                }
-                true
-            }
+            BindingMode::Default => self.is_lazy(),
+            BindingMode::Lazy => true,
         };
-        if lazy {
-            logging::debug!("Using lazy binding for {}", self.name().escape_ascii());
+        let setup = if wants_lazy {
+            lazy_binder.prepare(LazyRuntime::new(&self.inner.runtime))?
+        } else {
+            None
+        };
+        if matches!(binding, BindingMode::Lazy) && setup.is_none() {
+            return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
         }
-        prepare_plt(lazy_binder, lazy, &self)?;
+        let lazy = setup.is_some();
+        if let Some(setup) = setup {
+            logging::debug!("Using lazy binding for {}", self.name().escape_ascii());
+            install_plt(setup, &self)?;
+        }
         // Stabilize global lookup order and retain providers until dependency
         // bindings have been installed on the relocated module.
         let global_snapshot = global.as_ref().map(GlobalScope::modules);

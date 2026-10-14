@@ -9,7 +9,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::{LazyPlacement, LazySlots};
+use crate::lazy::LazyPlacement;
 use crate::linker::scan::GotPltTarget;
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
@@ -38,7 +38,10 @@ impl RelocationArch for X86_64Arch {
     const DTPOFF: ElfRelocationType = ElfRelocationType::new(R_X86_64_DTPOFF64);
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_X86_64_TPOFF64);
     const TLSDESC: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_X86_64_TLSDESC));
-    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 2));
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots {
+        context: 1,
+        resolver: 2,
+    };
 
     // `true` only when this ZST is the host's relocation backend (i.e. the
     // crate is compiled for x86_64). When used as a cross-arch backend on

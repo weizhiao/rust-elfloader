@@ -1,11 +1,8 @@
 //! Same-process native lazy binder implementation.
 
-use super::{
-    defs::{LazyRuntime, LazySetup},
-    traits::LazyBinder,
-};
+use super::{LazyRuntime, LazySetup, traits::LazyBinder};
 use crate::{
-    ByteRepr, Error, LazyBindingError, RelocationError, Result,
+    ByteRepr, Error, Result,
     arch::{NativeArch, dl_runtime_resolve},
     elf::ElfLayout,
     memory::VmAddr,
@@ -47,20 +44,14 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    fn supports_lazy(&self) -> bool {
-        Arch::SUPPORTS_NATIVE_RUNTIME
-    }
-
-    #[inline]
-    fn prepare_slots(&self, runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
+    fn prepare(&self, runtime: LazyRuntime<'_, Arch>) -> Result<Option<LazySetup>> {
         if !Arch::SUPPORTS_NATIVE_RUNTIME {
-            return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
+            return Ok(None);
         }
-
-        Ok(LazySetup::new(
+        Ok(Some(LazySetup::new(
             runtime.runtime(),
             VmAddr::from_ptr(dl_runtime_resolve as *const ()),
-        ))
+        )))
     }
 }
 
