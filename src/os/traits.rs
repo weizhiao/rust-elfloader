@@ -1,6 +1,6 @@
 use super::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
-use crate::Result;
 use crate::memory::{MappedRegion, RegionAccess, VmAddr};
+use crate::{Result, input::FileBacking};
 use alloc::sync::Arc;
 
 /// A trait for low-level memory mapping operations.
@@ -11,7 +11,8 @@ use alloc::sync::Arc;
 /// per-segment mapping methods do not return temporary regions.
 ///
 /// # Safety
-/// All methods are unsafe because they manipulate the process's virtual address space.
+/// Mapping and memory-control methods are unsafe because they manipulate the
+/// process's virtual address space. Capability queries do not modify memory.
 /// Improper use can cause memory corruption, crashes, or security vulnerabilities.
 /// Implementors must ensure thread-safety and proper error handling.
 ///
@@ -47,6 +48,20 @@ pub trait Mmap: Send + Sync + 'static {
     #[inline]
     fn page_size(&self) -> PageSize {
         PageSize::Base
+    }
+
+    /// Selects a file range for direct mapping before creating the image space.
+    ///
+    /// Returns `Some(backing)` when this backend accepts the range, `None` to
+    /// use reading and copying, or an error when the description is invalid.
+    /// An accepted range must describe the same bytes as the supplied range.
+    /// This query does not map memory or transfer ownership of the file handle.
+    /// Acceptance does not guarantee that later mapping operations will succeed;
+    /// their errors are propagated without falling back to copying.
+    /// Backends use copying by default.
+    #[inline]
+    fn file_backing(&self, _backing: FileBacking) -> Result<Option<FileBacking>> {
+        Ok(None)
     }
 
     /// Creates the owning virtual address space for a loaded image or arena.
@@ -92,6 +107,9 @@ pub trait Mmap: Send + Sync + 'static {
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>>;
 
     /// Maps file-backed pages into an already-created space.
+    ///
+    /// Success means the requested file contents are mapped. Unsupported
+    /// backends must return an error rather than silently succeeding.
     ///
     /// The mapped range is owned by the surrounding space created with
     /// [`Mmap::create_space`]. The backend must prepare the target subrange,
@@ -194,6 +212,11 @@ where
     #[inline]
     fn page_size(&self) -> PageSize {
         (**self).page_size()
+    }
+
+    #[inline]
+    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
+        (**self).file_backing(backing)
     }
 
     #[inline]

@@ -3,7 +3,7 @@ use crate::{
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
     input::{ElfReader, check_read_range},
     memory::{VmAddr, VmOffset, rounddown, roundup},
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{Mmap, ProtFlags},
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
 use alloc::vec::Vec;
@@ -41,7 +41,7 @@ where
         }
     }
     let file_backing = match object.file_backing() {
-        Some(range) => range.for_mapping(page_size)?,
+        Some(range) => mapper.file_backing(range)?,
         None => None,
     };
     let layout = parse_segments(phdrs, is_dylib, page_size)?;
@@ -164,13 +164,12 @@ impl<L: ElfLayout> ElfPhdr<L> {
         ElfSegment {
             offset: VmOffset::new(min_vaddr),
             prot,
-            flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,
             page_size,
-            zero_size: self.p_memsz() - self.p_filesz(),
             content: SegmentContent::Contiguous {
                 file_offset: offset,
                 file_size: filesz,
+                zero_size: self.p_memsz() - self.p_filesz(),
             },
         }
     }

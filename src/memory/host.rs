@@ -23,8 +23,16 @@ pub struct HostRegion {
 
 impl MappedRegion<HostRegion> {
     /// Creates a host-backed mapped region that unmaps through `control` on drop.
+    ///
+    /// # Safety
+    /// `host_ptr..host_ptr + len` must describe a valid, non-overflowing mapping
+    /// or address reservation owned by the caller. Ownership is transferred to
+    /// the returned region: no other owner may release it, and it must remain
+    /// valid until the last clone is dropped. `control` must support operations
+    /// on this range and correctly release it through `munmap(host_ptr, len)`.
+    /// Reserved pages must be populated with suitable permissions before access.
     #[inline]
-    pub fn local<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
+    pub unsafe fn local<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
     where
         M: Mmap<Region = HostRegion>,
     {
@@ -37,8 +45,15 @@ impl MappedRegion<HostRegion> {
     }
 
     /// Creates a host-backed mapped region alias that does not unmap on drop.
+    ///
+    /// # Safety
+    /// `host_ptr..host_ptr + len` must describe a valid, non-overflowing mapping
+    /// or address reservation. Its owner must keep it valid for the lifetime of
+    /// every clone of the returned region. `control` must support operations on
+    /// this range. The caller must coordinate accesses and protection changes
+    /// with the owner and other aliases; pages need suitable permissions before access.
     #[inline]
-    pub fn local_alias<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
+    pub unsafe fn local_alias<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
     where
         M: Mmap<Region = HostRegion>,
     {
@@ -54,10 +69,12 @@ impl MappedRegion<HostRegion> {
     ///
     /// # Safety
     /// `host_ptr..host_ptr + len` must remain mapped and accessible for the
-    /// lifetime of every clone of the returned region.
+    /// lifetime of every clone of the returned region. The range must not overflow,
+    /// and accesses must be coordinated with the owner and other aliases as for
+    /// [`Self::local_alias`].
     #[inline]
     pub unsafe fn local_alias_no_unmap(host_ptr: *mut c_void, len: usize) -> Self {
-        Self::local_alias(host_ptr, len, NoopMmap)
+        unsafe { Self::local_alias(host_ptr, len, NoopMmap) }
     }
 }
 

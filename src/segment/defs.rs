@@ -1,7 +1,7 @@
 use crate::{
     Result,
     memory::{RegionAccess, VmAddr, VmOffset},
-    os::{MapFlags, ProtFlags},
+    os::ProtFlags,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
@@ -25,6 +25,8 @@ pub(crate) enum SegmentContent {
     Contiguous {
         file_offset: usize,
         file_size: usize,
+        /// Number of zero-filled bytes following the file content.
+        zero_size: usize,
     },
     /// Independently placed sections, copied into zero-initialized memory.
     #[cfg_attr(not(feature = "object"), allow(dead_code))]
@@ -77,14 +79,10 @@ pub(crate) struct ElfSegment {
     pub(crate) offset: VmOffset,
     /// Memory protection flags for the segment
     pub(crate) prot: ProtFlags,
-    /// Memory mapping flags for the segment
-    pub(crate) flags: MapFlags,
     /// Total length of the segment in bytes
     pub(crate) len: usize,
     /// Page size used to align this segment.
     pub(crate) page_size: usize,
-    /// Size of zero-filled area at the end of the segment
-    pub(crate) zero_size: usize,
     /// File content layout used for mapping or copying.
     pub(crate) content: SegmentContent,
 }

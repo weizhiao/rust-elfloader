@@ -1,4 +1,4 @@
-use crate::input::{ModuleSourceId, Path};
+use crate::input::{FileBacking, ModuleSourceId, Path};
 #[cfg(target_pointer_width = "32")]
 use crate::os::PageSize;
 use crate::{
@@ -143,6 +143,11 @@ struct Statx {
 impl Mmap for DefaultMmap {
     type Region = HostRegion;
 
+    #[inline]
+    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
+        backing.for_mapping(self.page_size().bytes())
+    }
+
     unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
@@ -170,11 +175,13 @@ impl Mmap for DefaultMmap {
                 |code| Error::from(MmapError::MmapAnonymousFailed { code }),
             )? as *mut c_void
         };
-        Ok(MappedRegion::local(ptr, len, *self))
+        // SAFETY: the successful allocation above transfers ownership of this range.
+        Ok(unsafe { MappedRegion::local(ptr, len, *self) })
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
+        // SAFETY: the caller guarantees the existing mapping remains valid.
+        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr(), len, *self) })
     }
 
     unsafe fn map_file_at(

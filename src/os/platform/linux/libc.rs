@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ModuleSourceId, Path},
+    input::{FileBacking, ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
@@ -104,6 +104,11 @@ impl Mmap for DefaultMmap {
     type Region = HostRegion;
 
     #[inline]
+    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
+        backing.for_mapping(self.page_size().bytes())
+    }
+
+    #[inline]
     fn page_size(&self) -> PageSize {
         let page_size = unsafe { sysconf(_SC_PAGESIZE) };
         if page_size <= 0 {
@@ -136,11 +141,13 @@ impl Mmap for DefaultMmap {
             }
             .into());
         }
-        Ok(MappedRegion::local(ptr, len, *self))
+        // SAFETY: the successful allocation above transfers ownership of this range.
+        Ok(unsafe { MappedRegion::local(ptr, len, *self) })
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
+        // SAFETY: the caller guarantees the existing mapping remains valid.
+        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr(), len, *self) })
     }
 
     unsafe fn map_file_at(

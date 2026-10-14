@@ -28,16 +28,12 @@ pub struct FileBacking {
 }
 
 impl FileBacking {
+    /// Checks range overflow and alignment for direct file mapping.
     pub(crate) fn for_mapping(self, page_size: usize) -> Result<Option<Self>> {
         self.offset
             .checked_add(self.len)
             .ok_or(IoError::ReadBufferTooLarge)?;
-        // Windows subrange reservation has additional allocation-granularity
-        // constraints. Use bounded reads there until range mapping supports them.
-        if (cfg!(windows) && self.offset != 0) || !self.offset.is_multiple_of(page_size) {
-            return Ok(None);
-        }
-        Ok(Some(self))
+        Ok(self.offset.is_multiple_of(page_size).then_some(self))
     }
 }
 

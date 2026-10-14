@@ -112,6 +112,8 @@ impl Display for IoError {
 
 /// Structured memory-mapping error details.
 pub enum MmapError {
+    /// This backend cannot map file contents into memory.
+    FileMappingUnsupported,
     /// The configured loader page size is incompatible with the mapping backend.
     InvalidPageSize {
         /// Page size requested by the loader.
@@ -192,6 +194,9 @@ pub enum MmapError {
 impl Display for MmapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FileMappingUnsupported => {
+                f.write_str("file mapping is unsupported by this backend")
+            }
             Self::InvalidPageSize {
                 configured,
                 required,

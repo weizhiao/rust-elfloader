@@ -6,7 +6,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
     image::RawDynamic,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
-    relocation::{BindingMode, RelocationArch},
+    relocation::RelocationArch,
     sync::Arc,
     tls::TlsResolver,
 };
@@ -42,7 +42,7 @@ impl SupportLazy for () {}
 /// }
 ///
 /// impl<Arch: RelocationArch> LazyBinder<Arch> for RemoteLazyBinder {
-///     fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
+///     fn prepare_slots(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
 ///         Ok(LazySetup::new(self.context, self.resolver))
 ///     }
 /// }
@@ -53,28 +53,27 @@ impl SupportLazy for () {}
 /// });
 /// ```
 pub trait LazyBinder<Arch: RelocationArch>: Send + Sync + 'static {
-    /// Resolves the requested binding mode into whether PLT entries should bind lazily.
+    /// Reports whether this binder can provide a lazy resolver for this architecture.
+    /// Binding policy is applied by the relocation flow, not by the binder.
     #[inline]
-    fn resolve_binding(&self, binding: BindingMode, default_lazy: bool) -> bool {
-        match binding {
-            BindingMode::Default => default_lazy,
-            BindingMode::Eager => false,
-            BindingMode::Lazy => true,
-        }
+    fn supports_lazy(&self) -> bool {
+        true
     }
 
     /// Builds the values installed into this image's lazy binding slots.
-    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazySetup>;
+    /// The runtime is borrowed only for setup. Stored raw context addresses do
+    /// not keep the module alive; resolvers must ensure validity before using them.
+    fn prepare_slots(&self, runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup>;
 }
 
 impl<Arch: RelocationArch> LazyBinder<Arch> for () {
     #[inline]
-    fn resolve_binding(&self, binding: BindingMode, _default_lazy: bool) -> bool {
-        matches!(binding, BindingMode::Lazy)
+    fn supports_lazy(&self) -> bool {
+        false
     }
 
     #[inline]
-    fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
+    fn prepare_slots(&self, _runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
         Err(RelocationError::LazyBinding(LazyBindingError::MissingBinder).into())
     }
 }
@@ -85,12 +84,12 @@ where
     B: LazyBinder<Arch> + ?Sized,
 {
     #[inline]
-    fn resolve_binding(&self, binding: BindingMode, default_lazy: bool) -> bool {
-        (**self).resolve_binding(binding, default_lazy)
+    fn supports_lazy(&self) -> bool {
+        (**self).supports_lazy()
     }
 
     #[inline]
-    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
+    fn prepare_slots(&self, runtime: LazyRuntime<'_, Arch>) -> Result<LazySetup> {
         (**self).prepare_slots(runtime)
     }
 }

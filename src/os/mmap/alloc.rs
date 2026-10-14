@@ -39,11 +39,10 @@ impl Mmap for AllocMmap {
             if !populate_later {
                 unsafe { core::ptr::write_bytes(addr.as_mut_ptr::<u8>(), 0, len) };
             }
-            return Ok(MappedRegion::local_alias(
-                addr.as_mut_ptr::<u8>().cast(),
-                len,
-                *self,
-            ));
+            // SAFETY: create_space's caller provides valid caller-owned storage.
+            return Ok(unsafe {
+                MappedRegion::local_alias(addr.as_mut_ptr::<u8>().cast(), len, *self)
+            });
         }
 
         let layout = unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
@@ -51,15 +50,13 @@ impl Mmap for AllocMmap {
         if memory.is_null() {
             handle_alloc_error(layout);
         }
-        Ok(MappedRegion::local(memory.cast(), len, *self))
+        // SAFETY: this allocation is owned here and munmap uses the same layout.
+        Ok(unsafe { MappedRegion::local(memory.cast(), len, *self) })
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(MappedRegion::local_alias(
-            addr.as_mut_ptr::<u8>().cast(),
-            len,
-            *self,
-        ))
+        // SAFETY: the caller guarantees the existing storage remains valid.
+        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr::<u8>().cast(), len, *self) })
     }
 
     unsafe fn map_file_at(
@@ -71,7 +68,7 @@ impl Mmap for AllocMmap {
         _offset: usize,
         _fd: isize,
     ) -> Result<()> {
-        Ok(())
+        Err(crate::MmapError::FileMappingUnsupported.into())
     }
 
     unsafe fn map_zero_at(

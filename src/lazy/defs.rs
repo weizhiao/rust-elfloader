@@ -8,7 +8,7 @@ use crate::{
     relocation::RelocationArch,
 };
 use alloc::boxed::Box;
-use core::{any::Any, ptr::NonNull};
+use core::any::Any;
 
 /// PLTGOT slots used by an architecture's lazy binding entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,27 +109,33 @@ impl LazySetup {
 ///
 /// This handle lets custom lazy binders inspect PLT relocation context and reuse
 /// Relink's symbol lookup / jump-slot writeback without exposing the internal
-/// core runtime layout.
-#[derive(Debug)]
-pub struct LazyRuntime<Arch: RelocationArch> {
-    runtime: NonNull<CoreRuntime<Arch>>,
+/// core runtime layout. The handle borrows the module and cannot outlive it.
+/// Retaining a raw context address does not extend the module lifetime.
+pub struct LazyRuntime<'a, Arch: RelocationArch> {
+    runtime: &'a CoreRuntime<Arch>,
 }
 
-impl<Arch: RelocationArch> Copy for LazyRuntime<Arch> {}
+impl<Arch: RelocationArch> core::fmt::Debug for LazyRuntime<'_, Arch> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LazyRuntime")
+            .field("runtime", &(self.runtime as *const CoreRuntime<Arch>))
+            .finish()
+    }
+}
 
-impl<Arch: RelocationArch> Clone for LazyRuntime<Arch> {
+impl<Arch: RelocationArch> Copy for LazyRuntime<'_, Arch> {}
+
+impl<Arch: RelocationArch> Clone for LazyRuntime<'_, Arch> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Arch: RelocationArch> LazyRuntime<Arch> {
+impl<'a, Arch: RelocationArch> LazyRuntime<'a, Arch> {
     #[inline]
-    pub(crate) fn new(runtime: &CoreRuntime<Arch>) -> Self {
-        Self {
-            runtime: NonNull::from(runtime),
-        }
+    pub(crate) fn new(runtime: &'a CoreRuntime<Arch>) -> Self {
+        Self { runtime }
     }
 
     /// Rebuilds a lazy runtime handle from a context entry passed to a resolver.
@@ -137,24 +143,25 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     /// # Safety
     ///
     /// `runtime` must be a value previously returned by [`Self::runtime`] for a
-    /// live module with the same `Arch` type.
+    /// live module with the same `Arch` type. The caller must keep that module
+    /// alive and its runtime valid for the entire chosen lifetime `'a`.
     #[inline]
     pub unsafe fn from_runtime(runtime: VmAddr) -> Self {
         Self {
-            runtime: NonNull::new(runtime.as_mut_ptr::<CoreRuntime<Arch>>())
+            runtime: unsafe { runtime.as_mut_ptr::<CoreRuntime<Arch>>().as_ref() }
                 .expect("lazy resolver context entry must not be null"),
         }
     }
 
     #[inline]
     pub(super) fn core(&self) -> &CoreRuntime<Arch> {
-        unsafe { self.runtime.as_ref() }
+        self.runtime
     }
 
     /// Returns the native resolver context entry for this runtime handle.
     #[inline]
     pub fn runtime(&self) -> VmAddr {
-        VmAddr::from_ptr(self.runtime.as_ptr())
+        VmAddr::from_ptr(self.runtime as *const CoreRuntime<Arch>)
     }
 
     /// Returns the mapped image memory owned by the module.

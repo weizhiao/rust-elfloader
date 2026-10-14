@@ -11,9 +11,9 @@ use crate::{
     },
     entity::{EntityRef, PrimaryMap},
     input::{ElfReader, ElfReaderExt},
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, rounddown, roundup},
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, roundup},
     observer::{LoadObserver, SectionLayoutEvent},
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{Mmap, ProtFlags},
     relocation::{ObjectArch, RelocationArch},
     segment::{
         CopyRegion, ElfSegment, ElfSegments, MemoryProtection, SegmentContent, populate_segments,
@@ -1028,33 +1028,13 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
             current_offset += shdr.sh_size();
         }
 
-        if copy_regions.len() == 1 {
-            let info = &mut copy_regions[0];
-            let file_offset = rounddown(info.file_offset, page_size);
-            let align_len = info.file_offset - file_offset;
-
-            let shdr = self
-                .content_sections
-                .iter_mut()
-                .find(|shdr| shdr.sh_offset() == info.file_offset)
-                .unwrap();
-
-            shdr.add_sh_addr(align_len);
-            info.len += align_len;
-            info.file_offset = file_offset;
-            current_offset += align_len;
-        }
-
-        let content_size = current_offset - segment_start;
-
         for shdr in &mut self.zero_sections {
             current_offset = roundup(current_offset, shdr.sh_addralign());
             shdr.set_sh_addr(current_offset);
             current_offset += shdr.sh_size();
         }
 
-        let unaligned_total_size = current_offset - segment_start;
-        let total_size = roundup(unaligned_total_size, page_size);
+        let total_size = roundup(current_offset - segment_start, page_size);
 
         if total_size == 0 {
             return None;
@@ -1066,8 +1046,6 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
             prot: self.init_prot,
             len: total_size,
             page_size,
-            zero_size: unaligned_total_size - content_size,
-            flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             content: SegmentContent::Scattered(copy_regions),
         })
     }

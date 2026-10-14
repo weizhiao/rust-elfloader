@@ -1,16 +1,18 @@
 //! Relocation of elf objects
 use crate::{
-    ByteRepr, RelocReason, Result,
+    ByteRepr, LazyBindingError, RelocReason, RelocationError, Result,
     arch::NativeArch,
     elf::{ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfSectionType, ElfWord},
     error::RelocTableError,
     hint::{likely, unlikely},
     image::{GlobalScope, LoadedCore, RawDynamic},
-    lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
+    lazy::{LazyBinder, LazyPlacement, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
-    relocation::{BindingDeps, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
+    relocation::{
+        BindingDeps, BindingMode, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver,
+    },
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
 };
@@ -65,7 +67,25 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             logging::debug!("No relocations needed for {}", self.name().escape_ascii());
         }
 
-        let lazy = lazy_binder.resolve_binding(binding, self.is_lazy());
+        let lazy = match binding {
+            BindingMode::Eager => false,
+            BindingMode::Default => {
+                self.is_lazy()
+                    && Arch::LAZY_BINDING != LazyPlacement::Unsupported
+                    && lazy_binder.supports_lazy()
+            }
+            BindingMode::Lazy => {
+                if Arch::LAZY_BINDING == LazyPlacement::Unsupported {
+                    return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
+                }
+                if !lazy_binder.supports_lazy() {
+                    return Err(
+                        RelocationError::LazyBinding(LazyBindingError::MissingBinder).into(),
+                    );
+                }
+                true
+            }
+        };
         if lazy {
             logging::debug!("Using lazy binding for {}", self.name().escape_ascii());
         }

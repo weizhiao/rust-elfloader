@@ -157,7 +157,7 @@ impl Mmap for FixedMmap {
         _offset: usize,
         _fd: isize,
     ) -> Result<()> {
-        Ok(())
+        Err(crate::MmapError::FileMappingUnsupported.into())
     }
 
     unsafe fn map_zero_at(

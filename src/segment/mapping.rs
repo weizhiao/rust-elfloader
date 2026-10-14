@@ -1,6 +1,6 @@
 use crate::input::{ElfReader, FileBacking};
 use crate::memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, roundup};
-use crate::os::{MapFlags, Mmap, ProtFlags};
+use crate::os::{MapFlags, Mmap};
 use crate::{Result, logging};
 
 use super::{CopyRegion, ElfSegment, ElfSegments, SegmentContent};
@@ -39,7 +39,7 @@ impl ElfSegment {
                     self.vm_addr(space.base()),
                     roundup(file_size, self.page_size),
                     self.prot,
-                    self.flags,
+                    MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
                     offset,
                     backing.fd,
                 )
@@ -66,6 +66,7 @@ impl ElfSegment {
             SegmentContent::Contiguous {
                 file_offset,
                 file_size,
+                ..
             } => copy(&CopyRegion {
                 file_offset: *file_offset,
                 segment_offset: 0,
@@ -85,10 +86,10 @@ impl ElfSegment {
         &self,
         mapper: &M,
         space: &ElfSegments<M::Region>,
-        prot: ProtFlags,
         file_size: usize,
+        zero_size: usize,
     ) -> Result<()> {
-        if self.zero_size > 0 {
+        if zero_size > 0 {
             let zero_start = space.base() + self.segment_offset(file_size);
             let zero_end = zero_start.roundup(self.page_size);
             let write_len = zero_end
@@ -97,12 +98,12 @@ impl ElfSegment {
                 .get();
             space.zero_bytes(zero_start, write_len)?;
 
-            if write_len < self.zero_size {
+            if write_len < zero_size {
                 unsafe {
                     mapper.map_zero_at(
                         zero_end,
                         self.len - roundup(file_size, self.page_size),
-                        prot,
+                        self.prot,
                         MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
                     )
                 }?;
@@ -128,12 +129,13 @@ pub(crate) fn populate_segments<M: Mmap + ?Sized>(
             let SegmentContent::Contiguous {
                 file_offset,
                 file_size,
+                zero_size,
             } = &segment.content
             else {
                 unreachable!("scattered segment content requires a writable copy space");
             };
             segment.map_file(mapper, space, backing, *file_offset, *file_size)?;
-            segment.fill_zero(mapper, space, segment.prot, *file_size)?;
+            segment.fill_zero(mapper, space, *file_size, *zero_size)?;
             logging::trace!(
                 "[Mmap] address: {}, length: {}, flags: {:?}",
                 segment.vm_addr(space.base()),
