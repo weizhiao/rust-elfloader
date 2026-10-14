@@ -349,20 +349,17 @@ impl<'event, D: Send + Sync + 'static, L: ElfLayout> BeforeObjectLoadEvent<'even
         self.object.borrow_bytes(offset, len)
     }
 
-    /// Reads one section's file-backed contents and passes them to `f`.
-    ///
-    /// Memory-backed readers pass a borrowed slice directly. Other readers
-    /// reuse `scratch` as temporary storage.
-    pub fn with_section_bytes<T>(
-        &mut self,
+    /// Returns one section's file-backed contents, borrowing from the reader
+    /// when possible and otherwise reusing `scratch`.
+    pub fn read_section_bytes<'a>(
+        &'a self,
         id: ElfSectionId,
-        scratch: &mut Vec<u8>,
-        f: impl FnOnce(&[u8]) -> Result<T>,
-    ) -> Result<T> {
+        scratch: &'a mut Vec<u8>,
+    ) -> Result<&'a [u8]> {
         let Some((offset, len)) = self.section_content_range(id) else {
-            return f(&[]);
+            return Ok(&[]);
         };
-        self.object.with_bytes::<u8, _, _>(offset, len, scratch, f)
+        self.object.read_slice::<u8, _>(offset, len, scratch)
     }
 
     /// Returns immutable user data for this object image.

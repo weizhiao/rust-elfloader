@@ -314,7 +314,11 @@ mod tests {
                 .unwrap_or(false);
             let mut scratch = Vec::new();
             self.shstrtab_len = shstrtab
-                .map(|index| event.with_section_bytes(index, &mut scratch, |bytes| Ok(bytes.len())))
+                .map(|index| {
+                    event
+                        .read_section_bytes(index, &mut scratch)
+                        .map(|bytes| bytes.len())
+                })
                 .transpose()?
                 .unwrap_or_default();
             if let Some(index) = shstrtab {

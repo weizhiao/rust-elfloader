@@ -304,45 +304,52 @@ where
         self.load_dynamic_impl(&object, ehdr)
     }
 
-    fn load_dynamic_impl(
-        &mut self,
+    /// Builds the shared mapped-image state after headers have been read.
+    /// Keep the observer before dynamic validation and segment allocation.
+    fn prepare_image(
+        loader: &Loader<D, Tls, Arch, M, Exec>,
+        observer: &mut Obs,
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
-        let executor = self.loader.executor();
-        let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
+        phdrs: &[ElfPhdr<Arch::Layout>],
+        require_dynamic: bool,
+    ) -> Result<(ImageBuilder<Tls, D, Arch, M::Region>, bool)> {
         let path = PathBuf::from(object.path());
         let mut user_data = D::default();
         let event = BeforeLoadEvent::new(path.as_path(), object, &ehdr, phdrs, &mut user_data);
         let has_dynamic = event.is_dynamic();
-        self.observer.on_before_load(event)?;
-        if !has_dynamic {
+        observer.on_before_load(event)?;
+        if require_dynamic && !has_dynamic {
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        let page_size = self.loader.page_size()?.bytes();
-        let segments = load_segments(
-            phdrs,
-            ehdr.is_dylib(),
-            self.loader.mapper(),
-            object,
-            page_size,
-        )?;
-        let force_static_tls = self.loader.force_static_tls();
+        let page_size = loader.page_size()?.bytes();
+        let segments = load_segments(phdrs, ehdr.is_dylib(), loader.mapper(), object, page_size)?;
         let entry = image_entry::<Arch>(segments.base(), &ehdr);
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
+        let builder = ImageBuilder::new(
             segments,
             path,
             object.source_id(),
             Some(ehdr),
             entry,
-            force_static_tls,
+            loader.force_static_tls(),
             page_size,
             user_data,
-            executor,
-            self.loader.domain_id(),
-            self.loader.tls_resolver(),
+            loader.executor(),
+            loader.domain_id(),
+            loader.tls_resolver(),
         );
+        Ok((builder, has_dynamic))
+    }
+
+    fn load_dynamic_impl(
+        &mut self,
+        object: &impl ElfReader,
+        ehdr: ElfHeader<Arch::Layout>,
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
+        let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
+        let (builder, _) =
+            Self::prepare_image(self.loader, &mut self.observer, object, ehdr, phdrs, true)?;
         let mut image = builder.build_dynamic(phdrs, self.search_paths.as_deref_mut())?;
         self.observer
             .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
@@ -371,38 +378,14 @@ where
 
         logging::debug!("Loading scanned dynamic image: {}", reader.path());
 
-        let path = PathBuf::from(reader.path());
-        let mut user_data = D::default();
-        self.observer.on_before_load(BeforeLoadEvent::new(
-            path.as_path(),
+        let (builder, _) = Self::prepare_image(
+            self.loader,
+            &mut self.observer,
             &reader,
-            &ehdr,
+            ehdr,
             &phdrs,
-            &mut user_data,
-        ))?;
-        let page_size = self.loader.page_size()?.bytes();
-        let segments = load_segments(
-            &phdrs,
-            ehdr.is_dylib(),
-            self.loader.mapper(),
-            &reader,
-            page_size,
+            false,
         )?;
-        let force_static_tls = self.loader.force_static_tls();
-        let entry = image_entry::<Arch>(segments.base(), &ehdr);
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
-            segments,
-            path,
-            reader.source_id(),
-            Some(ehdr),
-            entry,
-            force_static_tls,
-            page_size,
-            user_data,
-            self.loader.executor(),
-            self.loader.domain_id(),
-            self.loader.tls_resolver(),
-        );
         let mut image = builder.build_dynamic(&phdrs, self.search_paths.as_deref_mut())?;
         self.observer
             .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
@@ -515,37 +498,9 @@ where
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawExec<D, Arch, M::Region, Tls>> {
-        let executor = self.loader.executor();
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
-
-        let path = PathBuf::from(object.path());
-        let mut user_data = D::default();
-        let event = BeforeLoadEvent::new(path.as_path(), object, &ehdr, phdrs, &mut user_data);
-        let has_dynamic = event.is_dynamic();
-        self.observer.on_before_load(event)?;
-        let page_size = self.loader.page_size()?.bytes();
-        let segments = load_segments(
-            phdrs,
-            ehdr.is_dylib(),
-            self.loader.mapper(),
-            object,
-            page_size,
-        )?;
-        let force_static_tls = self.loader.force_static_tls();
-        let entry = image_entry::<Arch>(segments.base(), &ehdr);
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
-            segments,
-            path,
-            object.source_id(),
-            Some(ehdr),
-            entry,
-            force_static_tls,
-            page_size,
-            user_data,
-            executor,
-            self.loader.domain_id(),
-            self.loader.tls_resolver(),
-        );
+        let (builder, has_dynamic) =
+            Self::prepare_image(self.loader, &mut self.observer, object, ehdr, phdrs, false)?;
         let mut exec = builder.build_exec(phdrs, has_dynamic, self.search_paths.as_deref_mut())?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
             self.observer

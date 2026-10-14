@@ -533,10 +533,14 @@ fn create_pltgot_shdr<L: ElfLayout>(
     )
 }
 
+struct SectionSegment {
+    segment: ElfSegment,
+    final_prot: ProtFlags,
+}
+
 #[derive(Default)]
 struct SectionSegmentSet {
-    segments: Vec<ElfSegment>,
-    final_prots: Vec<ProtFlags>,
+    segments: Vec<SectionSegment>,
     total_size: usize,
 }
 
@@ -548,15 +552,21 @@ impl SectionSegmentSet {
 
     #[inline]
     fn push(&mut self, segment: ElfSegment, final_prot: ProtFlags) {
-        self.segments.push(segment);
-        self.final_prots.push(final_prot);
+        self.segments.push(SectionSegment {
+            segment,
+            final_prot,
+        });
     }
 
     fn mprotect_final<R>(&self, segments: &ElfSegments<R>) -> Result<()>
     where
         R: RegionAccess,
     {
-        for (segment, final_prot) in self.segments.iter().zip(self.final_prots.iter().copied()) {
+        for SectionSegment {
+            segment,
+            final_prot,
+        } in &self.segments
+        {
             if segment.prot.bits() == final_prot.bits() {
                 continue;
             }
@@ -564,7 +574,7 @@ impl SectionSegmentSet {
                 segments.base() + segment.offset,
                 segment.len,
                 segment.page_size,
-                final_prot,
+                *final_prot,
             )
             .apply(segments)?;
         }
@@ -601,7 +611,13 @@ impl SectionSegmentSet {
         object: &impl ElfReader,
     ) -> Result<ElfSegments<M::Region>> {
         let space = self.create_space(mapper)?;
-        populate_segments(mapper, object, &space, &self.segments, None)?;
+        populate_segments(
+            mapper,
+            object,
+            &space,
+            self.segments.iter().map(|entry| &entry.segment),
+            None,
+        )?;
         Ok(space)
     }
 }
@@ -697,9 +713,12 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
     where
         R: RegionAccess,
     {
-        protect_segments(segments.core(), &self.core.segments)?;
+        protect_segments(
+            segments.core(),
+            self.core.segments.iter().map(|entry| &entry.segment),
+        )?;
         if let Some(init) = segments.init() {
-            protect_segments(init, &self.init.segments)?;
+            protect_segments(init, self.init.segments.iter().map(|entry| &entry.segment))?;
         }
         Ok(())
     }
@@ -852,32 +871,25 @@ impl PltGotSection {
                 ParseShdrError::malformed("relocation target section is out of range")
             })?;
 
-            object.with_bytes::<ElfRelType<Arch>, _, _>(
-                shdr.sh_offset(),
-                size,
-                &mut scratch,
-                |relocations| {
-                    for rel_entry in relocations {
-                        let r_type = rel_entry.r_type();
-                        let needs_got = Arch::needs_got(r_type);
-                        let needs_plt = Arch::needs_plt(r_type);
-                        if !needs_got && !needs_plt {
-                            continue;
-                        }
-                        let addend =
-                            object_relocation_key_addend::<Arch>(object, target, rel_entry)?;
-                        let key = ObjectRelocKey::new::<Arch>(rel_entry, addend);
+            let relocations =
+                object.read_slice::<ElfRelType<Arch>, _>(shdr.sh_offset(), size, &mut scratch)?;
+            for rel_entry in relocations {
+                let r_type = rel_entry.r_type();
+                let needs_got = Arch::needs_got(r_type);
+                let needs_plt = Arch::needs_plt(r_type);
+                if !needs_got && !needs_plt {
+                    continue;
+                }
+                let addend = object_relocation_key_addend::<Arch>(object, target, rel_entry)?;
+                let key = ObjectRelocKey::new::<Arch>(rel_entry, addend);
 
-                        if needs_got {
-                            got_set.insert(key);
-                        }
-                        if needs_plt {
-                            got_plt_set.insert(key);
-                        }
-                    }
-                    Ok(())
-                },
-            )?;
+                if needs_got {
+                    got_set.insert(key);
+                }
+                if needs_plt {
+                    got_plt_set.insert(key);
+                }
+            }
         }
 
         Ok((got_set.len(), got_plt_set.len()))

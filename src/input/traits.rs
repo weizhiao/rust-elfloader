@@ -86,15 +86,14 @@ pub trait ElfReader {
 /// Convenience helpers for reading ELF payloads through an [`ElfReader`].
 pub(crate) trait ElfReaderExt: ElfReader {
     /// Borrows bytes from the source when possible, otherwise reads them into
-    /// `scratch`, casts them to `V`, and passes the resulting view to `f`.
+    /// `scratch` and returns the resulting typed view.
     #[inline]
-    fn with_bytes<'a, V, S, T>(
+    fn read_slice<'a, V, S>(
         &'a self,
         offset: usize,
         len: usize,
         scratch: &'a mut S,
-        f: impl FnOnce(&'a [V]) -> Result<T>,
-    ) -> Result<T>
+    ) -> Result<&'a [V]>
     where
         V: ByteRepr + 'a,
         S: ByteScratch + ?Sized,
@@ -102,7 +101,7 @@ pub(crate) trait ElfReaderExt: ElfReader {
         if let Some(bytes) = self.borrow_bytes(offset, len)?
             && let Some(values) = try_cast_bytes::<V>(bytes)
         {
-            return f(values);
+            return Ok(values);
         }
 
         let Some(bytes) = scratch.resize_bytes(len) else {
@@ -120,7 +119,7 @@ pub(crate) trait ElfReaderExt: ElfReader {
             }
             .into());
         };
-        f(values)
+        Ok(values)
     }
 
     /// Reads values from the underlying object into a new vector.

@@ -14,6 +14,11 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::ptr::NonNull;
 
+pub(crate) struct DynamicSection<L: ElfLayout> {
+    pub(crate) addr: VmAddr,
+    pub(crate) entries: MappedView<ElfDyn<L>>,
+}
+
 /// Builder for creating relocated ELF objects
 ///
 /// This structure is used internally during the loading process to collect
@@ -44,10 +49,7 @@ pub(crate) struct ImageBuilder<
     pub(crate) relro: Option<MemoryProtection>,
 
     /// Dynamic section entries
-    pub(crate) dynamic: Option<MappedView<ElfDyn<Arch::Layout>>>,
-
-    /// Runtime address of the first dynamic section entry.
-    pub(crate) dynamic_addr: Option<VmAddr>,
+    pub(crate) dynamic: Option<DynamicSection<Arch::Layout>>,
 
     /// TLS information
     pub(crate) tls_info: Option<TlsInfo>,
@@ -136,7 +138,6 @@ where
             entry,
             relro: None,
             dynamic: None,
-            dynamic_addr: None,
             tls_info: None,
             static_tls,
             page_size,
@@ -154,16 +155,17 @@ where
     pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<Arch::Layout>) -> Result<()> {
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
-                self.dynamic_addr = Some(self.segments.base() + phdr.p_vaddr());
-                self.dynamic = Some(
-                    self.segments
+                self.dynamic = Some(DynamicSection {
+                    addr: self.segments.base() + phdr.p_vaddr(),
+                    entries: self
+                        .segments
                         .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_DYNAMIC is not directly readable from mapped segments",
                             )
                         })?,
-                )
+                });
             }
             ElfProgramType::GNU_RELRO => {
                 self.relro = Some(MemoryProtection::new(

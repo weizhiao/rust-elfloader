@@ -110,6 +110,21 @@ impl<L: ElfLayout> SectionTable<L> {
         }))
     }
 
+    fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, L>> {
+        let header = self.sections.get(id.index())?;
+        Some(ScannedSection::new(
+            id,
+            self.shstrtab()
+                .get_cstr(header.sh_name() as usize)
+                .to_bytes(),
+            header,
+        ))
+    }
+
+    fn sections(&self) -> ScannedSections<'_, L> {
+        ScannedSections::new(Some(self))
+    }
+
     #[inline]
     fn shstrtab(&self) -> ElfStringTable {
         let bytes =
@@ -202,31 +217,19 @@ impl<L: ElfLayout> Clone for ScannedSection<'_, L> {
 
 /// Iterator over the usable section-table entries of a scanned module.
 pub struct ScannedSections<'a, L: ElfLayout = NativeElfLayout> {
-    sections: &'a [ElfShdr<L>],
-    shstrtab: ElfStringTable,
+    table: Option<&'a SectionTable<L>>,
     index: usize,
 }
 
 impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     #[inline]
-    fn new(sections: &'a [ElfShdr<L>], shstrtab: ElfStringTable) -> Self {
-        Self {
-            sections,
-            shstrtab,
-            index: 0,
-        }
+    fn new(table: Option<&'a SectionTable<L>>) -> Self {
+        Self { table, index: 0 }
     }
 
     #[inline]
     fn empty() -> Self {
-        Self::new(&[], ElfStringTable::new(MappedView::empty()))
-    }
-
-    #[inline]
-    fn section_name(&self, section: &ElfShdr<L>) -> &'a [u8] {
-        self.shstrtab
-            .get_cstr(section.sh_name() as usize)
-            .to_bytes()
+        Self::new(None)
     }
 }
 
@@ -234,14 +237,14 @@ impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
     type Item = ScannedSection<'a, L>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let header = self.sections.get(self.index)?;
-        let id = ElfSectionId::new(self.index);
+        let section = self.table?.section(ElfSectionId::new(self.index))?;
         self.index += 1;
-        Some(ScannedSection::new(id, self.section_name(header), header))
+        Some(section)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.sections.len().saturating_sub(self.index);
+        let len = self.table.map_or(0, |table| table.sections.len());
+        let remaining = len.saturating_sub(self.index);
         (remaining, Some(remaining))
     }
 }
@@ -674,14 +677,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Returns one scanned section by id.
     #[inline]
     pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
-        let section_table = self.section_table.as_ref()?;
-        let shstrtab = section_table.shstrtab();
-        let header = section_table.sections.get(id.index())?;
-        Some(ScannedSection::new(
-            id,
-            shstrtab.get_cstr(header.sh_name() as usize).to_bytes(),
-            header,
-        ))
+        self.section_table.as_ref()?.section(id)
     }
 
     /// Iterates over all scanned sections together with stable ids.
@@ -689,9 +685,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
         self.section_table
             .as_ref()
-            .map_or_else(ScannedSections::empty, |table| {
-                ScannedSections::new(table.sections.as_ref(), table.shstrtab())
-            })
+            .map_or_else(ScannedSections::empty, SectionTable::sections)
     }
 
     /// Iterates over sections that contribute to the loaded memory image.
@@ -820,14 +814,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Returns one scanned section by id.
     #[inline]
     pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
-        let section_table = self.section_table.as_ref()?;
-        let shstrtab = section_table.shstrtab();
-        let header = section_table.sections.get(id.index())?;
-        Some(ScannedSection::new(
-            id,
-            shstrtab.get_cstr(header.sh_name() as usize).to_bytes(),
-            header,
-        ))
+        self.section_table.as_ref()?.section(id)
     }
 
     /// Iterates over all scanned sections together with stable ids.
@@ -835,9 +822,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
         self.section_table
             .as_ref()
-            .map_or_else(ScannedSections::empty, |table| {
-                ScannedSections::new(table.sections.as_ref(), table.shstrtab())
-            })
+            .map_or_else(ScannedSections::empty, SectionTable::sections)
     }
 
     /// Iterates over sections that contribute to the loaded memory image.

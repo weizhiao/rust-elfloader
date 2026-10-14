@@ -351,10 +351,8 @@ where
 
         let phdrs = self.create_phdrs(phdrs)?;
         let dynamic = self.dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let dynamic_addr = self
-            .dynamic_addr
-            .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let mut dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &self.segments)?;
+        let dynamic_addr = dynamic.addr;
+        let mut dynamic = ElfDynamic::<Arch>::new(dynamic.entries, dynamic_addr, &self.segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", self.path, dynamic);
 

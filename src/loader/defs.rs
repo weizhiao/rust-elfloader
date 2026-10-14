@@ -44,7 +44,9 @@ impl ElfBuf {
             return Ok(None);
         };
 
-        object.with_bytes::<ElfPhdr<L>, _, _>(start, size, &mut self.buf, |phdrs| Ok(Some(phdrs)))
+        object
+            .read_slice::<ElfPhdr<L>, _>(start, size, &mut self.buf)
+            .map(Some)
     }
 
     pub(crate) fn prepare_shdrs<'a, L: ElfLayout>(
@@ -56,7 +58,9 @@ impl ElfBuf {
             return Ok(None);
         };
 
-        object.with_bytes::<ElfShdr<L>, _, _>(start, size, &mut self.buf, |shdrs| Ok(Some(shdrs)))
+        object
+            .read_slice::<ElfShdr<L>, _>(start, size, &mut self.buf)
+            .map(Some)
     }
 }
 

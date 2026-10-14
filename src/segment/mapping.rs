@@ -4,6 +4,7 @@ use crate::os::{MapFlags, Mmap};
 use crate::{Result, logging};
 
 use super::{CopyRegion, ElfSegment, ElfSegments, SegmentContent};
+use core::borrow::Borrow;
 
 impl ElfSegment {
     #[inline]
@@ -121,11 +122,12 @@ pub(crate) fn populate_segments<M: Mmap + ?Sized>(
     mapper: &M,
     object: &impl ElfReader,
     space: &ElfSegments<M::Region>,
-    segments: &[ElfSegment],
+    segments: impl IntoIterator<Item = impl Borrow<ElfSegment>>,
     backing: Option<FileBacking>,
 ) -> Result<()> {
     if let Some(backing) = backing {
         for segment in segments {
+            let segment = segment.borrow();
             let SegmentContent::Contiguous {
                 file_offset,
                 file_size,
@@ -145,6 +147,7 @@ pub(crate) fn populate_segments<M: Mmap + ?Sized>(
         }
     } else {
         for segment in segments {
+            let segment = segment.borrow();
             segment.copy_data(object, space)?;
             logging::trace!(
                 "[Copy] address: {}, length: {}, content: {:?}",
@@ -160,9 +163,10 @@ pub(crate) fn populate_segments<M: Mmap + ?Sized>(
 /// Applies the segment permissions at the caller's chosen lifecycle stage.
 pub(crate) fn protect_segments<R: RegionAccess>(
     space: &ElfSegments<R>,
-    segments: &[ElfSegment],
+    segments: impl IntoIterator<Item = impl Borrow<ElfSegment>>,
 ) -> Result<()> {
     for segment in segments {
+        let segment = segment.borrow();
         debug_assert!(segment.len.is_multiple_of(segment.page_size));
         let addr = segment.vm_addr(space.base());
         space.mprotect(addr, segment.len, segment.prot)?;

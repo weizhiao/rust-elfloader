@@ -6,7 +6,6 @@ use crate::{
     os::{Mmap, ProtFlags},
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
-use alloc::vec::Vec;
 
 /// Convert ELF program header flags to memory protection flags
 #[inline]
@@ -45,11 +44,10 @@ where
         None => None,
     };
     let layout = parse_segments(phdrs, is_dylib, page_size)?;
-    let segments: Vec<_> = phdrs
+    let segments = phdrs
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
-        .map(|phdr| phdr.create_segment(page_size))
-        .collect();
+        .map(|phdr| phdr.create_segment(page_size));
 
     let use_file = file_backing.is_some();
     let prot = if use_file {
@@ -61,9 +59,9 @@ where
         unsafe { mapper.create_space(layout.preferred_addr, layout.mapped_len, prot, use_file) }?;
     let base = region.addr() - layout.min_vaddr;
     let loaded = ElfSegments::new(region, base, layout.min_vaddr);
-    populate_segments(mapper, object, &loaded, &segments, file_backing)?;
+    populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
     if !use_file {
-        protect_segments(&loaded, &segments)?;
+        protect_segments(&loaded, segments)?;
     }
     Ok(loaded)
 }
