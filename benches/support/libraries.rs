@@ -1,0 +1,222 @@
+//! Root library lookup and the shared, explicit host-runtime boundary.
+use elf::{ElfBytes, abi, endian::AnyEndian, symbol::Symbol};
+use elf_loader::{
+    LinkContext, Loader,
+    elf::ElfSymbolBind,
+    image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
+    input::ElfFile,
+    linker::{GraphModule, LdCache, SearchConfig, SearchPathResolver},
+    runtime::DomainId,
+};
+use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
+use std::{
+    ffi::{CString, OsStr},
+    fs,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
+
+// A fixed host boundary, independent of the selected workloads. Candidate
+// headers are checked against the native target, including the loader names.
+const HOST_RUNTIMES: &[&str] = &[
+    "libc.so.6",
+    "libm.so.6",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libgcc_s.so.1",
+    "ld-linux-x86-64.so.2",
+    "ld-linux.so.2",
+    "ld-linux-aarch64.so.1",
+];
+
+/// Shared cache snapshot for root lookup and timed dependency lookup.
+pub struct LibraryCache {
+    cache: LdCache,
+}
+
+impl LibraryCache {
+    pub fn new() -> Self {
+        let cache = LdCache::load_system().expect("cannot read /etc/ld.so.cache");
+        record_file("cache", "ld.so.cache", Path::new("/etc/ld.so.cache"));
+        Self { cache }
+    }
+
+    /// Finds the first installed candidate accepted by the native loader backend.
+    pub fn find(&self, name: &str) -> Option<PathBuf> {
+        let loader = Loader::new();
+        self.cache.candidates(name).find_map(|path| {
+            let file = ElfFile::from_path(path).ok()?;
+            loader.read_ehdr(&file).ok()?;
+            Some(PathBuf::from(OsStr::from_bytes(path.as_bytes())))
+        })
+    }
+
+    pub fn resolver(&self) -> SearchPathResolver {
+        SearchPathResolver::with_config(SearchConfig::new().cache(self.cache.clone()))
+    }
+}
+
+/// Resolve and record the benchmark root before timing.
+pub fn root_path(cache: &LibraryCache, name: &str) -> PathBuf {
+    assert!(
+        !HOST_RUNTIMES.contains(&name),
+        "{name} is a preloaded host runtime, not a load/unload workload"
+    );
+    let path = cache
+        .find(name)
+        .unwrap_or_else(|| panic!("missing compatible {name}; see benches/README.md"));
+    record_file("root", name, &path);
+    path
+}
+
+pub fn assert_native_unloaded(path: &Path) {
+    let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
+    if !handle.is_null() {
+        unsafe { libc::dlclose(handle) };
+        panic!(
+            "{} remains loaded; refusing cached-handle measurements",
+            path.display()
+        );
+    }
+}
+
+/// Machine-readable records consumed by ci/bench.sh to hash the exact files.
+fn record_file(kind: &str, soname: &str, path: &Path) {
+    eprintln!(
+        "manifest\t{kind}\t{soname}\t{}",
+        fs::canonicalize(path).unwrap().display()
+    );
+}
+
+struct HostLibrary {
+    soname: String,
+    module: ModuleHandle,
+    // Synthetic symbols borrow native addresses; keep their library loaded.
+    _native_library: Library,
+}
+
+impl HostLibrary {
+    fn load(soname: &str, path: &Path) -> Self {
+        let library = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_LOCAL) }.unwrap();
+        // libloading has no borrowed library-handle accessor. Restore ownership
+        // immediately so the raw handle remains valid while building the bridge.
+        let handle = library.into_raw();
+        let library = unsafe { Library::from_raw(handle) };
+        let bytes = fs::read(path).unwrap();
+        let elf = ElfBytes::<AnyEndian>::minimal_parse(&bytes).unwrap();
+        let module = unsafe { bridge_exports(soname, handle, &elf) };
+        record_file("host", soname, path);
+        Self {
+            soname: soname.to_owned(),
+            module: module.into(),
+            _native_library: library,
+        }
+    }
+}
+
+/// One shared set of native runtimes and their synthetic export tables.
+pub struct HostLibraries {
+    libraries: Vec<HostLibrary>,
+}
+
+impl HostLibraries {
+    pub fn new(cache: &LibraryCache) -> Self {
+        let libraries = HOST_RUNTIMES
+            .iter()
+            .filter_map(|soname| {
+                cache
+                    .find(soname)
+                    .map(|path| HostLibrary::load(soname, &path))
+            })
+            .collect();
+        Self { libraries }
+    }
+
+    pub fn context(&self) -> LinkContext<()> {
+        let mut context = LinkContext::new(DomainId::PROCESS);
+        let modules = self
+            .libraries
+            .iter()
+            .map(|host| GraphModule::new(host.soname.clone(), host.module.clone()));
+        context.insert_batch(modules).unwrap();
+        context
+    }
+
+    pub fn len(&self) -> usize {
+        self.libraries.len()
+    }
+}
+
+fn is_bridgeable_export(symbol: &Symbol) -> bool {
+    let visible = matches!(symbol.st_vis(), abi::STV_DEFAULT | abi::STV_PROTECTED);
+    let exported = matches!(symbol.st_bind(), abi::STB_GLOBAL | abi::STB_WEAK);
+    // TLS addresses are thread-relative and cannot use this absolute-address bridge.
+    let supported_type = matches!(
+        symbol.st_symtype(),
+        abi::STT_FUNC | abi::STT_GNU_IFUNC | abi::STT_OBJECT
+    );
+    let version_marker = symbol.st_shndx == abi::SHN_ABS && symbol.st_value == 0;
+    !symbol.is_undefined() && visible && exported && supported_type && !version_marker
+}
+
+struct ExportVersion<'a> {
+    name: &'a str,
+    is_default: bool,
+}
+
+/// Export the entire supported host table, independent of any workload's imports.
+/// The caller must keep the native handle alive while using the returned symbols.
+unsafe fn bridge_exports(
+    soname: &str,
+    handle: *mut libc::c_void,
+    elf: &ElfBytes<'_, AnyEndian>,
+) -> SyntheticModule {
+    let (symbols, strings) = elf.dynamic_symbol_table().unwrap().unwrap();
+    let versions = elf.symbol_version_table().unwrap();
+    let mut module = SyntheticModule::empty(soname.to_owned());
+    for (index, symbol) in symbols.iter().enumerate().skip(1) {
+        if !is_bridgeable_export(&symbol) {
+            continue;
+        }
+        let name = strings.get_raw(symbol.st_name as usize).unwrap();
+        let c_name = CString::new(name).unwrap();
+        let version = versions
+            .as_ref()
+            .and_then(|table| table.get_definition(index).unwrap())
+            .map(|mut definition| ExportVersion {
+                name: definition.names.next().unwrap().unwrap(),
+                is_default: !definition.hidden,
+            });
+        let address = unsafe {
+            match &version {
+                Some(version) => {
+                    let c_version = CString::new(version.name).unwrap();
+                    libc::dlvsym(handle, c_name.as_ptr(), c_version.as_ptr())
+                }
+                None => libc::dlsym(handle, c_name.as_ptr()),
+            }
+        };
+        assert!(
+            !address.is_null(),
+            "cannot bridge {soname}:{}",
+            c_name.to_string_lossy()
+        );
+
+        // Native lookup resolves IFUNCs; publish the resulting callable address.
+        let mut export = if symbol.st_symtype() == abi::STT_OBJECT {
+            SyntheticSymbol::object(name, address.cast(), symbol.st_size as usize)
+        } else {
+            SyntheticSymbol::function(name, address.cast()).with_size(symbol.st_size as usize)
+        };
+        if symbol.st_bind() == abi::STB_WEAK {
+            export = export.with_bind(ElfSymbolBind::WEAK);
+        }
+        if let Some(version) = version {
+            export = export.with_version(version.name, version.is_default);
+        }
+        module.insert(export);
+    }
+    module
+}

@@ -107,7 +107,7 @@ gen-elf = { path = "tools/gen-elf" }
 object = { workspace = true, features = ["write"] }
 
 [[bench]]
-name = "end_to_end"
+name = "load_unload"
 harness = false
 required-features = ["libc", "version"]
 
