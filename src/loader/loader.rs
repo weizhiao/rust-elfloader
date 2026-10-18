@@ -1,16 +1,15 @@
 use super::run::LoaderRun;
-#[cfg(feature = "object")]
-use crate::object::SectionGroups;
 use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
-    runtime::{CodeExecutor, Domain, NativeCodeExecutor},
-    sync::{Arc, arc_unsize},
+    runtime::Domain,
     tls::TlsResolver,
 };
+#[cfg(feature = "object")]
+use crate::{object::SectionGroups, sync::Arc};
 use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
 /// Reusable configuration for reading and mapping ELF images.
@@ -21,13 +20,13 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// Those raw images can then be relocated with [`crate::Relocator`].
 ///
 /// A loader contains only stable configuration: target architecture, mapping
-/// backend, user-data type, and executor. The TLS resolver, scratch state
+/// backend and user-data type. The runtime domain, scratch state
 /// and observers live in [`LoaderRun`], so a configured loader can be reused
 /// across many inputs.
 ///
 /// Start with [`Loader::new`], call configuration methods such as
-/// [`for_arch`](Self::for_arch), then call a
-/// `load_*` method. Attach per-run observers with
+/// [`for_arch`](Self::for_arch), then select the runtime with [`Loader::run`].
+/// Native loaders also provide `load_*` convenience methods. Attach per-run observers with
 /// [`LoaderRun::with_observer`]. Use
 /// [`Relocator`](crate::Relocator) for explicit symbol scopes and final
 /// relocation, or [`Linker`](crate::Linker) when `DT_NEEDED` dependencies should
@@ -42,41 +41,34 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = Relocator::new().run(raw).relocate().unwrap();
 /// ```
-pub struct Loader<
-    D: Send + Sync + 'static = (),
-    Arch = NativeArch,
-    M = DefaultMmap,
-    Exec = NativeCodeExecutor,
-> where
+pub struct Loader<D: Send + Sync + 'static = (), Arch = NativeArch, M = DefaultMmap>
+where
     Arch: RelocationArch,
     M: Mmap,
 {
     mapper: M,
-    executor: Exec,
     page_size: Option<PageSize>,
     force_static_tls: bool,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Copy for Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M> Copy for Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap + Copy,
-    Exec: Copy,
 {
 }
 
-struct LoaderFields<M, Exec> {
+struct LoaderFields<M> {
     mapper: NoDrop<M>,
-    executor: NoDrop<Exec>,
     page_size: Option<PageSize>,
     force_static_tls: bool,
 }
 
-impl<M, Exec> LoaderFields<M, Exec> {
+impl<M> LoaderFields<M> {
     #[inline]
-    const fn into_loader<D, Arch>(self) -> Loader<D, Arch, M, Exec>
+    const fn into_loader<D, Arch>(self) -> Loader<D, Arch, M>
     where
         D: Send + Sync + 'static,
         Arch: RelocationArch,
@@ -84,13 +76,11 @@ impl<M, Exec> LoaderFields<M, Exec> {
     {
         let Self {
             mapper,
-            executor,
             page_size,
             force_static_tls,
         } = self;
         Loader {
             mapper: mapper.into_inner(),
-            executor: executor.into_inner(),
             page_size,
             force_static_tls,
             _marker: PhantomData,
@@ -98,30 +88,7 @@ impl<M, Exec> LoaderFields<M, Exec> {
     }
 
     #[inline]
-    const fn with_executor<D, Arch, NewExec>(self, executor: NewExec) -> Loader<D, Arch, M, NewExec>
-    where
-        D: Send + Sync + 'static,
-        Arch: RelocationArch,
-        M: Mmap,
-        Exec: Copy,
-    {
-        let Self {
-            mapper,
-            page_size,
-            force_static_tls,
-            ..
-        } = self;
-        Loader {
-            mapper: mapper.into_inner(),
-            executor,
-            page_size,
-            force_static_tls,
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    const fn with_mapper<D, Arch, NewM>(self, mapper: NewM) -> Loader<D, Arch, NewM, Exec>
+    const fn with_mapper<D, Arch, NewM>(self, mapper: NewM) -> Loader<D, Arch, NewM>
     where
         D: Send + Sync + 'static,
         Arch: RelocationArch,
@@ -129,14 +96,12 @@ impl<M, Exec> LoaderFields<M, Exec> {
         M: Copy,
     {
         let Self {
-            executor,
             page_size,
             force_static_tls,
             ..
         } = self;
         Loader {
             mapper,
-            executor: executor.into_inner(),
             page_size,
             force_static_tls,
             _marker: PhantomData,
@@ -144,18 +109,16 @@ impl<M, Exec> LoaderFields<M, Exec> {
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Clone for Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M> Clone for Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap + Clone,
-    Exec: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         Self {
             mapper: self.mapper.clone(),
-            executor: self.executor.clone(),
 
             page_size: self.page_size,
             force_static_tls: self.force_static_tls,
@@ -164,7 +127,7 @@ where
     }
 }
 
-impl Loader<(), NativeArch, DefaultMmap, NativeCodeExecutor> {
+impl Loader<(), NativeArch, DefaultMmap> {
     /// Creates a new [`Loader`] with the default mmap backend, no observer, no
     /// custom user data, no TLS resolver, and the host target architecture
     /// ([`NativeArch`]).
@@ -177,7 +140,6 @@ impl Loader<(), NativeArch, DefaultMmap, NativeCodeExecutor> {
     pub const fn new() -> Self {
         Self {
             mapper: DefaultMmap::new(),
-            executor: NativeCodeExecutor,
 
             page_size: None,
             force_static_tls: false,
@@ -186,27 +148,26 @@ impl Loader<(), NativeArch, DefaultMmap, NativeCodeExecutor> {
     }
 }
 
-impl Default for Loader<(), NativeArch, DefaultMmap, NativeCodeExecutor> {
+impl Default for Loader<(), NativeArch, DefaultMmap> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap,
 {
     #[inline]
-    const fn into_fields(self) -> LoaderFields<M, Exec> {
+    const fn into_fields(self) -> LoaderFields<M> {
         let this = MaybeUninit::new(self);
         let this = this.as_ptr();
         unsafe {
             LoaderFields {
                 mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
-                executor: NoDrop::read(ptr::addr_of!((*this).executor)),
 
                 page_size: ptr::read(ptr::addr_of!((*this).page_size)),
                 force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
@@ -215,12 +176,11 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     #[inline]
     pub(crate) const fn mapper(&self) -> &M {
@@ -232,18 +192,13 @@ where
         self.force_static_tls
     }
 
-    #[inline]
-    pub(crate) fn executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
-        arc_unsize!(Arc::new(self.executor.clone()) => dyn CodeExecutor<Arch>)
-    }
-
     /// Starts a loader run in a fixed runtime domain with fresh scratch space.
-    /// The mapping backend and executor must target the domain's address space.
+    /// The mapping backend must target the domain's address space.
     #[inline]
     pub fn run<Tls: TlsResolver<Arch>>(
         &self,
         domain: Domain<Arch, Tls>,
-    ) -> LoaderRun<'_, (), D, Tls, Arch, M, Exec> {
+    ) -> LoaderRun<'_, (), D, Tls, Arch, M> {
         LoaderRun {
             loader: self,
             domain,
@@ -279,7 +234,7 @@ where
     /// that data after dynamic metadata has been parsed, implement
     /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load)
     /// on the configured load observer.
-    pub const fn with_data<NewD>(self) -> Loader<NewD, Arch, M, Exec>
+    pub const fn with_data<NewD>(self) -> Loader<NewD, Arch, M>
     where
         NewD: Default + Send + Sync + 'static,
     {
@@ -294,15 +249,6 @@ where
     pub const fn with_page_size(mut self, page_size: PageSize) -> Self {
         self.page_size = Some(page_size);
         self
-    }
-
-    /// Overrides the runtime-code executor used for init, fini and IFUNC.
-    pub const fn with_executor<E>(self, executor: E) -> Loader<D, Arch, M, E>
-    where
-        E: CodeExecutor<Arch> + Clone,
-        Exec: Copy,
-    {
-        self.into_fields().with_executor(executor)
     }
 
     /// Sets whether to force static TLS for all loaded modules.
@@ -327,14 +273,13 @@ where
 ///     .for_arch::<X86_64Arch>()
 ///     .with_data::<()>();
 /// ```
-impl<Arch, M, Exec> Loader<(), Arch, M, Exec>
+impl<Arch, M> Loader<(), Arch, M>
 where
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Returns a new loader with a custom `Mmap` backend.
-    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<(), Arch, NewMmap, Exec>
+    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<(), Arch, NewMmap>
     where
         NewMmap: Mmap,
         M: Copy,
@@ -354,9 +299,9 @@ where
     /// and [`RelocatorRun::relocate`](crate::RelocatorRun::relocate) use the
     /// matching relocation numbering.
     ///
-    /// Non-host architectures do not execute guest
-    /// IFUNC resolvers, TLSDESC stubs, lazy-binding trampolines, and init
-    /// arrays are *not* executed on the host CPU.
+    /// Select a matching runtime executor through [`Domain`] and [`Loader::run`]
+    /// before loading a non-native image. The executor handles its IFUNC,
+    /// TLSDESC and lifecycle calls.
     ///
     /// # Builder ordering
     ///
@@ -366,12 +311,11 @@ where
     /// fixed.
     ///
     /// [`RelocatorRun::relocate`]: crate::RelocatorRun::relocate
-    pub const fn for_arch<NewArch>(self) -> Loader<(), NewArch, M, NativeCodeExecutor>
+    pub const fn for_arch<NewArch>(self) -> Loader<(), NewArch, M>
     where
         NewArch: RelocationArch,
-        Exec: Copy,
     {
-        self.into_fields().with_executor(NativeCodeExecutor)
+        self.into_fields().into_loader()
     }
 }
 
@@ -382,7 +326,7 @@ mod tests {
 
     #[test]
     fn run_preserves_runtime_domain() {
-        let domain = Domain::without_tls(AddressSpaceId::new());
+        let domain = Domain::native_without_tls(AddressSpaceId::new());
         let loader = Loader::new().with_data::<()>();
         let run = loader.run(domain.clone());
 

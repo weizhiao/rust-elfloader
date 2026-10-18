@@ -88,15 +88,14 @@ where
         let exports = Arc::new(ObjectExportsCell::new());
         let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
-            executor: self.executor,
             state: ModuleState::new(self.source_id, self.domain.id()),
             lifecycle: OnceCell::new(),
-            search: ModuleSearch::new(self.path),
+            search: ModuleSearch::from_dynamic(self.path, None, None, None),
             exports: arc_unsize!(Arc::clone(&exports) => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: None,
             lazy_lookup: OnceCell::new(),
-            tls: ImageTlsState::borrowed(None),
+            tls: ImageTlsState::empty(),
             domain: self.domain,
             segments,
         };

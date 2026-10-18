@@ -196,8 +196,8 @@ impl KeyResolver for SyntheticDependencyResolver {
                 assert_eq!(*needed, b"dep");
                 Ok(ResolvedKey::module(
                     SyntheticModule::empty(
+                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
                         "dep",
-                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                     ),
                     Vec::new(),
                 ))
@@ -220,10 +220,10 @@ impl KeyResolver for SyntheticRootResolver {
         match req.input() {
             ResolveInput::Root { .. } => Ok(ResolvedKey::module(
                 SyntheticModule::new(
+                    &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
                     "synthetic-root",
-                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                     [SyntheticSymbol::function(
-                        "synthetic_value",
+                        c"synthetic_value",
                         synthetic_value as *const (),
                     )],
                 ),
@@ -251,8 +251,8 @@ impl KeyResolver for ResolvedGraphResolver {
             ResolveInput::Root { root } => {
                 let dependency = ResolvedKey::module(
                     SyntheticModule::empty(
+                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
                         "dep",
-                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                     ),
                     Vec::new(),
                 );
@@ -263,8 +263,8 @@ impl KeyResolver for ResolvedGraphResolver {
                 };
                 Ok(ResolvedKey::module(
                     SyntheticModule::empty(
+                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
                         *root,
-                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                     ),
                     [ResolvedDependency::new("dep", dependency)],
                 ))

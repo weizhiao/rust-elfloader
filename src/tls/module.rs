@@ -5,14 +5,15 @@ use crate::{
     relocation::RelocationArch,
     runtime::{CodeContext, CodeExecutor, DomainId},
 };
+use alloc::boxed::Box;
 use core::fmt;
 
 /// Non-owning metadata for a TLS registration and its runtime ABI entry.
 ///
 /// Cloning or dropping this value does not retain or unregister the module.
-/// The loaded image owns registrations it creates; imported registrations must
-/// remain valid under the caller's lifetime guarantees. Mapped code, templates,
-/// and the runtime must also remain alive for every use of this metadata.
+/// A [`TlsRegistration`] owns the registry entry and runtime resources. Its
+/// lifetime must cover every use of this metadata. Imported providers retain
+/// their original storage; managed providers retain immutable template bytes.
 /// The containing image and its executor determine the target architecture;
 /// this metadata does not encode it.
 #[derive(Clone)]
@@ -34,9 +35,9 @@ impl TlsModule {
     /// `binding` must describe a live registration in the runtime identified by
     /// `entry`, with correct ABI metadata. The runtime and ABI entry must remain
     /// fixed and alive while this metadata is in use.
-    /// The caller owns the registration and must unregister it exactly once when
-    /// no longer needed. Constructing or cloning this metadata does not transfer
-    /// or share that responsibility.
+    /// The runtime must transfer its cleanup responsibility into a
+    /// [`TlsRegistration`]. Constructing or cloning this metadata does not
+    /// transfer or share that responsibility.
     pub const unsafe fn new(binding: TlsBinding, entry: VmAddr) -> Self {
         Self { binding, entry }
     }
@@ -80,5 +81,52 @@ impl TlsModule {
                 ti_offset: offset.wrapping_sub(Arch::TLS_DTV_OFFSET),
             },
         )
+    }
+}
+
+/// Unique owner of a TLS registry entry.
+///
+/// Loaded and synthetic images retain this value until their finalizers and TLS
+/// descriptor resources have been released. The cleanup closure also keeps the
+/// resolver alive. Cloning [`TlsModule`] does not extend this ownership.
+pub struct TlsRegistration {
+    module: TlsModule,
+    release: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+impl TlsRegistration {
+    /// Takes ownership of a registration created by a runtime implementation.
+    ///
+    /// # Safety
+    /// `module` must describe a live registration. `release` must take sole
+    /// ownership of its cleanup, retain the runtime, and remove that registration
+    /// exactly once. It may own a previous guard to compose additional cleanup.
+    /// Provider destruction and callbacks must run without registry locks held.
+    pub unsafe fn new(module: TlsModule, release: impl FnOnce() + Send + Sync + 'static) -> Self {
+        Self {
+            module,
+            release: Some(Box::new(release)),
+        }
+    }
+
+    /// Borrows ABI metadata without transferring registration ownership.
+    pub fn module(&self) -> &TlsModule {
+        &self.module
+    }
+}
+
+impl fmt::Debug for TlsRegistration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("TlsRegistration")
+            .field(&self.module)
+            .finish()
+    }
+}
+
+impl Drop for TlsRegistration {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
     }
 }

@@ -14,14 +14,13 @@ fn main() {
     }
 
     let host = ModuleHandle::from(SyntheticModule::new(
-        "__host",
-        Domain::new(
+        &Domain::native_with_tls(
             AddressSpaceId::PROCESS,
             elf_loader::tls::DefaultTlsResolver::new(),
         )
-        .unwrap()
-        .id(),
-        [SyntheticSymbol::function("print", print as *const ())],
+        .unwrap(),
+        "__host",
+        [SyntheticSymbol::function(c"print", print as *const ())],
     ));
     let mut loader = WinElfLoader::new();
     let liba = Relocator::new()

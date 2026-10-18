@@ -13,19 +13,17 @@ use crate::{
     observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
     os::Mmap,
     relocation::ObjectArch,
-    runtime::CodeExecutor,
     sync::Arc,
     tls::TlsResolver,
 };
 
-impl<Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec> LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>
+impl<Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'_, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: ObjectArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Sets object section layout groups for this loader run.
     pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
@@ -34,15 +32,13 @@ where
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
-    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: ObjectArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads a relocatable object file into memory and prepares it for relocation.
     ///
@@ -79,7 +75,6 @@ where
         let path = PathBuf::from(object.path());
         let source_id = object.source_id();
         let page_size = self.loader.page_size()?.bytes();
-        let executor = self.loader.executor();
         let object_groups = Arc::clone(&self.object_groups);
         let observer = &mut self.observer;
         let mapper = self.loader.mapper();
@@ -105,7 +100,6 @@ where
             section_segments,
             pltgot,
             user_data,
-            executor,
             self.domain.clone(),
         )?;
         let mut raw = builder.build_object();
@@ -118,21 +112,22 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, M> Loader<D, crate::arch::NativeArch, M>
 where
-    (): LoadObserver<D, Arch>,
+    (): LoadObserver<D, crate::arch::NativeArch>,
     D: Default + Send + Sync + 'static,
-    Arch: ObjectArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads a relocatable object file into memory and prepares it for relocation.
     #[inline]
-    pub fn load_object<'a, I>(&self, input: I) -> Result<RawObject<D, Arch, M::Region, ()>>
+    pub fn load_object<'a, I>(
+        &self,
+        input: I,
+    ) -> Result<RawObject<D, crate::arch::NativeArch, M::Region, ()>>
     where
         I: IntoElfReader<'a>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load_object(input)
     }
 }
@@ -640,7 +635,7 @@ mod tests {
         let mut observer = ObjectObserver::default();
         let loader = Loader::new().with_data::<ObjectData>();
         let mut run = loader
-            .run(Domain::without_tls(AddressSpaceId::PROCESS))
+            .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .with_observer(&mut observer);
 
         let _ = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));

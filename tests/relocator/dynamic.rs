@@ -61,11 +61,11 @@ fn load(name: &str, bytes: &[u8]) -> LoadedCore<()> {
 
 fn host_module() -> SyntheticModule {
     let mut module = SyntheticModule::empty(
+        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
         "__host",
-        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
     );
     let _ = module.insert(SyntheticSymbol::object(
-        SYMBOL,
+        std::ffi::CString::new(SYMBOL).unwrap(),
         &raw const HOST_VALUE as *const (),
         size_of::<i32>(),
     ));
@@ -351,15 +351,17 @@ fn images_without_tls_retain_their_domain_at_admission() {
         error::TlsError,
         image::{LocalScope, ModuleScope},
         linker::SearchPathResolver,
-        tls::{TlsImageSource, TlsInfo, TlsModule, TlsModuleId, TlsRequest, TlsResolver},
+        tls::{
+            TlsInfo, TlsModuleId, TlsRegistration, TlsRequest, TlsResolver, TlsTemplate,
+        },
     };
     #[derive(Clone)]
     struct Resolver(usize);
     impl TlsResolver<NativeArch> for Resolver {
-        fn register(&self, _: TlsInfo, _: TlsRequest) -> Result<TlsModule> {
+        fn register(&self, _: TlsInfo, _: TlsRequest) -> Result<TlsRegistration> {
             Err(TlsError::ResolverUnsupported.into())
         }
-        fn publish(&self, _: TlsImageSource, _: TlsModuleId) -> Result<()> {
+        fn publish(&self, _: TlsTemplate, _: TlsModuleId) -> Result<()> {
             Err(TlsError::ResolverUnsupported.into())
         }
         fn unregister(&self, _: TlsModuleId) {}
@@ -370,7 +372,7 @@ fn images_without_tls_retain_their_domain_at_admission() {
     let fixtures = dynamic_fixtures();
     let load = || {
         LOADER
-            .run(Domain::new(AddressSpaceId::PROCESS, Resolver(0x1000)).unwrap())
+            .run(Domain::native_with_tls(AddressSpaceId::PROCESS, Resolver(0x1000)).unwrap())
             .load_dylib(ElfBinary::new("provider.so", &fixtures.binding.provider))
             .unwrap()
     };
@@ -378,7 +380,7 @@ fn images_without_tls_retain_their_domain_at_admission() {
     assert!(raw.tls().is_none());
     let foreign = Resolver(0x2000);
     let mut modules = ModuleScope::new(
-        Domain::new(AddressSpaceId::PROCESS, foreign.clone())
+        Domain::native_with_tls(AddressSpaceId::PROCESS, foreign.clone())
             .unwrap()
             .id(),
     );
@@ -394,7 +396,7 @@ fn images_without_tls_retain_their_domain_at_admission() {
     ));
 
     let mut context = LinkContext::<(), NativeArch, Resolver>::new(
-        Domain::new(AddressSpaceId::PROCESS, foreign).unwrap(),
+        Domain::native_with_tls(AddressSpaceId::PROCESS, foreign).unwrap(),
     );
     assert!(matches!(
         relocator.run(load()).global_scope(context.global_scope()),

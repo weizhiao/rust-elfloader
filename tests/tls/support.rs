@@ -101,7 +101,7 @@ fn load() -> TlsScenario {
         .expect("failed to generate TLS consumer");
     let loader = Loader::new();
     let mut loader = loader.run(
-        Domain::new(
+        Domain::native_with_tls(
             AddressSpaceId::PROCESS,
             elf_loader::tls::DefaultTlsResolver::new(),
         )

@@ -1,18 +1,19 @@
 use crate::{
     elf::{ElfLayout, ElfSymbol},
-    image::{SymbolExports, SymbolLookup},
+    image::{SymbolExports, SymbolLookup, SymbolName},
     object::CustomHash,
     sync::{Arc, OnceCell},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
+use core::ffi::CStr;
 
 /// Runtime symbol exports for a relocated object.
 ///
 /// Unlike the relocation `.symtab`, this table owns symbol names and entries, so
 /// it can outlive init-only section metadata.
 pub(crate) struct ObjectExports<L: ElfLayout> {
-    hashtab: CustomHash<Box<[u8]>>,
-    names: Vec<Box<[u8]>>,
+    hashtab: CustomHash<SymbolName>,
+    names: Vec<SymbolName>,
     symbols: Vec<ElfSymbol<L>>,
 }
 
@@ -52,7 +53,7 @@ impl<L: ElfLayout> SymbolExports<L> for ObjectExportsCell<L> {
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr> {
         self.get().symbol_name(symbol)
     }
 
@@ -76,14 +77,15 @@ impl<L: ElfLayout> ObjectExports<L> {
     }
 
     pub(crate) fn insert(&mut self, name: impl AsRef<[u8]>, symbol: ElfSymbol<L>) {
-        let name: Box<[u8]> = name.as_ref().into();
-        if let Some(idx) = self.hashtab.find_idx(&name) {
+        let name = name.as_ref();
+        if let Some(idx) = self.hashtab.find_idx(name) {
             if self.symbols[idx].is_weak() && !symbol.is_weak() {
                 self.symbols[idx] = symbol;
             }
             return;
         }
 
+        let name = SymbolName::try_from(name).expect("symbol name contains NUL");
         let idx = self.symbols.len();
         self.names.push(name.clone());
         self.symbols.push(symbol);
@@ -98,11 +100,11 @@ impl<L: ElfLayout> SymbolExports<L> for ObjectExports<L> {
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr> {
         self.symbols
             .iter()
             .position(|entry| core::ptr::eq(entry, symbol))
-            .map(|idx| self.names[idx].as_ref())
+            .map(|idx| self.names[idx].as_c_str())
     }
 
     #[inline]
@@ -158,7 +160,7 @@ mod tests {
             <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::symbol_name(
                 &exports, resolved
             ),
-            Some(b"symbol".as_slice()),
+            Some(c"symbol"),
         );
         let mut count = 0;
         exports.for_each(&mut |_| count += 1);

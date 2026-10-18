@@ -23,11 +23,11 @@ use super::BindingMode;
 /// extern "C" fn host_log(_value: i32) {}
 ///
 /// fn main() -> Result<()> {
-///     let domain = Domain::without_tls(AddressSpaceId::PROCESS);
+///     let domain = Domain::native_without_tls(AddressSpaceId::PROCESS);
 ///     let host = SyntheticModule::new(
+///         &domain,
 ///         "__host",
-///         domain.id(),
-///         [SyntheticSymbol::function("host_log", host_log as *const ())],
+///         [SyntheticSymbol::function(c"host_log", host_log as *const ())],
 ///     );
 ///
 ///     let raw = Loader::new().run(domain).load_dylib("plugin.so")?;

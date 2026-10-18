@@ -40,7 +40,7 @@ impl WinElfLoader {
     ) -> Result<ElfDylib<()>, Error> {
         let object = ElfBinary::new(name, bytes.as_ref());
         self.loader
-            .run(Domain::new(
+            .run(Domain::native_with_tls(
                 AddressSpaceId::PROCESS,
                 DefaultTlsResolver::new(),
             )?)
@@ -51,7 +51,7 @@ impl WinElfLoader {
     pub fn load_file(&mut self, name: &str) -> Result<ElfDylib<()>, Error> {
         let object = ElfFile::from_path(name)?;
         self.loader
-            .run(Domain::new(
+            .run(Domain::native_with_tls(
                 AddressSpaceId::PROCESS,
                 DefaultTlsResolver::new(),
             )?)

@@ -14,6 +14,7 @@ mod elf;
 mod module;
 mod scanned;
 mod search;
+mod symbol_name;
 mod synthetic;
 mod traits;
 
@@ -32,8 +33,10 @@ pub use module::{
 };
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
-pub(crate) use search::DEFAULT_MODULE_SEARCH;
 pub use search::{ModuleSearch, SearchPathPool};
-pub(crate) use search::{PathTokens, SharedDir, normalize_dir};
+pub(crate) use search::{
+    PathTokens, SharedDir, default_module_search, library_path_components, normalize_dir,
+};
+pub use symbol_name::SymbolName;
 pub use synthetic::{ResolveHook, SymbolVersion, SyntheticModule, SyntheticSymbol};
 pub use traits::{Module, SymbolExports};

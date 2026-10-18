@@ -125,6 +125,24 @@ impl<'a, Root> ResolveRequest<'a, Root> {
         &self.input
     }
 
+    /// Transforms an owned root while preserving dependency and search context.
+    ///
+    /// Resolver adapters can consume resources carried by their root input and
+    /// forward the remaining path to another resolver. The closure is not
+    /// called for dependency requests.
+    pub fn map_root<T>(self, map: impl FnOnce(Root) -> T) -> ResolveRequest<'a, T> {
+        let input = match self.input {
+            ResolveInput::Root { root } => ResolveInput::Root { root: map(root) },
+            ResolveInput::Dependency { needed } => ResolveInput::Dependency { needed },
+        };
+        ResolveRequest {
+            input,
+            search: self.search,
+            tokens: self.tokens,
+            loaders: self.loaders,
+        }
+    }
+
     /// Returns search metadata for the request owner.
     #[inline]
     pub const fn search(&self) -> &'a ModuleSearch {

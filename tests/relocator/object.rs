@@ -60,14 +60,17 @@ impl HostSymbols {
 
     fn module(&self) -> SyntheticModule {
         let mut module = SyntheticModule::empty(
+            &Domain::<elf_loader::arch::NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
             "__host",
-            Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
         );
         for name in [EXTERNAL_FUNC_NAME, EXTERNAL_FUNC_NAME2] {
-            let _ = module.insert(SyntheticSymbol::function(name, self.func as *const ()));
+            let _ = module.insert(SyntheticSymbol::function(
+                std::ffi::CString::new(name).unwrap(),
+                self.func as *const (),
+            ));
         }
         let _ = module.insert(SyntheticSymbol::object(
-            EXTERNAL_VAR_NAME,
+            std::ffi::CString::new(EXTERNAL_VAR_NAME).unwrap(),
             self.var as *const (),
             0,
         ));

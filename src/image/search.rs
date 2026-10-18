@@ -1,6 +1,6 @@
 use crate::{
-    input::{Path, PathBuf, PathStr, PathString},
-    sync::{Arc, AtomicU8, Ordering},
+    input::{ModulePath, Path, PathBuf, PathStr, PathString},
+    sync::{Arc, AtomicU8, OnceCell, Ordering},
 };
 use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, vec::Vec};
 use core::{borrow::Borrow, cmp::Ordering as CmpOrdering, fmt, ops::Deref};
@@ -167,6 +167,20 @@ impl PathTokens {
     }
 }
 
+pub(crate) fn library_path_components(value: &Path) -> impl Iterator<Item = &Path> {
+    value
+        .as_bytes()
+        .split(|byte| matches!(byte, b':' | b';'))
+        .filter(move |_| !value.as_bytes().is_empty())
+        .filter_map(|component| {
+            if component.is_empty() {
+                Some(Path::new("."))
+            } else {
+                Path::from_elf_bytes(component)
+            }
+        })
+}
+
 /// Storage for canonical module search directories.
 #[derive(Default)]
 pub struct SearchPathPool {
@@ -198,6 +212,22 @@ impl SearchPathPool {
         self
     }
 
+    /// Expands a raw library-path value using this context's target tokens.
+    ///
+    /// This uses the same separators, empty-component rules and executable
+    /// `$ORIGIN` as [`SearchConfig::library_path`](crate::linker::SearchConfig::library_path).
+    /// It is useful for library discovery that enumerates directories without
+    /// requesting a particular module.
+    pub fn library_path_dirs(
+        &self,
+        value: impl AsRef<Path>,
+        executable_dir: impl AsRef<Path>,
+    ) -> Vec<PathBuf> {
+        library_path_components(value.as_ref())
+            .filter_map(|path| self.tokens.expand(path, executable_dir.as_ref()))
+            .collect()
+    }
+
     #[inline]
     pub(crate) fn tokens(&self) -> PathTokens {
         self.tokens.clone()
@@ -214,7 +244,7 @@ impl SearchPathPool {
 
     pub(crate) fn module_search(
         &mut self,
-        path: PathBuf,
+        path: ModulePath,
         soname: Option<&[u8]>,
         runpath: Option<&[u8]>,
         rpath: Option<&[u8]>,
@@ -232,36 +262,24 @@ impl SearchPathPool {
 /// value is created. Their directories may be shared with other modules through
 /// a [`SearchPathPool`].
 pub struct ModuleSearch {
-    path: PathBuf,
+    path: ModulePath,
     soname: Option<Box<[u8]>>,
     runpath: Option<Box<[SharedDir]>>,
     rpath: Option<Box<[SharedDir]>>,
 }
 
-pub(crate) static DEFAULT_MODULE_SEARCH: ModuleSearch = ModuleSearch::empty();
+pub(crate) fn default_module_search() -> &'static ModuleSearch {
+    static DEFAULT: OnceCell<ModuleSearch> = OnceCell::new();
+    DEFAULT.get_or_init(ModuleSearch::empty)
+}
 
 impl ModuleSearch {
-    const fn empty() -> Self {
-        Self {
-            path: PathBuf::new(),
-            soname: None,
-            runpath: None,
-            rpath: None,
-        }
-    }
-
-    #[cfg(feature = "object")]
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            soname: None,
-            runpath: None,
-            rpath: None,
-        }
+    fn empty() -> Self {
+        Self::from_dynamic(ModulePath::empty(), None, None, None)
     }
 
     pub(crate) fn from_dynamic(
-        path: PathBuf,
+        path: ModulePath,
         soname: Option<&[u8]>,
         runpath: Option<&[u8]>,
         rpath: Option<&[u8]>,
@@ -277,7 +295,7 @@ impl ModuleSearch {
     }
 
     fn from_dynamic_with(
-        path: PathBuf,
+        path: ModulePath,
         soname: Option<&[u8]>,
         runpath: Option<&[u8]>,
         rpath: Option<&[u8]>,
@@ -301,10 +319,10 @@ impl ModuleSearch {
         self.path.file_name()
     }
 
-    /// Returns the module's loaded path.
+    /// Returns the module's shared, NUL-terminated loaded path.
     #[inline]
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
+    pub fn path(&self) -> &ModulePath {
+        &self.path
     }
 
     /// Returns `DT_SONAME`, if present.
@@ -430,13 +448,13 @@ mod tests {
     fn dirs_are_shared() {
         let mut paths = SearchPathPool::default();
         let first = paths.module_search(
-            PathBuf::from("/opt/app/first.so"),
+            ModulePath::try_from(PathBuf::from("/opt/app/first.so")).unwrap(),
             None,
             Some(b"$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
             Some(b"/ignored"),
         );
         let second = paths.module_search(
-            PathBuf::from("/opt/app/second.so"),
+            ModulePath::try_from(PathBuf::from("/opt/app/second.so")).unwrap(),
             None,
             Some(b"$ORIGIN/lib:/usr/lib"),
             None,

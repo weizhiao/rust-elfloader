@@ -6,8 +6,8 @@ use crate::{
     relocation::RelocationArch,
     sync::{AtomicUsize, OnceCell, Ordering},
     tls::{
-        ThreadDtv, TlsContext, TlsImageSource, TlsIndex, TlsInfo, TlsModule, TlsModuleId, TlsOwner,
-        TlsProvider, TlsRegistry, TlsRequest, TlsResolver, TlsTpOffset,
+        ThreadDtv, TlsContext, TlsIndex, TlsInfo, TlsModule, TlsModuleId, TlsOwner, TlsProvider,
+        TlsRegistration, TlsRegistry, TlsRequest, TlsResolver, TlsTemplate, TlsTpOffset,
     },
 };
 use alloc::{boxed::Box, collections::BTreeMap};
@@ -121,8 +121,7 @@ impl DefaultTlsResolver {
     }
 
     /// Registers a custom provider in the default runtime's namespace.
-    /// The caller owns the registration and must unregister it after its last use;
-    /// dropping the returned metadata does not release the provider.
+    /// The returned owner unregisters and releases the provider on drop.
     ///
     /// # Safety
     /// `info` must describe the provider's TLS block. If supplied, `tp_offset`
@@ -134,12 +133,18 @@ impl DefaultTlsResolver {
         info: TlsInfo,
         tp_offset: Option<TlsTpOffset>,
         provider: P,
-    ) -> Result<TlsModule> {
+    ) -> Result<TlsRegistration> {
         let entry = self.bind_tls_get_addr()?;
         let owner = TlsOwner::new(provider);
         let module =
             with_registry_mut(|registry| unsafe { registry.register(info, tp_offset, &owner) })?;
-        Ok(unsafe { TlsModule::new(module, entry) })
+        let mod_id = module.mod_id();
+        // SAFETY: This guard is the only owner of the newly inserted entry.
+        Ok(unsafe {
+            TlsRegistration::new(TlsModule::new(module, entry), move || {
+                Self::new().unregister(mod_id);
+            })
+        })
     }
 
     /// Resolves the current thread's block, allocating managed or host TLS if needed.
@@ -166,7 +171,7 @@ impl Default for DefaultTlsResolver {
 impl TlsResolver<NativeArch> for DefaultTlsResolver {
     const OVERRIDE_TLS_GET_ADDR: bool = true;
 
-    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<TlsModule> {
+    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<TlsRegistration> {
         let tp_offset = match request {
             TlsRequest::Dynamic => None,
             TlsRequest::Static(Some(offset)) => Some(offset),
@@ -176,7 +181,7 @@ impl TlsResolver<NativeArch> for DefaultTlsResolver {
         unsafe { self.register_provider(info, tp_offset, ManagedTls::new()) }
     }
 
-    fn publish(&self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
+    fn publish(&self, source: TlsTemplate, mod_id: TlsModuleId) -> Result<()> {
         let entry = with_registry(|registry| registry.lookup(mod_id))?;
         entry.publish(source)
     }
@@ -205,7 +210,7 @@ fn static_address(offset: TlsTpOffset) -> Option<NonNull<u8>> {
 /// Managed storage tied to the default runtime's registry and thread cache.
 /// Custom registries must use a provider tied to their own thread state.
 pub(super) struct ManagedTls {
-    image: OnceCell<TlsImageSource>,
+    image: OnceCell<TlsTemplate>,
 }
 
 impl ManagedTls {
@@ -217,7 +222,7 @@ impl ManagedTls {
 }
 
 unsafe impl TlsProvider for ManagedTls {
-    unsafe fn publish(&self, _context: &TlsContext, source: TlsImageSource) -> Result<()> {
+    unsafe fn publish(&self, _context: &TlsContext, source: TlsTemplate) -> Result<()> {
         assert!(
             self.image.set(source).is_ok(),
             "TLS template must be published only once",
@@ -233,21 +238,17 @@ unsafe impl TlsProvider for ManagedTls {
         } else if let Some(base) = get_dynamic(binding.mod_id()) {
             base
         } else {
-            // Keep the image alive outside the DTV borrow. Its final release
-            // may run module finalizers that query TLS again.
-            source.with_image(|image| {
-                with_current_dtv(true, |dtv| {
-                    sync_dtv(dtv);
-                    if !with_registry(|registry| registry.contains(binding.mod_id())) {
-                        return Err(TlsError::InvalidModuleId {
-                            mod_id: binding.mod_id(),
-                        }
-                        .into());
+            with_current_dtv(true, |dtv| {
+                sync_dtv(dtv);
+                if !with_registry(|registry| registry.contains(binding.mod_id())) {
+                    return Err(TlsError::InvalidModuleId {
+                        mod_id: binding.mod_id(),
                     }
-                    dtv.get_or_init(binding.mod_id(), context.info(), image)
-                })
-                .expect("creating the current thread's DTV always returns a DTV")
-            })?
+                    .into());
+                }
+                dtv.get_or_init(binding.mod_id(), context.info(), source.as_ref())
+            })
+            .expect("creating the current thread's DTV always returns a DTV")?
         };
         NonNull::new(base.as_ptr().wrapping_add(offset)).ok_or_else(|| TlsError::InvalidInfo.into())
     }

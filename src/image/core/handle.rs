@@ -7,13 +7,13 @@ use crate::{
         CoreRuntime, DynamicInfo, GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch,
         ModuleState, PltRelocInfo, SymbolExports,
     },
-    input::{ModuleSourceId, PathBuf},
+    input::{ModulePath, ModuleSourceId},
     memory::{HostRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
-    runtime::{CodeExecutor, Domain, NativeCodeExecutor},
+    runtime::Domain,
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak, arc_downgrade_unsize, arc_unsize},
-    tls::{ImageTlsState, TlsImageProvider, TlsImageSource, TlsResolver},
+    tls::{ImageTlsState, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ops::Deref, ptr::NonNull};
@@ -55,14 +55,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// * `None` - If the [`ElfCore`] has been dropped.
     pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R, Tls>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    TlsImageProvider for ElfModule<D, Arch, R, Tls>
-{
-    fn tls_image(&self) -> Result<&[u8]> {
-        self.tls.image()
     }
 }
 
@@ -142,11 +134,10 @@ impl<
         let Some(module) = self.inner.tls.module() else {
             return Ok(());
         };
-        let provider = arc_downgrade_unsize!(&self.inner => dyn TlsImageProvider);
         self.inner
             .domain
             .tls_resolver()
-            .publish(TlsImageSource::new(provider), module.mod_id())
+            .publish(self.inner.tls.template()?, module.mod_id())
     }
 
     #[inline]
@@ -211,7 +202,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// lifetime.
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn from_raw(
-        path: PathBuf,
+        path: ModulePath,
         source_id: ModuleSourceId,
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         dynamic_addr: VmAddr,
@@ -244,7 +235,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let plt = PltRelocInfo::new(dynamic.pltrel, symtab);
         let inner = Arc::new(ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
-            executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             search,
             state: ModuleState::initialized(source_id, domain.id()),
             lifecycle: OnceCell::new(),

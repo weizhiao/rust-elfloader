@@ -16,7 +16,7 @@ use crate::{
     observer::{AfterDynamicLoadEvent, BeforeLoadEvent, LoadObserver},
     os::{DefaultMmap, Mmap},
     relocation::{ObjectArch, RelocationArch},
-    runtime::{AddressSpaceId, CodeExecutor, Domain, NativeCodeExecutor},
+    runtime::{AddressSpaceId, Domain},
     segment::{
         ElfSegments,
         program::{load_segments, parse_segments},
@@ -30,7 +30,7 @@ use super::{ElfBuf, ExpectedElf, ImageBuilder, Loader, ScanBuilder, read_ehdr};
 /// Per-run loader state.
 ///
 /// A [`Loader`] owns reusable loading configuration. `LoaderRun` owns the
-/// selected TLS resolver and scratch buffer for one sequence of loads.
+/// selected runtime domain and scratch buffer for one sequence of loads.
 pub struct LoaderRun<
     'a,
     Obs = (),
@@ -38,14 +38,13 @@ pub struct LoaderRun<
     Tls = (),
     Arch = NativeArch,
     M = DefaultMmap,
-    Exec = NativeCodeExecutor,
 > where
     Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
-    pub(crate) loader: &'a Loader<D, Arch, M, Exec>,
+    pub(crate) loader: &'a Loader<D, Arch, M>,
     pub(crate) domain: Domain<Arch, Tls>,
     pub(crate) observer: Obs,
     pub(super) buf: ElfBuf,
@@ -54,22 +53,17 @@ pub struct LoaderRun<
     pub(crate) object_groups: Arc<SectionGroups>,
 }
 
-impl<'a, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
-    LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
+impl<'a, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'a, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Replaces the observer used by this loader run.
     #[inline]
-    pub fn with_observer<NewObs>(
-        self,
-        observer: NewObs,
-    ) -> LoaderRun<'a, NewObs, D, Tls, Arch, M, Exec>
+    pub fn with_observer<NewObs>(self, observer: NewObs) -> LoaderRun<'a, NewObs, D, Tls, Arch, M>
     where
         NewObs: LoadObserver<D, Arch>,
     {
@@ -93,14 +87,12 @@ where
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
-    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Reads the ELF header.
     ///
@@ -152,15 +144,13 @@ where
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
-    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Scans an executable or dynamic ELF image without mapping its segments.
     ///
@@ -170,34 +160,17 @@ where
     where
         I: IntoElfReader<'static>,
     {
-        let object = input.into_reader()?;
-        logging::debug!("Scanning ELF metadata: {}", object.path());
-
-        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Executable)?;
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
-        let has_dynamic = has_dynamic_phdr(phdrs);
-        let phdrs = Box::from(phdrs);
-        let path = PathBuf::from(object.path());
-        let builder = ScanBuilder::new(path, ehdr, phdrs, Box::new(object));
-
-        if has_dynamic {
-            return ScannedDynamic::<Arch>::from_builder(builder, self.search_paths.as_deref_mut())
-                .map(ScannedElf::Dynamic);
-        }
-
-        ScannedExec::<Arch>::from_builder(builder).map(ScannedElf::StaticExec)
+        scan::<Arch>(input, &mut self.buf, self.search_paths.as_deref_mut())
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
-    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads an ELF input and chooses the appropriate raw image type automatically.
     ///
@@ -309,7 +282,7 @@ where
     /// Builds the shared mapped-image state after headers have been read.
     /// Keep the observer before dynamic validation and segment allocation.
     fn prepare_image(
-        loader: &Loader<D, Arch, M, Exec>,
+        loader: &Loader<D, Arch, M>,
         domain: Domain<Arch, Tls>,
         observer: &mut Obs,
         object: &impl ElfReader,
@@ -338,7 +311,6 @@ where
             loader.force_static_tls(),
             page_size,
             user_data,
-            loader.executor(),
             domain,
         );
         Ok((builder, has_dynamic))
@@ -461,7 +433,6 @@ where
             self.loader.force_static_tls(),
             page_size,
             D::default(),
-            self.loader.executor(),
             self.domain.clone(),
         );
         let mut image = builder.build_dynamic(&phdrs, self.search_paths.as_deref_mut())?;
@@ -551,28 +522,51 @@ fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+fn scan<Arch: RelocationArch>(
+    input: impl IntoElfReader<'static>,
+    buf: &mut ElfBuf,
+    search_paths: Option<&mut SearchPathPool>,
+) -> Result<ScannedElf<Arch>> {
+    let object = input.into_reader()?;
+    logging::debug!("Scanning ELF metadata: {}", object.path());
+
+    let ehdr = read_ehdr::<Arch>(&object)?;
+    if !ExpectedElf::Executable.matches(&ehdr) {
+        return Err(ExpectedElf::Executable.error(ehdr.file_type()).into());
+    }
+    let phdrs = buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
+    let has_dynamic = has_dynamic_phdr(phdrs);
+    let phdrs = Box::from(phdrs);
+    let path = PathBuf::from(object.path());
+    let builder = ScanBuilder::new(path, ehdr, phdrs, Box::new(object));
+
+    if has_dynamic {
+        return ScannedDynamic::<Arch>::from_builder(builder, search_paths)
+            .map(ScannedElf::Dynamic);
+    }
+
+    ScannedExec::<Arch>::from_builder(builder).map(ScannedElf::StaticExec)
+}
+
+impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
 where
     (): LoadObserver<D, Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
-    /// Reads the ELF header with a fresh loader run.
+    /// Reads the ELF header without creating runtime state.
     #[inline]
     pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
-            .read_ehdr(object)
+        read_ehdr::<Arch>(object)
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
 where
     (): LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Scans an executable or dynamic ELF image without mapping its segments.
     #[inline]
@@ -580,47 +574,43 @@ where
     where
         I: IntoElfReader<'static>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
-            .scan(input)
+        scan::<Arch>(input, &mut ElfBuf::new(), None)
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
+impl<D: Send + Sync + 'static, M> Loader<D, NativeArch, M>
 where
-    (): LoadObserver<D, Arch>,
+    (): LoadObserver<D, NativeArch>,
     D: Default + Send + Sync + 'static,
-    Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads an ELF input and chooses the appropriate raw image type automatically.
     #[inline]
-    pub fn load<'a, I>(&self, input: I) -> Result<RawElf<D, Arch, M::Region, ()>>
+    pub fn load<'a, I>(&self, input: I) -> Result<RawElf<D, NativeArch, M::Region, ()>>
     where
-        Arch: ObjectArch,
         I: IntoElfReader<'a>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load(input)
     }
 
     /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
     #[inline]
-    pub fn load_dylib<'a, I>(&self, input: I) -> Result<RawDylib<D, Arch, M::Region, ()>>
+    pub fn load_dylib<'a, I>(&self, input: I) -> Result<RawDylib<D, NativeArch, M::Region, ()>>
     where
         I: IntoElfReader<'a>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load_dylib(input)
     }
 
     /// Loads any dynamic ELF image into memory and returns a raw dynamic image.
     #[inline]
-    pub fn load_dynamic<'a, I>(&self, input: I) -> Result<RawDynamic<D, Arch, M::Region, ()>>
+    pub fn load_dynamic<'a, I>(&self, input: I) -> Result<RawDynamic<D, NativeArch, M::Region, ()>>
     where
         I: IntoElfReader<'a>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load_dynamic(input)
     }
 
@@ -628,9 +618,9 @@ where
     #[inline]
     pub fn load_scanned_dynamic(
         &self,
-        scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch, M::Region, ()>> {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        scanned: ScannedDynamic<NativeArch>,
+    ) -> Result<RawDynamic<D, NativeArch, M::Region, ()>> {
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load_scanned_dynamic(scanned)
     }
 
@@ -646,22 +636,22 @@ where
         &self,
         path: impl Into<PathBuf>,
         load_bias: VmAddr,
-        phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
+        phdrs: impl Into<Vec<ElfPhdr<<NativeArch as RelocationArch>::Layout>>>,
         entry: usize,
-    ) -> Result<RawDynamic<D, Arch, M::Region, ()>> {
+    ) -> Result<RawDynamic<D, NativeArch, M::Region, ()>> {
         unsafe {
-            self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+            self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
                 .load_mapped_dynamic(path, load_bias, phdrs, entry)
         }
     }
 
     /// Loads an executable image into memory and returns a raw executable.
     #[inline]
-    pub fn load_exec<'a, I>(&self, input: I) -> Result<RawExec<D, Arch, M::Region, ()>>
+    pub fn load_exec<'a, I>(&self, input: I) -> Result<RawExec<D, NativeArch, M::Region, ()>>
     where
         I: IntoElfReader<'a>,
     {
-        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
             .load_exec(input)
     }
 }

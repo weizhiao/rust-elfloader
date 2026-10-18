@@ -8,12 +8,12 @@ use crate::{
         GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
         SymbolLookup, module::lookup_symbol,
     },
-    input::{ModuleSourceId, PathBuf},
+    input::{ModulePath, ModuleSourceId},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
     sync::Arc,
-    tls::{ImageTlsState, TlsModule, TlsResolver},
+    tls::{ImageTlsState, TlsModule, TlsRegistration, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ops::Deref};
@@ -318,34 +318,35 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     /// The caller must ensure that the provided metadata, segments, and TLS values
     /// describe a valid loaded ELF image. A supplied TLS registration must refer
     /// to its existing, initialized storage and belong to `domain`.
-    /// This constructor borrows that registration and never unregisters it, even
-    /// on failure. The caller must keep the ELF mapping, TLS registration, storage,
-    /// and runtime valid while any derived view or code can still use them.
+    /// This constructor takes ownership of the registry entry, including on
+    /// failure. The provider must retain the existing storage and runtime; the
+    /// caller must keep the ELF mapping valid while any derived view uses it.
     /// The `PT_TLS` initialization bytes must remain readable within `segments`
     /// for the lifetime of the image. This constructor retains a template view
     /// without publishing it or copying it into thread storage.
     ///
     /// # Arguments
-    /// * `path` - Loader source path or diagnostic name
+    /// * `path` - Validated shared loader source path or diagnostic name.
+    ///   Convert a `PathBuf` with `ModulePath::try_from` before calling.
     /// * `source_id` - Identity of the original source backing the loaded image.
     ///   Preserve the reader's identity for file-backed images; use a stable opaque
     ///   identity for other sources, or `ModuleSourceId::fresh()` for a new anonymous source.
     /// * `phdrs` - The program headers
     /// * `segments` - The mapped ELF segments and their module-relative ranges
     /// * `domain` - Fixed address space and TLS runtime of the existing image
-    /// * `tls` - Borrowed registration metadata for the existing TLS block, if any
+    /// * `tls` - Owned registry entry for the existing TLS block, if any
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
     /// A new [`LoadedCore`] instance
     #[inline]
     pub unsafe fn new_unchecked(
-        path: impl Into<PathBuf>,
+        path: ModulePath,
         source_id: ModuleSourceId,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         segments: ElfSegments,
         domain: Domain<Arch, Tls>,
-        tls: Option<TlsModule>,
+        tls: Option<TlsRegistration>,
         user_data: D,
     ) -> Result<Self> {
         let base = segments.base();
@@ -379,7 +380,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
 
         let tls = match (tls_phdr, tls) {
             (Some(phdr), Some(registration)) => {
-                registration.check_domain(domain.id())?;
+                registration.module().check_domain(domain.id())?;
                 let image = if phdr.p_filesz() == 0 {
                     MappedView::empty()
                 } else {
@@ -389,16 +390,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                             "PT_TLS is not directly readable from mapped segments",
                         ))?
                 };
-                Some((registration, image))
+                ImageTlsState::owned(registration, image)
             }
-            (None, None) => None,
+            (None, None) => ImageTlsState::empty(),
             _ => return Err(crate::TlsError::ModuleMismatch.into()),
         };
-        let tls = ImageTlsState::borrowed(tls);
         let (dynamic_addr, dynamic) = dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
         let core = unsafe {
             ElfCore::from_raw(
-                path.into(),
+                path,
                 source_id,
                 dynamic,
                 dynamic_addr,

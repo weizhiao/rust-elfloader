@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     Error, IoError, ParseEhdrError, Result,
-    image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
+    image::{ModuleSearch, PathTokens, SharedDir, library_path_components, normalize_dir},
     input::{ElfFile, ElfReader, Path, PathBuf},
     loader::read_ehdr,
     os::path_is_dir,
@@ -240,28 +240,8 @@ impl SearchPathResolver {
     pub fn with_config(config: SearchConfig) -> Self {
         let mut resolver = Self::new();
         resolver.push_rpath();
-        if let Some((value, origin)) = config
-            .library_path
-            .filter(|(value, _)| !value.as_bytes().is_empty())
-        {
-            for component in value.as_bytes().split(|byte| matches!(byte, b':' | b';')) {
-                if component.is_empty() {
-                    resolver.push_fixed_dir(".");
-                } else if let Some(path) = Path::from_elf_bytes(component) {
-                    if component.contains(&b'$') {
-                        let path = PathBuf::from(path);
-                        let origin = origin.clone();
-                        resolver.push_search_dir_provider(move |request, dirs| {
-                            if let Some(path) = request.tokens().expand(&path, &origin) {
-                                dirs.push(path);
-                            }
-                            Ok(())
-                        });
-                    } else {
-                        resolver.push_fixed_dir(path);
-                    }
-                }
-            }
+        if let Some((value, origin)) = config.library_path {
+            resolver.push_library_path(value, origin);
         }
         resolver.push_runpath();
         if let Some(cache) = config.cache {
@@ -318,6 +298,34 @@ impl SearchPathResolver {
     /// Appends a fixed search directory.
     pub fn push_fixed_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
         self.push_entry(SearchPathEntry::Dir(SharedDir::new(normalize_dir(dir))))
+    }
+
+    /// Appends the raw library-path value at this point in the search order.
+    ///
+    /// Parsing and token expansion follow [`SearchConfig::library_path`]. This
+    /// allows custom policies to reuse the same environment-path semantics
+    /// without adopting the full [`Self::with_config`] preset.
+    pub fn push_library_path(
+        &mut self,
+        value: impl AsRef<Path>,
+        executable_dir: impl AsRef<Path>,
+    ) -> &mut Self {
+        let origin = executable_dir.as_ref();
+        for path in library_path_components(value.as_ref()) {
+            if path.as_bytes().contains(&b'$') {
+                let path = PathBuf::from(path);
+                let origin = PathBuf::from(origin);
+                self.push_search_dir_provider(move |request, dirs| {
+                    if let Some(path) = request.tokens().expand(&path, &origin) {
+                        dirs.push(path);
+                    }
+                    Ok(())
+                });
+            } else {
+                self.push_fixed_dir(path);
+            }
+        }
+        self
     }
 
     /// Appends generic library candidates from an explicit glibc cache snapshot.
@@ -590,7 +598,7 @@ mod tests {
         rpath: Option<&str>,
     ) -> ModuleSearch {
         ModuleSearch::from_dynamic(
-            PathBuf::from(path),
+            crate::input::ModulePath::try_from(PathBuf::from(path)).unwrap(),
             soname.map(str::as_bytes),
             runpath.map(str::as_bytes),
             rpath.map(str::as_bytes),
@@ -794,7 +802,8 @@ mod tests {
         paths.set_lib("lib64").set_platform("target-v1");
         let tokens = paths.tokens();
         let owner = paths.module_search(
-            PathBuf::from(owner_path.to_str().unwrap()),
+            crate::input::ModulePath::try_from(PathBuf::from(owner_path.to_str().unwrap()))
+                .unwrap(),
             None,
             Some(b"$ORIGIN/$LIB/${PLATFORM}"),
             None,

@@ -24,6 +24,7 @@ pub(crate) enum ResolvedKind<'cfg, Arch: RelocationArch = NativeArch> {
 pub struct ResolvedKey<'cfg, Arch: RelocationArch = NativeArch> {
     kind: ResolvedKind<'cfg, Arch>,
     pinned: bool,
+    aliases: Vec<ModuleKey>,
 }
 
 /// One named dependency in a pre-resolved module graph.
@@ -58,6 +59,7 @@ impl<'cfg, Arch: RelocationArch> ResolvedKey<'cfg, Arch> {
         Self {
             kind: ResolvedKind::Load(reader),
             pinned: false,
+            aliases: Vec::new(),
         }
     }
 
@@ -73,7 +75,22 @@ impl<'cfg, Arch: RelocationArch> ResolvedKey<'cfg, Arch> {
                 deps: deps.into(),
             },
             pinned: false,
+            aliases: Vec::new(),
         }
+    }
+
+    /// Adds alternative request keys for the selected module.
+    ///
+    /// Aliases become visible within the pending load before its dependencies
+    /// are resolved. They are committed with the selected module and discarded
+    /// if preparation or relocation fails. Published aliases follow the module's
+    /// lifetime; the existing context's key precedence is preserved.
+    pub fn with_aliases<K: Into<ModuleKey>>(
+        mut self,
+        aliases: impl IntoIterator<Item = K>,
+    ) -> Self {
+        self.aliases.extend(aliases.into_iter().map(Into::into));
+        self
     }
 
     /// Keeps the resolved module committed for the lifetime of its context.
@@ -87,8 +104,8 @@ impl<'cfg, Arch: RelocationArch> ResolvedKey<'cfg, Arch> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ResolvedKind<'cfg, Arch>, bool) {
-        (self.kind, self.pinned)
+    pub(crate) fn into_parts(self) -> (ResolvedKind<'cfg, Arch>, bool, Vec<ModuleKey>) {
+        (self.kind, self.pinned, self.aliases)
     }
 }
 
@@ -101,6 +118,17 @@ pub trait KeyResolver<Arch: RelocationArch = NativeArch> {
 
     /// Maps a root input to the key used for an existing-module lookup.
     fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8];
+
+    /// Normalizes a request key for existing-module lookup.
+    ///
+    /// Policies that replace several paths with one virtual module can return
+    /// its canonical name. The original root or dependency is still passed to
+    /// [`Self::resolve`], so filesystem lookup retains the requested path. The
+    /// resolver result must register this canonical name as an alias.
+    #[inline]
+    fn normalize_key<'a>(&'a self, key: &'a [u8]) -> &'a [u8] {
+        key
+    }
 
     /// Resolves a root input or one `DT_NEEDED` dependency.
     fn resolve<'cfg>(&self, req: ResolveRequest<'_, Self::Root>)

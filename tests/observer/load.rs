@@ -50,7 +50,7 @@ fn observes_dynamic_load() {
     let bytes = &crate::fixture::fixtures().provider;
     let raw = Loader::new()
         .with_data::<LoadState>()
-        .run(Domain::without_tls(AddressSpaceId::PROCESS))
+        .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
         .with_observer(Recorder)
         .load_dylib(ElfBinary::new("observed.so", bytes))
         .expect("observed dynamic image should load");

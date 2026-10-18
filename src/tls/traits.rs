@@ -1,6 +1,6 @@
 use super::{
-    TlsContext, TlsDescBinding, TlsDescRequest, TlsDescSetup, TlsImageSource, TlsIndex, TlsInfo,
-    TlsModule, TlsModuleId, TlsRequest,
+    TlsContext, TlsDescBinding, TlsDescRequest, TlsDescSetup, TlsIndex, TlsInfo, TlsModuleId,
+    TlsRegistration, TlsRequest, TlsTemplate,
 };
 use crate::{
     Result, TlsError,
@@ -36,7 +36,7 @@ pub unsafe trait TlsProvider: Send + Sync + 'static {
     /// `context` must be the metadata assigned when this provider was registered.
     /// The entry may have since been removed; retained provider resources must
     /// remain usable, or the operation must report unavailable storage.
-    unsafe fn publish(&self, _context: &TlsContext, _source: TlsImageSource) -> Result<()> {
+    unsafe fn publish(&self, _context: &TlsContext, _source: TlsTemplate) -> Result<()> {
         Err(TlsError::ModuleMismatch.into())
     }
 
@@ -84,15 +84,15 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
     ///
     /// The returned registration must belong to this resolver's runtime and
     /// module-ID namespace, with the entry returned by [`Self::bind_tls_get_addr`].
-    /// On success, the caller owns the registration and must call [`Self::unregister`]
-    /// exactly once after its last use. The loader attaches that responsibility to
-    /// the loaded image. Cloning or dropping [`TlsModule`] only affects metadata.
+    /// The returned owner unregisters automatically after its last use. The loader
+    /// transfers it into the loaded image. Cloning [`TlsModule`](super::TlsModule)
+    /// only copies metadata.
     /// An error must leave no newly registered module behind.
     ///
     /// # Errors
     ///
     /// Returns an error if the requested placement cannot be satisfied.
-    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<TlsModule>;
+    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<TlsRegistration>;
 
     /// Publishes the final relocated template for a registered TLS module.
     ///
@@ -104,12 +104,11 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
     /// and the caller must keep the registration alive throughout publication.
     /// Call at most once per registration. Repeated publication is a lifecycle
     /// contract violation and may panic.
-    fn publish(&self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()>;
+    fn publish(&self, source: TlsTemplate, mod_id: TlsModuleId) -> Result<()>;
 
-    /// Releases a registration after its last use.
-    /// The owning image calls this on drop, including after loading fails.
-    /// Callers that register directly must arrange equivalent cleanup. Borrowed
-    /// imports must never unregister the registration they reference.
+    /// Removes a registration on behalf of its [`TlsRegistration`] cleanup.
+    /// Runtime implementations use this operation from the owner's release
+    /// closure. Users drop the owner instead of calling this method directly.
     fn unregister(&self, mod_id: TlsModuleId);
 
     /// Returns the target-visible `__tls_get_addr` entry point.
@@ -117,7 +116,7 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
     /// Resolvers sharing this entry must share its module-ID namespace. IDs must
     /// not be reused while code or descriptors can still reference them.
     /// The entry and its namespace must remain unchanged for the lifetime of the
-    /// resolver and every clone. [`TlsModule`] captures the entry at registration;
+    /// resolver and every clone. [`TlsModule`](super::TlsModule) captures the entry at registration;
     /// the registration owner must keep the runtime alive for all uses.
     ///
     /// Native same-process resolvers can return a host function pointer. Remote
@@ -137,7 +136,7 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
     #[inline]
     fn bind_tlsdesc(&self, request: TlsDescRequest) -> Result<TlsDescSetup> {
         // The containing image owns these arguments. Module dependencies keep the
-        // defining image alive; imported providers rely on their caller's lifetime contract.
+        // defining image alive; imported providers retain their original storage.
         #[repr(C)]
         struct DynamicArg {
             entry: usize,
@@ -180,11 +179,11 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
 }
 
 impl<Arch: RelocationArch> TlsResolver<Arch> for () {
-    fn register(&self, _info: TlsInfo, _request: TlsRequest) -> Result<TlsModule> {
+    fn register(&self, _info: TlsInfo, _request: TlsRequest) -> Result<TlsRegistration> {
         Err(TlsError::ResolverUnsupported.into())
     }
 
-    fn publish(&self, _source: TlsImageSource, _mod_id: TlsModuleId) -> Result<()> {
+    fn publish(&self, _source: TlsTemplate, _mod_id: TlsModuleId) -> Result<()> {
         Err(TlsError::ResolverUnsupported.into())
     }
 

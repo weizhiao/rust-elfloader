@@ -11,7 +11,7 @@ use crate::{
     sync::Arc,
     tls::TlsModule,
 };
-use core::any::Any;
+use core::{any::Any, ffi::CStr};
 
 use super::search::ModuleSearch;
 
@@ -23,8 +23,8 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
     /// Visits symbols that can participate in exported-symbol lookup.
     fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>));
 
-    /// Returns the name bytes, without a trailing NUL, for a symbol in this table.
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]>;
+    /// Returns a NUL-terminated name borrowed from this export table.
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr>;
 
     /// Looks up one exported symbol by name and optional version.
     fn lookup<'exports>(
@@ -43,8 +43,8 @@ where
     }
 
     #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports [u8]> {
-        Some(self.strtab().get_cstr(symbol.st_name()).to_bytes())
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr> {
+        Some(self.strtab().get_cstr(symbol.st_name()))
     }
 
     #[inline]

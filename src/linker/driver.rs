@@ -11,7 +11,6 @@ use crate::{
     const_builder::NoDrop,
     os::Mmap,
     relocation::{LookupOrder, RelocationArch},
-    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -283,25 +282,23 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, Exec, R, RelocBinder>
-    Linker<Arch, Loader<D, Arch, M, Exec>, R, RelocBinder>
+impl<D: Send + Sync + 'static, Arch, M, R, RelocBinder>
+    Linker<Arch, Loader<D, Arch, M>, R, RelocBinder>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Sets the loader template used to load root modules and dependencies.
     #[allow(clippy::type_complexity)]
-    pub const fn loader<NewD, NewM, NewExec>(
+    pub const fn loader<NewD, NewM>(
         self,
-        loader: Loader<NewD, Arch, NewM, NewExec>,
-    ) -> Linker<Arch, Loader<NewD, Arch, NewM, NewExec>, R, RelocBinder>
+        loader: Loader<NewD, Arch, NewM>,
+    ) -> Linker<Arch, Loader<NewD, Arch, NewM>, R, RelocBinder>
     where
-        Loader<D, Arch, M, Exec>: Copy,
+        Loader<D, Arch, M>: Copy,
         NewD: Send + Sync + 'static,
         NewM: Mmap,
-        NewExec: CodeExecutor<Arch> + Clone,
     {
         let LinkerFields {
             relocator,
@@ -319,14 +316,13 @@ where
 
     /// Reconfigures the underlying loader.
     #[allow(clippy::type_complexity)]
-    pub fn map_loader<NewD, NewM, NewExec>(
+    pub fn map_loader<NewD, NewM>(
         self,
-        configure: impl FnOnce(Loader<D, Arch, M, Exec>) -> Loader<NewD, Arch, NewM, NewExec>,
-    ) -> Linker<Arch, Loader<NewD, Arch, NewM, NewExec>, R, RelocBinder>
+        configure: impl FnOnce(Loader<D, Arch, M>) -> Loader<NewD, Arch, NewM>,
+    ) -> Linker<Arch, Loader<NewD, Arch, NewM>, R, RelocBinder>
     where
         NewD: Send + Sync + 'static,
         NewM: Mmap,
-        NewExec: CodeExecutor<Arch> + Clone,
     {
         Linker {
             loader: configure(self.loader),

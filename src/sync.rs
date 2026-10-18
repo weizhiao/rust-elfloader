@@ -25,6 +25,11 @@ impl<T> OnceCell<T> {
         self.0.get()
     }
 
+    #[inline]
+    pub(crate) fn get_or_init(&self, init: impl FnOnce() -> T) -> &T {
+        self.0.call_once(init)
+    }
+
     pub(crate) fn set(&self, value: T) -> Result<(), T> {
         let mut value = Some(value);
         self.0

@@ -17,7 +17,6 @@ use crate::{
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
-    runtime::CodeExecutor,
     sync::Arc,
     tls::TlsResolver,
 };
@@ -108,14 +107,13 @@ where
     }
 }
 
-impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
-    LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
+impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Resolver, RelocBinder, Obs>
+    LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M>, Resolver, RelocBinder, Tls, Obs>
 where
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
     Resolver: KeyResolver<Arch>,
@@ -153,7 +151,14 @@ where
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = ModuleKey::from(self.linker.resolver.root_key(&root));
-        if let Some(id) = context.module_id(&key) {
+        let existing = context.module_id(&key).or_else(|| {
+            let canonical = self.linker.resolver.normalize_key(&key);
+            (canonical != key.as_ref())
+                .then(|| context.module_id(canonical))
+                .flatten()
+        });
+        if let Some(id) = existing {
+            context.add_alias(id, key)?;
             return Ok(Some(id));
         }
 
@@ -184,7 +189,13 @@ where
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
-        if let Some(prepared) = PreparedLoad::visible(context, key) {
+        let existing = PreparedLoad::visible(context, key).or_else(|| {
+            let canonical = self.linker.resolver.normalize_key(key);
+            (canonical != key)
+                .then(|| PreparedLoad::visible(context, canonical))
+                .flatten()
+        });
+        if let Some(prepared) = existing {
             return Ok(prepared);
         }
         let key = ModuleKey::from(key);

@@ -10,8 +10,7 @@ use elf_loader::{
     linker::{GraphModule, LdCache, SearchConfig, SearchPathResolver},
     relocation::RelocationArch,
     tls::{
-        DefaultTlsResolver, TlsContext, TlsIndex, TlsInfo, TlsModule, TlsModuleId, TlsProvider,
-        TlsResolver,
+        DefaultTlsResolver, TlsContext, TlsIndex, TlsInfo, TlsModuleId, TlsProvider, TlsResolver,
     },
 };
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
@@ -100,15 +99,6 @@ fn record_file(kind: &str, soname: &str, path: &Path) {
 
 struct HostModuleData {
     _library: Arc<Library>,
-    tls: Option<TlsModule>,
-}
-
-impl Drop for HostModuleData {
-    fn drop(&mut self) {
-        if let Some(tls) = &self.tls {
-            DefaultTlsResolver::new().unregister(tls.mod_id());
-        }
-    }
 }
 
 struct HostLibrary {
@@ -154,7 +144,7 @@ impl HostLibraries {
 
     pub fn context(&self) -> LinkContext<(), NativeArch, DefaultTlsResolver> {
         let mut context = LinkContext::new(
-            Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
+            Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
         );
         let modules = self
             .libraries
@@ -237,14 +227,11 @@ unsafe fn bridge_exports(
     let (symbols, strings) = elf.dynamic_symbol_table().unwrap().unwrap();
     let versions = elf.symbol_version_table().unwrap();
     let mut module = SyntheticModule::empty(
+        &Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
         soname.to_owned(),
-        Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new())
-            .unwrap()
-            .id(),
     )
     .with_user_data(HostModuleData {
         _library: library.clone(),
-        tls: None,
     });
     if let Some(header) = elf
         .segments()
@@ -276,7 +263,6 @@ unsafe fn bridge_exports(
         };
         let tls =
             unsafe { DefaultTlsResolver::new().register_provider(info, None, provider) }.unwrap();
-        module.user_data_mut().tls = Some(tls.clone());
         module = module.with_tls(tls).unwrap();
     }
     for (index, symbol) in symbols.iter().enumerate().skip(1) {
@@ -293,7 +279,11 @@ unsafe fn bridge_exports(
                 is_default: !definition.hidden,
             });
         let mut export = if symbol.st_symtype() == abi::STT_TLS {
-            SyntheticSymbol::tls(name, symbol.st_value as usize, symbol.st_size as usize)
+            SyntheticSymbol::tls(
+                c_name.as_c_str(),
+                symbol.st_value as usize,
+                symbol.st_size as usize,
+            )
         } else {
             let address = unsafe {
                 match &version {
@@ -312,9 +302,10 @@ unsafe fn bridge_exports(
 
             // Native lookup resolves IFUNCs; publish the resulting callable address.
             if symbol.st_symtype() == abi::STT_OBJECT {
-                SyntheticSymbol::object(name, address.cast(), symbol.st_size as usize)
+                SyntheticSymbol::object(c_name.as_c_str(), address.cast(), symbol.st_size as usize)
             } else {
-                SyntheticSymbol::function(name, address.cast()).with_size(symbol.st_size as usize)
+                SyntheticSymbol::function(c_name.as_c_str(), address.cast())
+                    .with_size(symbol.st_size as usize)
             }
         };
         if symbol.st_bind() == abi::STB_WEAK {

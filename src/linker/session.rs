@@ -216,6 +216,13 @@ where
             .set_direct_deps(direct_deps);
     }
 
+    pub(crate) fn set_module_deps(&mut self, slot: ModuleSlot, direct_deps: Box<[ModuleSlot]>) {
+        self.modules
+            .get_mut(&slot)
+            .expect("session entry must exist for a staged module")
+            .direct_deps = direct_deps;
+    }
+
     pub(crate) fn stage_dynamic(
         &mut self,
         slot: ModuleSlot,

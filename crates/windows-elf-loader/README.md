@@ -21,10 +21,11 @@ fn main() {
         println!("{}", s);
     }
     // Symbols required by dynamic library liba.so
+    let domain = Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap();
     let host = SyntheticModule::new(
+        &domain,
         "__host",
-        Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap().id(),
-        [SyntheticSymbol::function("print", print as *const ())],
+        [SyntheticSymbol::function(c"print", print as *const ())],
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
     // Load and relocate dynamic library liba.so

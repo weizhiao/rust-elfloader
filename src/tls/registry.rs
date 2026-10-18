@@ -1,4 +1,4 @@
-use super::{TlsBinding, TlsImageSource, TlsInfo, TlsModuleId, TlsProvider, TlsTpOffset};
+use super::{TlsBinding, TlsInfo, TlsModuleId, TlsProvider, TlsTemplate, TlsTpOffset};
 use crate::{
     Result, TlsError,
     sync::{Arc, arc_unsize},
@@ -72,7 +72,10 @@ impl TlsRegistryEntry {
     /// Publishes a relocated template according to the provider's policy.
     /// Call at most once per registration, including across clones of this entry.
     /// Repeated publication may panic.
-    pub fn publish(&self, source: TlsImageSource) -> Result<()> {
+    pub fn publish(&self, source: TlsTemplate) -> Result<()> {
+        if source.len() != self.context.info().filesz {
+            return Err(TlsError::InvalidInfo.into());
+        }
         // SAFETY: Registry construction binds this context to this provider.
         unsafe { self.owner.0.publish(&self.context, source) }
     }
@@ -221,18 +224,7 @@ impl Default for TlsRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        sync::{Arc, arc_unsize},
-        tls::{TlsImageProvider, TlsImageSource, manager::ManagedTls},
-    };
-
-    struct TestImage;
-
-    impl TlsImageProvider for TestImage {
-        fn tls_image(&self) -> Result<&[u8]> {
-            Ok(&[0; 4])
-        }
-    }
+    use crate::tls::{TlsTemplate, manager::ManagedTls};
 
     fn info() -> TlsInfo {
         TlsInfo {
@@ -281,8 +273,7 @@ mod tests {
         let mut registry = TlsRegistry::new();
         let module =
             unsafe { registry.register(info(), None, &TlsOwner::new(ManagedTls::new())) }.unwrap();
-        let provider = arc_unsize!(Arc::new(TestImage) => dyn TlsImageProvider);
-        let source = TlsImageSource::new(Arc::downgrade(&provider));
+        let source = TlsTemplate::new(&[0; 4]);
 
         let owner = registry.lookup(module.mod_id()).unwrap();
         owner.publish(source.clone()).unwrap();

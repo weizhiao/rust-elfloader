@@ -10,6 +10,9 @@
 //! - [`ElfBinary`] for named byte slices already resident in memory
 //! - blanket [`IntoElfReader`] implementations for `&str`, `String`, `&[u8]`, and `&Vec<u8>`
 
+/// Immutable shared paths retained by loaded modules and C interface metadata.
+pub use module_path::ModulePath;
+
 pub(crate) use backend::checked_read_range as check_read_range;
 pub use backend::{ElfBinary, ElfFile};
 pub use path::{Path, PathBuf, PathStr, PathString};
@@ -17,6 +20,7 @@ pub(crate) use traits::ElfReaderExt;
 pub use traits::{ElfReader, FileBacking, IntoElfReader};
 
 mod backend;
+mod module_path;
 mod path;
 mod traits;
 

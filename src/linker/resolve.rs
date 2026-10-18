@@ -11,15 +11,14 @@ use crate::{
     arch::NativeArch,
     entity::EntitySet,
     image::{
-        DEFAULT_MODULE_SEARCH, ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic,
-        ScannedElf,
+        ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic, ScannedElf,
+        default_module_search,
     },
     input::ModuleSourceId,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
     relocation::RelocationArch,
-    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -138,10 +137,10 @@ where
         slot
     }
 
-    fn stage_module_deps<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec>(
+    fn stage_module_deps<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M>(
         &mut self,
         deps: Vec<ResolvedDependency<'cfg, Arch>>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         mut stage: F,
     ) -> Result<Box<[ModuleSlot]>>
     where
@@ -152,7 +151,7 @@ where
             &mut Self,
             ModuleKey,
             ResolvedKey<'cfg, Arch>,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         ) -> Result<ModuleSlot>,
     {
         let mut direct_deps = Vec::with_capacity(deps.len());
@@ -214,7 +213,7 @@ where
     {
         let search = caller
             .and_then(|slot| self.search(slot))
-            .unwrap_or(&DEFAULT_MODULE_SEARCH);
+            .unwrap_or_else(|| default_module_search());
         let loaders = |visitor: &mut LoaderVisitor<'_>| match caller {
             Some(slot) => self.visit_loaders(slot, visitor),
             None => Ok(()),
@@ -233,7 +232,7 @@ where
         Resolver: KeyResolver<Arch>,
     {
         let resolved = self.resolve_root_input(root, caller, resolver)?;
-        let (resolved, _) = resolved.into_parts();
+        let (resolved, _, _) = resolved.into_parts();
         let source = match resolved {
             ResolvedKind::Load(reader) => reader.source_id(),
             ResolvedKind::Module { module, .. } => module.source_id(),
@@ -241,10 +240,10 @@ where
         Ok(self.module_for_source(source))
     }
 
-    fn direct_deps_for<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec, Resolver>(
+    fn direct_deps_for<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Resolver>(
         &mut self,
         slot: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
         stage: &mut F,
     ) -> Result<&[ModuleSlot]>
@@ -253,13 +252,12 @@ where
         Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ModuleKey,
             ResolvedKey<'cfg, Arch>,
             ModuleSlot,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         ) -> Result<ModuleSlot>,
     {
         if !self.session.contains_pending(slot) && self.committed.contains_module(slot) {
@@ -285,7 +283,13 @@ where
                     let needed = source
                         .needed(idx)
                         .expect("DT_NEEDED index must be within the parsed dependency list");
-                    if let Some(dep) = self.known_module(needed) {
+                    let existing = self.known_module(needed).or_else(|| {
+                        let canonical = resolver.normalize_key(needed);
+                        (canonical != needed)
+                            .then(|| self.known_module(canonical))
+                            .flatten()
+                    });
+                    if let Some(dep) = existing {
                         push_dep(&mut direct_deps, dep);
                         continue;
                     }
@@ -306,10 +310,10 @@ where
             .expect("resolved module must retain its direct dependencies"))
     }
 
-    fn resolve_dependency_graph_with<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec, Resolver>(
+    fn resolve_dependency_graph_with<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Resolver>(
         &mut self,
         root: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
         mut stage: F,
     ) -> Result<()>
@@ -318,13 +322,12 @@ where
         Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ModuleKey,
             ResolvedKey<'cfg, Arch>,
             ModuleSlot,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         ) -> Result<ModuleSlot>,
     {
         if !self.session.contains_pending(root) {
@@ -360,12 +363,12 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn resolve_root<Obs, M, Exec, Resolver>(
+    pub(crate) fn resolve_root<Obs, M, Resolver>(
         &mut self,
         root: Resolver::Root,
         request_key: ModuleKey,
         caller: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
     ) -> Result<ModuleSlot>
     where
@@ -373,7 +376,6 @@ where
         Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap<Region = R>,
-        Exec: CodeExecutor<Arch> + Clone,
     {
         let resolved = self.resolve_root_input(root, caller, resolver)?;
         let root = self.stage(request_key, resolved, caller, loader)?;
@@ -381,21 +383,21 @@ where
         Ok(root)
     }
 
-    pub(crate) fn stage<'cfg, Obs, M, Exec>(
+    pub(crate) fn stage<'cfg, Obs, M>(
         &mut self,
         entry_key: ModuleKey,
         resolved: ResolvedKey<'cfg, Arch>,
         parent: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
     ) -> Result<ModuleSlot>
     where
         D: Default,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
-        Exec: CodeExecutor<Arch> + Clone,
     {
-        let (resolved, pinned) = resolved.into_parts();
+        let (resolved, pinned, aliases) = resolved.into_parts();
+        let mut module_deps = None;
         let slot = if let Some(slot) = self.known_module(&entry_key) {
             slot
         } else {
@@ -415,25 +417,33 @@ where
                         self.session.bind_key(entry_key, slot);
                         slot
                     } else {
-                        let direct_deps =
-                            self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                                ctx.stage::<Obs, M, Exec>(key, dep, parent, loader)
-                            })?;
-                        self.stage_module(entry_key, module, direct_deps)
+                        module_deps = Some(deps);
+                        self.stage_module(entry_key, module, Box::default())
                     }
                 }
             }
         };
+        // Publish names into the pending graph before descending into supplied
+        // dependencies, so aliases and cycles resolve to this same instance.
+        for alias in aliases {
+            self.session.bind_key(alias, slot);
+        }
+        if let Some(deps) = module_deps {
+            let direct_deps = self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
+                ctx.stage::<Obs, M>(key, dep, parent, loader)
+            })?;
+            self.session.set_module_deps(slot, direct_deps);
+        }
         if pinned {
             self.session.pin(slot);
         }
         Ok(slot)
     }
 
-    pub(super) fn resolve_graph<Obs, M, Exec, Resolver>(
+    pub(super) fn resolve_graph<Obs, M, Resolver>(
         &mut self,
         root: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
     ) -> Result<()>
     where
@@ -442,7 +452,6 @@ where
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
-        Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(
             root,
@@ -457,12 +466,12 @@ impl<Arch, Meta> ResolveContext<'_, Arch, ScannedDynamic<Arch>, Meta>
 where
     Arch: RelocationArch,
 {
-    pub(crate) fn resolve_root<Tls: TlsResolver<Arch>, D, Obs, M, Exec, Resolver>(
+    pub(crate) fn resolve_root<Tls: TlsResolver<Arch>, D, Obs, M, Resolver>(
         &mut self,
         root: Resolver::Root,
         request_key: ModuleKey,
         caller: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
     ) -> Result<ModuleSlot>
     where
@@ -470,7 +479,6 @@ where
         Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
     {
         let resolved = self.resolve_root_input(root, caller, resolver)?;
         let root = self.stage(request_key, resolved, caller, loader)?;
@@ -478,20 +486,20 @@ where
         Ok(root)
     }
 
-    pub(crate) fn stage<Tls: TlsResolver<Arch>, D, Obs, M, Exec>(
+    pub(crate) fn stage<Tls: TlsResolver<Arch>, D, Obs, M>(
         &mut self,
         entry_key: ModuleKey,
         resolved: ResolvedKey<'static, Arch>,
         parent: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
     ) -> Result<ModuleSlot>
     where
         D: Default + Send + Sync + 'static,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
     {
-        let (resolved, pinned) = resolved.into_parts();
+        let (resolved, pinned, aliases) = resolved.into_parts();
+        let mut module_deps = None;
         let slot = if let Some(slot) = self.known_module(&entry_key) {
             slot
         } else {
@@ -513,25 +521,33 @@ where
                         self.session.bind_key(entry_key, slot);
                         slot
                     } else {
-                        let direct_deps =
-                            self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                                ctx.stage::<Tls, D, Obs, M, Exec>(key, dep, parent, loader)
-                            })?;
-                        self.stage_module(entry_key, module, direct_deps)
+                        module_deps = Some(deps);
+                        self.stage_module(entry_key, module, Box::default())
                     }
                 }
             }
         };
+        // Publish names into the pending graph before descending into supplied
+        // dependencies, so aliases and cycles resolve to this same instance.
+        for alias in aliases {
+            self.session.bind_key(alias, slot);
+        }
+        if let Some(deps) = module_deps {
+            let direct_deps = self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
+                ctx.stage::<Tls, D, Obs, M>(key, dep, parent, loader)
+            })?;
+            self.session.set_module_deps(slot, direct_deps);
+        }
         if pinned {
             self.session.pin(slot);
         }
         Ok(slot)
     }
 
-    fn resolve_graph<Tls: TlsResolver<Arch>, D, Obs, M, Exec, Resolver>(
+    fn resolve_graph<Tls: TlsResolver<Arch>, D, Obs, M, Resolver>(
         &mut self,
         root: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
     ) -> Result<()>
     where
@@ -539,7 +555,6 @@ where
         Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(
             root,

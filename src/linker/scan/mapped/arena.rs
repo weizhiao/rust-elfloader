@@ -268,13 +268,14 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let root = context
             .insert(GraphModule::new(
                 "root",
                 SyntheticModule::empty(
+                    &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
                     "root",
-                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                 ),
             ))
             .unwrap();

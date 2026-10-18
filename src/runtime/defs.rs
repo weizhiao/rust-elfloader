@@ -1,13 +1,14 @@
+use super::{CodeExecutor, NativeCodeExecutor};
 use crate::{
     Error, Result,
     arch::NativeArch,
     memory::VmAddr,
     relocation::RelocationArch,
-    sync::{AtomicUsize, Ordering},
+    sync::{Arc, AtomicUsize, Ordering, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
-use core::{fmt, marker::PhantomData};
+use core::fmt;
 
 static NEXT_ADDRESS_SPACE_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -93,20 +94,25 @@ impl fmt::Display for DomainId {
 /// A fixed runtime domain shared by loader runs, link contexts, and loaded images.
 /// Module scopes retain only its [`DomainId`] for compatibility checks.
 ///
-/// The resolver and compatibility identity are established together and cannot be
-/// replaced independently. Independently constructed domains with the same address
+/// The resolver, executor and compatibility identity are established together and
+/// cannot be replaced independently. Independently constructed domains with the same address
 /// space and TLS entry are compatible, as required by [`TlsResolver`]'s namespace
 /// contract. Clone this value to reuse its runtime without querying the entry again.
 pub struct Domain<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     id: DomainId,
     tls: Tls,
-    arch: PhantomData<fn() -> Arch>,
+    executor: Arc<dyn CodeExecutor<Arch>>,
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
     /// Creates a TLS-enabled domain. Entry lookup failures are propagated, never
-    /// interpreted as disabling TLS. The resolver must target `address_space`.
-    pub fn new(address_space: AddressSpaceId, tls: Tls) -> Result<Self> {
+    /// interpreted as disabling TLS. Both the resolver and executor must target
+    /// `address_space` and agree on the meaning of module addresses.
+    pub fn new(
+        address_space: AddressSpaceId,
+        tls: Tls,
+        executor: Arc<dyn CodeExecutor<Arch>>,
+    ) -> Result<Self> {
         let entry = tls.bind_tls_get_addr()?;
         Ok(Self {
             id: DomainId {
@@ -114,8 +120,13 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
                 tls_entry: Some(entry),
             },
             tls,
-            arch: PhantomData,
+            executor,
         })
+    }
+
+    /// Returns the shared executor used by every module in this domain.
+    pub fn executor(&self) -> &Arc<dyn CodeExecutor<Arch>> {
+        &self.executor
     }
 
     /// Returns the immutable identity used for module compatibility checks.
@@ -131,15 +142,39 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
 
 impl<Arch: RelocationArch> Domain<Arch, ()> {
     /// Creates a domain with TLS explicitly disabled, without querying an entry.
-    pub const fn without_tls(address_space: AddressSpaceId) -> Self {
+    pub fn without_tls(
+        address_space: AddressSpaceId,
+        executor: Arc<dyn CodeExecutor<Arch>>,
+    ) -> Self {
         Self {
             id: DomainId {
                 address_space,
                 tls_entry: None,
             },
             tls: (),
-            arch: PhantomData,
+            executor,
         }
+    }
+}
+
+impl<Tls: TlsResolver<NativeArch>> Domain<NativeArch, Tls> {
+    /// Creates a TLS-enabled domain executing code in the current process.
+    pub fn native_with_tls(address_space: AddressSpaceId, tls: Tls) -> Result<Self> {
+        Self::new(
+            address_space,
+            tls,
+            arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<NativeArch>),
+        )
+    }
+}
+
+impl Domain<NativeArch, ()> {
+    /// Creates a TLS-disabled domain executing code in the current process.
+    pub fn native_without_tls(address_space: AddressSpaceId) -> Self {
+        Self::without_tls(
+            address_space,
+            arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<NativeArch>),
+        )
     }
 }
 
@@ -148,7 +183,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for Domain<Arch, Tls> {
         Self {
             id: self.id,
             tls: self.tls.clone(),
-            arch: PhantomData,
+            executor: self.executor.clone(),
         }
     }
 }

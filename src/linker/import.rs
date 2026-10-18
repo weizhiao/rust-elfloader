@@ -557,8 +557,8 @@ mod tests {
 
     fn module(name: &str) -> ModuleHandle<NativeArch> {
         ModuleHandle::new(SyntheticModule::empty(
+            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
             name,
-            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
         ))
     }
 
@@ -568,7 +568,8 @@ mod tests {
         let second = module("second");
         let first_instance = first.state().instance_id();
         let second_instance = second.state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
         let leases = context
             .insert_batch([
@@ -598,7 +599,8 @@ mod tests {
 
     #[test]
     fn duplicate_keys_keep_order() {
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let leases = context
             .insert_batch([
                 GraphModule::new("shared", module("first")),
@@ -619,7 +621,8 @@ mod tests {
     fn uses_committed_dependency() {
         let dependency = module("dependency");
         let dependency_instance = dependency.state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let dependency = context
             .insert(GraphModule::new("dependency", dependency))
             .unwrap();
@@ -644,7 +647,8 @@ mod tests {
     #[test]
     fn missing_dependency_does_not_publish() {
         let missing = module("missing").state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let error = match context
             .insert_batch([GraphModule::new("root", module("root")).dependencies([missing])])
         {
@@ -666,7 +670,8 @@ mod tests {
     #[test]
     fn reuses_exact_instance() {
         let module = module("shared");
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let first = context
             .insert(GraphModule::new("first", module.clone()))
             .unwrap();

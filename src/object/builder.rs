@@ -7,11 +7,10 @@ use crate::{
     RelocationError, Result,
     arch::NativeArch,
     elf::{ElfSectionType, ElfShdr, Lifecycle},
-    input::{ModuleSourceId, PathBuf},
+    input::{ModulePath, ModuleSourceId, PathBuf},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::ObjectArch,
-    runtime::{CodeExecutor, Domain},
-    sync::Arc,
+    runtime::Domain,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
@@ -23,7 +22,7 @@ pub(crate) struct ObjectBuilder<
     Arch: ObjectArch = NativeArch,
     R: RegionAccess = HostRegion,
 > {
-    pub(crate) path: PathBuf,
+    pub(crate) path: ModulePath,
     pub(crate) source_id: ModuleSourceId,
     pub(crate) sections: ObjectSections<Arch::Layout>,
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
@@ -33,7 +32,6 @@ pub(crate) struct ObjectBuilder<
     pub(crate) section_segments: SectionSegments<Arch>,
     pub(crate) pltgot: PltGotSection,
     pub(crate) user_data: D,
-    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     pub(crate) domain: Domain<Arch, Tls>,
 }
 
@@ -98,9 +96,9 @@ where
         section_segments: SectionSegments<Arch>,
         pltgot: PltGotSection,
         user_data: D,
-        executor: Arc<dyn CodeExecutor<Arch>>,
         domain: Domain<Arch, T>,
     ) -> Result<Self> {
+        let path = ModulePath::try_from(path).map_err(|_| crate::IoError::NullByteInPath)?;
         let shdrs = sections.headers();
         let ObjectSectionData { symtab, init, fini } = {
             let memory = segments.view();
@@ -118,7 +116,6 @@ where
             init,
             fini,
             user_data,
-            executor,
             domain,
         })
     }

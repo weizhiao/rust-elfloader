@@ -16,8 +16,8 @@ use crate::{
     relocation::{Relocatable, RelocateArgs, RelocationArch},
     runtime::Domain,
     segment::ElfSegments,
-    sync::{Arc, arc_downgrade_unsize},
-    tls::{ImageTlsState, TlsImageProvider, TlsImageSource, TlsModule, TlsRequest, TlsResolver},
+    sync::Arc,
+    tls::{ImageTlsState, TlsModule, TlsRequest, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -135,18 +135,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
     for StaticExecInner<D, Arch, R, Tls>
 {
     fn drop(&mut self) {
-        self.tls.clear_descriptors();
-        if let Some(module) = self.tls.owned_module() {
-            self.domain.tls_resolver().unregister(module.mod_id());
-        }
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    TlsImageProvider for StaticExecInner<D, Arch, R, Tls>
-{
-    fn tls_image(&self) -> Result<&[u8]> {
-        self.tls.image()
+        self.tls.release();
     }
 }
 
@@ -459,7 +448,7 @@ where
                 .register(*info, TlsRequest::Static(None))?;
             ImageTlsState::owned(module, image)
         } else {
-            ImageTlsState::borrowed(None)
+            ImageTlsState::empty()
         };
 
         let inner = StaticExecInner {
@@ -478,12 +467,10 @@ where
         let inner = Arc::new(inner);
 
         if let Some(module) = inner.tls.module() {
-            // Upgrading this provider retains the mapping for the whole template read.
-            let provider = arc_downgrade_unsize!(&inner => dyn TlsImageProvider);
             inner
                 .domain
                 .tls_resolver()
-                .publish(TlsImageSource::new(provider), module.mod_id())?;
+                .publish(inner.tls.template()?, module.mod_id())?;
         }
 
         Ok(StaticExec { inner })

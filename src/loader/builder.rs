@@ -6,9 +6,8 @@ use crate::{
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
     relocation::RelocationArch,
-    runtime::{CodeExecutor, Domain},
+    runtime::Domain,
     segment::{ElfSegments, MemoryProtection},
-    sync::Arc,
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -62,9 +61,6 @@ pub(crate) struct ImageBuilder<
 
     /// User-defined data
     pub(crate) user_data: D,
-
-    /// Runtime-code executor used by loaded dynamic cores.
-    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 
     /// Fixed runtime domain selected by the loader run.
     pub(crate) domain: Domain<Arch, Tls>,
@@ -124,7 +120,6 @@ where
         static_tls: bool,
         page_size: usize,
         user_data: D,
-        executor: Arc<dyn CodeExecutor<Arch>>,
         domain: Domain<Arch, Tls>,
     ) -> Self {
         Self {
@@ -139,7 +134,6 @@ where
             page_size,
             segments,
             user_data,
-            executor,
             domain,
             interp: None,
             eh_frame_hdr: None,

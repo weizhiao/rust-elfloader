@@ -5,7 +5,7 @@ use crate::{
     Result, TlsError,
     elf::{ElfLayout, ElfPhdr, ElfProgramType},
     memory::VmAddr,
-    sync::Weak,
+    sync::Arc,
 };
 
 pub(crate) const TLS_GET_ADDR_SYMBOL: &[u8] = b"__tls_get_addr";
@@ -55,42 +55,32 @@ impl TlsInfo {
     }
 }
 
-/// A cloneable source for a relocated TLS initialization image.
+/// Immutable initialization bytes copied after TLS relocations have completed.
 ///
-/// The source may refer back to the loaded image instead of owning a copy of the
-/// image bytes. Users must consume the borrowed image inside
-/// [`with_image`](Self::with_image).
-#[derive(Clone)]
-pub struct TlsImageSource {
-    provider: Weak<dyn TlsImageProvider>,
-}
+/// The snapshot contains only `filesz` bytes. Sharing it never retains the ELF
+/// image, executes its finalizers, or requires a loader callback.
+#[derive(Clone, Debug)]
+pub struct TlsTemplate(Arc<[u8]>);
 
-impl core::fmt::Debug for TlsImageSource {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TlsImageSource").finish_non_exhaustive()
+impl TlsTemplate {
+    /// Copies the relocated initialization bytes into shared owned storage.
+    pub fn new(bytes: &[u8]) -> Self {
+        Self(Arc::from(bytes))
     }
 }
 
-impl TlsImageSource {
-    #[inline]
-    pub(crate) fn new(provider: Weak<dyn TlsImageProvider>) -> Self {
-        Self { provider }
-    }
-
-    /// Borrows the TLS initialization image while the backing image is alive.
-    /// The backing image is released after the callback returns its result.
-    #[inline]
-    pub fn with_image<R>(&self, f: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
-        let provider = self
-            .provider
-            .upgrade()
-            .ok_or(TlsError::TemplateUnavailable)?;
-        f(provider.tls_image()?)
+impl AsRef<[u8]> for TlsTemplate {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
-pub(crate) trait TlsImageProvider: Send + Sync {
-    fn tls_image(&self) -> Result<&[u8]>;
+impl core::ops::Deref for TlsTemplate {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
 }
 
 /// Two-word TLSDESC binding written into a loaded image.

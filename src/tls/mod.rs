@@ -1,9 +1,9 @@
 //! TLS registration, storage and runtime bindings.
 //!
-//! [`TlsResolver::register`] returns non-owning [`TlsModule`] metadata. The loaded
-//! image owns the registration, publishes its relocated template, and unregisters
-//! on drop. Imported images borrow their registrations under the caller's lifetime
-//! guarantees. [`TlsBinding`] contains only ABI metadata: the module ID and an
+//! [`TlsResolver::register`] returns a unique [`TlsRegistration`] owner. Images
+//! retain it through finalization and descriptor cleanup, then unregister on drop.
+//! [`TlsModule`] provides non-owning ABI metadata. [`TlsTemplate`] owns the
+//! relocated initialization bytes independently of the ELF mapping. [`TlsBinding`] contains only ABI metadata: the module ID and an
 //! optional stable thread-pointer offset.
 //!
 //! [`TlsProvider`] supplies storage through one interface for template publication,
@@ -34,15 +34,15 @@ mod state;
 mod thread;
 mod traits;
 
-pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider};
+pub(crate) use defs::TLS_GET_ADDR_SYMBOL;
 pub(crate) use state::ImageTlsState;
 
 pub use defs::{
-    TlsBinding, TlsDescBinding, TlsDescRequest, TlsDescSetup, TlsImageSource, TlsIndex, TlsInfo,
-    TlsModuleId, TlsRequest, TlsTpOffset,
+    TlsBinding, TlsDescBinding, TlsDescRequest, TlsDescSetup, TlsIndex, TlsInfo, TlsModuleId,
+    TlsRequest, TlsTemplate, TlsTpOffset,
 };
 pub use manager::DefaultTlsResolver;
-pub use module::TlsModule;
+pub use module::{TlsModule, TlsRegistration};
 pub use registry::{TlsContext, TlsOwner, TlsRegistry, TlsRegistryEntry, TlsRegistrySnapshot};
 pub(crate) use relocation::TlsRelocOutcome;
 pub use thread::ThreadDtv;

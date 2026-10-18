@@ -15,9 +15,9 @@ fn host_symbols() -> SyntheticModule {
     }
 
     SyntheticModule::new(
+        &Domain::<elf_loader::arch::NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
         "__host",
-        Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
-        [SyntheticSymbol::function("print", print as *const ())],
+        [SyntheticSymbol::function(c"print", print as *const ())],
     )
 }
 

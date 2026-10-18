@@ -45,11 +45,11 @@
 //! }
 //!
 //! fn main() -> Result<()> {
-//!     let domain = Domain::without_tls(AddressSpaceId::PROCESS);
+//!     let domain = Domain::native_without_tls(AddressSpaceId::PROCESS);
 //!     let host = SyntheticModule::new(
+//!         &domain,
 //!         "__host",
-//!         domain.id(),
-//!         [SyntheticSymbol::function("host_double", host_double as *const ())],
+//!         [SyntheticSymbol::function(c"host_double", host_double as *const ())],
 //!     );
 //!
 //!     let lib = Relocator::new()
@@ -136,7 +136,7 @@
 //!
 //! fn main() -> Result<()> {
 //!     let _raw = Loader::new()
-//!         .run(Domain::without_tls(AddressSpaceId::PROCESS))
+//!         .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
 //!         .with_observer(TraceLoads)
 //!         .load_dylib("path/to/lib.so")?;
 //!

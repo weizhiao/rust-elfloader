@@ -8,7 +8,7 @@ use crate::{
         ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout, parse_dynamic_entries,
     },
     image::{ModuleSearch, SearchPathPool},
-    input::{ElfReader, ElfReaderExt, ModuleSourceId, Path, PathBuf},
+    input::{ElfReader, ElfReaderExt, ModulePath, ModuleSourceId, Path, PathBuf},
     loader::ScanBuilder,
     relocation::RelocationArch,
 };
@@ -554,6 +554,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let soname = soname.map(|offset| string_at(&strtab, offset).to_bytes());
         let runpath = runpath.map(|offset| string_at(&strtab, offset).to_bytes());
         let rpath = rpath.map(|offset| string_at(&strtab, offset).to_bytes());
+        let path = ModulePath::try_from(path).map_err(|_| crate::IoError::NullByteInPath)?;
         let search = match search_paths {
             Some(paths) => paths.module_search(path, soname, runpath, rpath),
             None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),

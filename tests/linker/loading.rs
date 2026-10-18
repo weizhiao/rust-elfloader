@@ -168,7 +168,7 @@ fn commits_resolver_modules() {
         root_data: fixtures.dependent,
         dep: dep.clone(),
     };
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let linker = Linker::new().resolver(resolver);
     let root = linker
@@ -214,7 +214,7 @@ fn commits_resolver_modules() {
 
 #[test]
 fn loads_module_root() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(SyntheticRootResolver);
 
     let first = linker.run().load(&mut context, "root").unwrap();
@@ -247,7 +247,7 @@ fn loads_module_root() {
 
 #[test]
 fn loads_resolved_graph() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
         .resolver(ResolvedGraphResolver {
             pin_dependency: false,
@@ -268,7 +268,7 @@ fn loads_resolved_graph() {
 
 #[test]
 fn resolver_pins_dependency() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
         .resolver(ResolvedGraphResolver {
             pin_dependency: true,
@@ -287,13 +287,15 @@ fn resolver_pins_dependency() {
 
 #[test]
 fn resolver_pins_existing_dependency() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let dependency = context
         .insert(GraphModule::new(
             "dep",
             SyntheticModule::empty(
+                &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                    AddressSpaceId::PROCESS,
+                ),
                 "existing",
-                Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             ),
         ))
         .expect("failed to insert dependency");
@@ -317,7 +319,7 @@ fn resolver_pins_existing_dependency() {
 
 #[test]
 fn rollback_removes_resolver_pin() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(ResolvedGraphResolver {
         pin_dependency: true,
     });
@@ -334,13 +336,15 @@ fn rollback_removes_resolver_pin() {
 
 #[test]
 fn rollback_removes_pin_from_existing_dependency() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let dependency = context
         .insert(GraphModule::new(
             "dep",
             SyntheticModule::empty(
+                &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                    AddressSpaceId::PROCESS,
+                ),
                 "existing",
-                Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             ),
         ))
         .unwrap();
@@ -365,7 +369,7 @@ fn rollback_removes_pin_from_existing_dependency() {
 
 #[test]
 fn nodelete_remains_loaded() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
         .resolver(SingleBinaryResolver {
             key: "nodelete",
@@ -392,7 +396,7 @@ fn nodelete_rolls_back_with_failed_load() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::failing(Arc::clone(&calls)));
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let prepared = run.prepare_load(&mut context, "nodelete").unwrap();
     let relocated = run.relocate(prepared).unwrap();
     let failed = relocated
@@ -410,7 +414,7 @@ fn scan_loads_synthetic_dependency() {
     let resolver = SyntheticDependencyResolver {
         root_data: &fixtures().synthetic_root.data,
     };
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let root = Linker::new()
         .resolver(resolver)
@@ -445,7 +449,7 @@ fn scan_loads_synthetic_dependency() {
 
 #[test]
 fn unresolved_dependency_does_not_commit() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let error = Linker::new()
         .resolver(SingleBinaryResolver {
@@ -471,7 +475,7 @@ fn publish_preserves_key_order() {
         name: "pending.so",
         data: fixtures().provider,
     });
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let mut run = linker.run();
     let prepared = run
         .prepare_load(&mut context, "root")
@@ -481,8 +485,10 @@ fn publish_preserves_key_order() {
         .insert(GraphModule::new(
             "root",
             SyntheticModule::empty(
+                &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                    AddressSpaceId::PROCESS,
+                ),
                 "replacement",
-                Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             ),
         ))
         .expect("failed to publish competing root");
@@ -504,7 +510,7 @@ fn publish_rejects_occupied_source() {
             .load_dylib(ElfBinary::new(name, fixtures().provider).with_source_id(source))
             .expect("failed to load provider")
     };
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "unused",
         name: "unused.so",
@@ -547,7 +553,7 @@ fn publish_rejects_reloaded_dependency() {
         )
         .relocate()
         .expect("failed to relocate dependency");
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let dep_lease = context
         .insert(GraphModule::new(DEP_KEY, dep.clone()))
         .expect("failed to insert dependency");
@@ -578,7 +584,7 @@ fn publish_rejects_reloaded_dependency() {
 #[test]
 fn publish_rejects_reloaded_global_provider() {
     let source = ModuleSourceId::fresh();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let provider = context
         .insert(GraphModule::new(
             DEP_KEY,
@@ -620,7 +626,7 @@ fn publish_rejects_reloaded_global_provider() {
 
 #[test]
 fn global_scope_binds_and_retains_provider() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let provider = context
         .insert(GraphModule::new(
             DEP_KEY,
@@ -657,13 +663,15 @@ fn global_scope_binds_and_retains_provider() {
 
 #[test]
 fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let dependency = context
         .insert(GraphModule::new(
             "dependency",
             SyntheticModule::empty(
+                &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                    AddressSpaceId::PROCESS,
+                ),
                 "dependency",
-                Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             ),
         ))
         .unwrap();
@@ -677,9 +685,10 @@ fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
             GraphModule::new(
                 "root",
                 SyntheticModule::empty(
+                    &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                        AddressSpaceId::PROCESS,
+                    ),
                     "root",
-                    Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS)
-                        .id(),
                 ),
             )
             .dependencies([dependency_instance]),
@@ -689,8 +698,10 @@ fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
         .insert(GraphModule::new(
             "preload",
             SyntheticModule::empty(
+                &Domain::<elf_loader::arch::NativeArch>::native_without_tls(
+                    AddressSpaceId::PROCESS,
+                ),
                 "preload",
-                Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             ),
         ))
         .unwrap();
@@ -718,7 +729,7 @@ fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
 fn unused_global_is_not_retained() {
     let global = load_provider("unused-global.so");
     let weak = global.downgrade();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let global = context
         .insert(GraphModule::new("unused-global", global))
         .unwrap();
@@ -737,7 +748,7 @@ fn unused_global_is_not_retained() {
 
 #[test]
 fn observer_binding_retains_provider() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let provider = context
         .insert(GraphModule::new(
             DEP_KEY,
@@ -762,7 +773,7 @@ fn observer_binding_retains_provider() {
 
 #[test]
 fn relocation_reads_current_globals() {
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
@@ -801,7 +812,7 @@ fn publish_rejects_reloaded_root() {
         name: "reloaded_root.so",
         data: fixtures().provider,
     });
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let mut run = linker.run();
     let loaded = run.load(&mut context, "root").unwrap();
     let prepared = run.prepare_load(&mut context, "root").unwrap();
@@ -828,7 +839,8 @@ fn loads_dynamic_exec() {
     let fixtures = fixtures();
 
     for scan_first in [false, true] {
-        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut context =
+            LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
         let linker = Linker::new().resolver(MultiBinaryResolver {
             root: "root",
             modules: vec![
@@ -859,7 +871,7 @@ fn loads_dynamic_exec() {
 #[test]
 fn repeated_loads_acquire_the_root() {
     let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let first = linker
         .run()
@@ -892,7 +904,7 @@ fn repeated_loads_acquire_the_root() {
 fn pinned_dependency_does_not_retain_released_root() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let linker = Linker::new().resolver(dependency_resolver("root.so", "dep.so"));
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = linker
         .run()
         .with_observer(InitRecorder {
@@ -931,7 +943,7 @@ fn pinned_dependency_does_not_retain_released_root() {
 fn rollback_releases_existing_root() {
     let linker = Linker::new().resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
     let mut run = linker.run();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = run
         .load(&mut context, "root")
         .expect("initial load should succeed");
@@ -975,7 +987,7 @@ fn relocates_dependencies_first() {
         }
     }
 
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(resolver);
     let loaded = linker
         .run()
@@ -1001,7 +1013,7 @@ fn phased_load_initializes_dependencies_first() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::new(Arc::clone(&calls)));
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let prepared = run
         .prepare_load(&mut context, "root")
@@ -1054,12 +1066,13 @@ fn publish_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
     let relocated = run.relocate(prepared).expect("relocation should succeed");
-    let mut other_context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut other_context =
+        LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let err = relocated
         .publish(&mut other_context)
@@ -1081,7 +1094,7 @@ fn rollback_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
@@ -1089,7 +1102,8 @@ fn rollback_rejects_other_context() {
     let published = relocated
         .publish(&mut context)
         .expect("publish should succeed");
-    let mut other_context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut other_context =
+        LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let error = published
         .rollback(&mut other_context)
@@ -1115,7 +1129,7 @@ fn failed_init_can_roll_back() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::failing(Arc::clone(&calls)));
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let prepared = run.prepare_load(&mut context, "root").unwrap();
     let relocated = run.relocate(prepared).unwrap();
     let published = relocated.publish(&mut context).unwrap();

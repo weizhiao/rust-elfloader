@@ -10,9 +10,8 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
-    runtime::{CodeExecutor, Domain, NativeCodeExecutor},
+    runtime::Domain,
     segment::ElfSegments,
-    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -286,7 +285,6 @@ where
         force_static_tls,
         1,
         D::default(),
-        arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
         domain,
     );
     builder.build_dynamic(&phdrs, Some(search_paths))

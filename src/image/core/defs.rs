@@ -6,7 +6,7 @@ use crate::{
         DynamicInfo, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState, PltRelocInfo,
         SymbolExports, WeakLocalScope,
     },
-    input::Path,
+    input::ModulePath,
     lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
@@ -193,9 +193,6 @@ pub struct ElfModule<
     /// struct's generic layout.
     pub(crate) runtime: Box<CoreRuntime<Arch>>,
 
-    /// Executor retained for IFUNC and runtime-code resolution.
-    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
-
     /// Lifecycle state shared by every handle for this module.
     pub(crate) state: ModuleState,
 
@@ -278,9 +275,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.dynamic_info.as_ref().map(|info| info.phdrs.as_slice())
     }
 
-    /// Returns the loader source path or caller-provided source identifier.
+    /// Returns the shared loader source path or caller-provided source identifier.
     #[inline]
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &ModulePath {
         self.search.path()
     }
 
@@ -340,7 +337,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     #[inline]
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
-        self.executor.as_ref()
+        self.domain.executor().as_ref()
     }
 
     #[inline]
@@ -353,7 +350,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     #[cold]
     #[inline(never)]
     fn resolve_ifunc(&self, resolver: VmAddr) -> Result<VmAddr> {
-        self.executor.resolve_ifunc(
+        self.domain.executor().resolve_ifunc(
             CodeContext::<Arch>::new(self.search.name(), &self.segments),
             resolver,
         )
@@ -393,7 +390,7 @@ where
                 .module()
                 .ok_or(TlsError::TemplateUnavailable)?
                 .resolve(
-                    self.executor.as_ref(),
+                    self.domain.executor().as_ref(),
                     CodeContext::new(self.name(), &self.segments),
                     symbol.st_value(),
                 )
@@ -427,7 +424,7 @@ where
             .get()
             .expect("lifecycle must be installed before initialization")
             .initializer();
-        let executor = self.executor.as_ref();
+        let executor = self.domain.executor().as_ref();
         initializer.run(self.name(), &self.segments, |ctx, addr| {
             executor.call_lifecycle(ctx, addr)
         })
@@ -438,7 +435,7 @@ where
             return Ok(());
         };
         let finalizer = lifecycle.finalizer();
-        let executor = self.executor.as_ref();
+        let executor = self.domain.executor().as_ref();
         finalizer.run(self.name(), &self.segments, |ctx, addr| {
             executor.call_lifecycle(ctx, addr)
         })
@@ -456,10 +453,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 self.name().escape_ascii()
             );
         }
-        self.tls.clear_descriptors();
-        if let Some(module) = self.tls.owned_module() {
-            self.domain.tls_resolver().unregister(module.mod_id());
-        }
+        self.tls.release();
     }
 }
 

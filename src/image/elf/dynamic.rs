@@ -8,6 +8,7 @@ use crate::{
         ElfDyn, ElfDynamic, ElfDynamicTag, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol,
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
+    input::ModulePath,
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     logging,
@@ -386,9 +387,10 @@ where
         let runpath = dynamic
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
+        let path = ModulePath::try_from(self.path).map_err(|_| crate::IoError::NullByteInPath)?;
         let search = match search_paths {
-            Some(paths) => paths.module_search(self.path, soname, runpath, rpath),
-            None => ModuleSearch::from_dynamic(self.path, soname, runpath, rpath),
+            Some(paths) => paths.module_search(path, soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
         };
 
         let tls = if let Some(info) = &self.tls_info {
@@ -404,7 +406,7 @@ where
             let module = self.domain.tls_resolver().register(*info, request)?;
             ImageTlsState::owned(module, image)
         } else {
-            ImageTlsState::borrowed(None)
+            ImageTlsState::empty()
         };
         let plt = PltRelocInfo::new(dynamic.pltrel.clone(), symtab.clone());
         let state = ModuleState::new(self.source_id, self.domain.id());
@@ -413,7 +415,6 @@ where
         }
         let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
-            executor: self.executor,
             state,
             lifecycle: OnceCell::new(),
             search,

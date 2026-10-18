@@ -11,7 +11,7 @@ use elf_loader::{
 #[test]
 fn loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -44,7 +44,7 @@ fn resolves_committed_by_source_identity() {
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     assert_eq!(
         linker
@@ -73,7 +73,7 @@ fn resolves_committed_by_source_identity() {
 #[test]
 fn inherits_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -124,7 +124,7 @@ fn inherits_rpath() {
 #[cfg(target_arch = "x86_64")]
 fn scan_inherits_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -148,7 +148,7 @@ fn scan_inherits_rpath() {
 #[test]
 fn loads_from_module_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
@@ -177,7 +177,7 @@ fn loads_from_module_rpath() {
 #[test]
 fn loads_mapped_from_module_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
@@ -218,7 +218,7 @@ fn reuses_soname() {
     let alias = dir.join("leaf-implementation.so");
     fs::copy(&fixtures.rpath_leaf_path, &alias).unwrap();
 
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let first = linker
         .run()
@@ -277,7 +277,7 @@ fn reuses_file() {
 
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let first = linker.run().load(&mut context, original.clone()).unwrap();
     let second = linker.run().load(&mut context, alias.clone()).unwrap();
@@ -317,9 +317,9 @@ fn imports_reuse_file() {
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let next = PathBuf::from(next_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut source = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let source_module = linker.run().load(&mut source, original).unwrap();
-    let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut target = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let first = linker.run().load(&mut target, alias).unwrap();
     let imported = target.import(&source, source_module.root()).unwrap();
     assert_eq!(imported.id(), first.root());
@@ -348,7 +348,7 @@ fn rejects_reloaded_file() {
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let mut run = linker.run();
     let loaded = run.load(&mut context, original.clone()).unwrap();
     let prepared = run.prepare_load(&mut context, alias).unwrap();
@@ -371,7 +371,7 @@ fn rejects_reloaded_file() {
 #[cfg(target_arch = "x86_64")]
 fn scan_loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -417,7 +417,7 @@ fn dynamic_dirs_precede_static_dirs() {
     });
     resolver.push_fixed_dir(static_dir);
 
-    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+    let mut context = LinkContext::<()>::new(Domain::native_without_tls(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
         .resolver(resolver)
         .run()

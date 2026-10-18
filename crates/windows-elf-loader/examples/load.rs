@@ -13,14 +13,13 @@ fn main() {
     }
     // Symbols required by dynamic library liba.so
     let host = SyntheticModule::new(
-        "__host",
-        Domain::new(
+        &Domain::native_with_tls(
             AddressSpaceId::PROCESS,
             elf_loader::tls::DefaultTlsResolver::new(),
         )
-        .unwrap()
-        .id(),
-        [SyntheticSymbol::function("print", print as *const ())],
+        .unwrap(),
+        "__host",
+        [SyntheticSymbol::function(c"print", print as *const ())],
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
     // Load and relocate dynamic library liba.so
