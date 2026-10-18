@@ -141,7 +141,10 @@ impl<
     /// # Examples
     /// ```no_run
     /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, Relocator};
-    /// # let mut loader = Loader::new();
+    /// # let config = Loader::new();
+    /// # use elf_loader::{AddressSpaceId, Domain};
+    /// # let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// # let mut loader = config.run(domain);
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
@@ -153,7 +156,10 @@ impl<
     /// A static variable may also be loaded and inspected:
     /// ```no_run
     /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, Relocator};
-    /// # let mut loader = Loader::new();
+    /// # let config = Loader::new();
+    /// # use elf_loader::{AddressSpaceId, Domain};
+    /// # let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// # let mut loader = config.run(domain);
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
@@ -200,7 +206,10 @@ impl<
     /// # Examples
     /// ```no_run
     /// # use elf_loader::{Loader, Relocator, input::ElfFile};
-    /// # let mut loader = Loader::new();
+    /// # let config = Loader::new();
+    /// # use elf_loader::{AddressSpaceId, Domain};
+    /// # let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// # let mut loader = config.run(domain);
     /// # let raw = loader.load_dylib(ElfFile::from_path("target/liba.so").unwrap()).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };

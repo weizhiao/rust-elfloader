@@ -23,6 +23,9 @@ pub(crate) fn load_provider() -> Image {
     Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "provider.so",
                     &crate::fixture::fixtures().provider,
@@ -38,6 +41,9 @@ pub(crate) fn load_lazy(provider: &Image) -> Image {
         .lazy_binder(NativeLazyBinder::new())
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "consumer.so",
                     &crate::fixture::fixtures().consumer,
@@ -54,6 +60,9 @@ pub(crate) fn load_eager(provider: &Image) -> Image {
     Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "consumer.so",
                     &crate::fixture::fixtures().now,

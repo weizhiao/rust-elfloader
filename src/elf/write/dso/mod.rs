@@ -37,7 +37,7 @@ mod tests {
         let expected_addr = image.exports[0].value;
 
         let config = Loader::new().for_arch::<X86_64Arch>();
-        let mut loader = config.run(crate::runtime::Domain::without_tls(
+        let mut loader = config.run(crate::runtime::Domain::new(
             crate::runtime::AddressSpaceId::PROCESS,
             crate::sync::arc_unsize!(crate::sync::Arc::new(crate::runtime::NativeCodeExecutor) => dyn crate::runtime::CodeExecutor<X86_64Arch>),
         ));

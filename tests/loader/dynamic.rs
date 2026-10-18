@@ -71,6 +71,9 @@ fn static_exec() -> &'static [u8] {
 #[test]
 fn loads_dylib() {
     let loaded = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_dylib(ElfBinary::new(
             "provider.so",
             &crate::fixture::fixtures().dylib,
@@ -95,6 +98,9 @@ fn loads_exec() {
     let bytes = crate::fixture::fixtures().exec.as_slice();
 
     let error = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_dylib(ElfBinary::new("dynamic_exec", bytes))
         .expect_err("load_dylib should reject ET_EXEC");
     assert!(matches!(
@@ -104,6 +110,9 @@ fn loads_exec() {
     ));
 
     let loaded = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_dynamic(ElfBinary::new("dynamic_exec", bytes))
         .expect("load_dynamic should accept dynamic ET_EXEC");
     assert!(
@@ -133,6 +142,9 @@ fn loads_scanned_exec() {
     let phdr_count = scanned.phdrs().len();
 
     let loaded = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_scanned_dynamic(scanned)
         .expect("load_scanned_dynamic should accept dynamic ET_EXEC");
     assert_eq!(loaded.phdrs().len(), phdr_count);

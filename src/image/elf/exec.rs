@@ -180,7 +180,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
 /// A mapped but unrelocated executable image.
 ///
-/// Values of this type are returned by [`crate::Loader::load_exec`]. They may
+/// Values of this type are returned by [`crate::LoaderRun::load_exec`]. They may
 /// represent either a dynamic executable that still needs relocation or a
 /// static executable that is already ready to run.
 ///

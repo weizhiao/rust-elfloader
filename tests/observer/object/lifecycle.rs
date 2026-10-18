@@ -1,4 +1,4 @@
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{Module, Relocator};
 
 #[test]
@@ -231,7 +231,7 @@ fn applies_final_protection() {
                 .with_mmap(RecordingMmap {
                     calls: Arc::clone(&calls),
                 })
-                .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+                .run(Domain::native(AddressSpaceId::PROCESS))
                 .with_object_section_groups(groups)
                 .with_observer(ReadOnlyAfterInit { ro_after_init })
                 .load_object(ElfBinary::new("a.o", object))
@@ -347,10 +347,7 @@ fn finalizer_runs_on_drop() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
-                .run(Domain::without_tls(
-                    AddressSpaceId::PROCESS,
-                    Arc::new(executor),
-                ))
+                .run(Domain::new(AddressSpaceId::PROCESS, Arc::new(executor)))
                 .load_object(ElfBinary::new("test_static_fini.o", &object))
                 .expect("failed to load object"),
         )
@@ -432,7 +429,7 @@ fn defers_initialization() {
         .defer_init()
         .run(
             elf_loader::Loader::new()
-                .run(Domain::without_tls(
+                .run(Domain::new(
                     AddressSpaceId::PROCESS,
                     Arc::new(RecordingExecutor(Arc::clone(&calls))),
                 ))

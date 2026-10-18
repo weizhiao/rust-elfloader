@@ -1,7 +1,7 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader, Relocator, Result,
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
@@ -15,7 +15,7 @@ fn host_symbols() -> SyntheticModule {
     }
 
     SyntheticModule::new(
-        &Domain::<elf_loader::arch::NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+        &Domain::<elf_loader::arch::NativeArch>::native(AddressSpaceId::PROCESS),
         "__host",
         [SyntheticSymbol::function(c"print", print as *const ())],
     )
@@ -27,18 +27,30 @@ fn main() -> Result<()> {
 
     let fixtures = fixture_support::ensure_all();
     let base = Relocator::new()
-        .run(LOADER.load_object(fixtures.base_object_str())?)
+        .run(
+            LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
+                .load_object(fixtures.base_object_str())?,
+        )
         .modules([host_symbols()])?
         .relocate()?;
     let middle = Relocator::new()
-        .run(LOADER.load_dylib(fixtures.middle_str())?)
+        .run(
+            LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
+                .load_dylib(fixtures.middle_str())?,
+        )
         .modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
         ])?
         .relocate()?;
     let leaf = Relocator::new()
-        .run(LOADER.load_object(fixtures.leaf_object_str())?)
+        .run(
+            LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
+                .load_object(fixtures.leaf_object_str())?,
+        )
         .modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),

@@ -247,7 +247,7 @@ impl Default for ModuleState {
     fn default() -> Self {
         Self::new(
             ModuleSourceId::fresh(),
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         )
     }
 }
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn shared_module_preserves_identity() {
         let module = Arc::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "shared",
         ));
         let first: ModuleHandle = ModuleHandle::new(module.clone());
@@ -735,7 +735,9 @@ mod tests {
         let second = Resolver(0x2000);
         let foreign: ModuleHandle<NativeArch> = ModuleHandle::new(
             SyntheticModule::<NativeArch>::empty(
-                &Domain::native_with_tls(AddressSpaceId::PROCESS, second.clone()).unwrap(),
+                &Domain::native(AddressSpaceId::PROCESS)
+                    .with_tls(second.clone())
+                    .unwrap(),
                 "foreign",
             )
             .with_tls(
@@ -745,7 +747,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let domain = Domain::native_with_tls(AddressSpaceId::PROCESS, first).unwrap();
+        let domain = Domain::native(AddressSpaceId::PROCESS)
+            .with_tls(first)
+            .unwrap();
         let mut group = ModuleScope::new(domain.id());
         group
             .push(ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
@@ -770,7 +774,8 @@ mod tests {
         // An empty group still carries a runtime identity: later additions must not
         // change which namespace a composed or live global scope accepts.
         let foreign = ModuleScope::new(
-            Domain::native_with_tls(AddressSpaceId::PROCESS, second.clone())
+            Domain::native(AddressSpaceId::PROCESS)
+                .with_tls(second.clone())
                 .unwrap()
                 .id(),
         );
@@ -782,7 +787,8 @@ mod tests {
         assert!(local.push(foreign).is_err());
         assert_eq!(local.lazy_scope()[0].name(), b"retained");
         let global = GlobalScope::new(
-            Domain::native_with_tls(AddressSpaceId::PROCESS, second)
+            Domain::native(AddressSpaceId::PROCESS)
+                .with_tls(second)
                 .unwrap()
                 .id(),
         );
@@ -792,16 +798,15 @@ mod tests {
     #[test]
     fn module_scope_mutation_preserves_snapshots() {
         let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "first",
         ));
         let second: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "second",
         ));
-        let mut scope: ModuleScope = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut scope: ModuleScope =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         scope.push(first).unwrap();
         let snapshot = scope.clone();
 
@@ -817,26 +822,23 @@ mod tests {
     #[test]
     fn local_scope_retains_modules_and_tracks_live_global() {
         let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "first",
         ));
         let second: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "second",
         ));
         let local: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "local",
         ));
-        let global = GlobalScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let global = GlobalScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         global.write().push(first).unwrap();
         let prepared = global.modules();
 
-        let mut local_scope = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut local_scope =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         local_scope.push(local).unwrap();
         let scope = LocalScope::from_group(local_scope);
         let weak = scope.downgrade(Some(&global));
@@ -895,30 +897,27 @@ mod tests {
     #[test]
     fn deferred_scope_uses_retained_dependencies() {
         let root: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "root",
         ));
         let dependency: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "dependency",
         ));
         let unrelated: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "unrelated",
         ));
-        let mut group = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut group =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         group.extend([root, dependency.clone()]).unwrap();
-        let mut retained = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut retained =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         retained.push(dependency).unwrap();
         let owner = retained.clone();
         let mut scope = LocalScope::new([group], retained).unwrap();
-        let mut extra = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut extra =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         extra.push(unrelated).unwrap();
         scope.push(extra).unwrap();
         let weak = scope.downgrade(None);
@@ -957,7 +956,7 @@ mod tests {
     fn initializer_panic_marks_module_failed() {
         let state = ModuleState::new(
             ModuleSourceId::fresh(),
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         );
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = state.initialize(|| -> crate::Result<()> { panic!("initializer panic") });
@@ -971,7 +970,7 @@ mod tests {
     #[test]
     fn module_state_ignores_self_binding() {
         let module = SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "module",
         );
         let state = <SyntheticModule<NativeArch> as Module<NativeArch>>::state(&module);
@@ -987,12 +986,12 @@ mod tests {
         let source = ModuleSourceId::fresh();
         let old = ModuleState::new(
             source,
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         );
         let binding = old.instance_id();
         let replacement = ModuleState::new(
             source,
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         );
 
         assert_eq!(binding, old.instance_id());

@@ -5,7 +5,7 @@
 //! the symbol scope and relocation policy themselves.
 #![warn(missing_docs)]
 
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Error, Loader,
     arch::NativeArch,
@@ -40,10 +40,7 @@ impl WinElfLoader {
     ) -> Result<ElfDylib<()>, Error> {
         let object = ElfBinary::new(name, bytes.as_ref());
         self.loader
-            .run(Domain::native_with_tls(
-                AddressSpaceId::PROCESS,
-                DefaultTlsResolver::new(),
-            )?)
+            .run(Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new())?)
             .load_dylib(object)
     }
 
@@ -51,10 +48,7 @@ impl WinElfLoader {
     pub fn load_file(&mut self, name: &str) -> Result<ElfDylib<()>, Error> {
         let object = ElfFile::from_path(name)?;
         self.loader
-            .run(Domain::native_with_tls(
-                AddressSpaceId::PROCESS,
-                DefaultTlsResolver::new(),
-            )?)
+            .run(Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new())?)
             .load_dylib(object)
     }
 }

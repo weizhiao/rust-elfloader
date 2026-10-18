@@ -1,6 +1,7 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{Loader, Relocator};
 use std::{fs::File, io::Read};
 
@@ -14,7 +15,12 @@ fn main() {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
     let base = Relocator::new()
-        .run(LOADER.load_dylib(&bytes).unwrap())
+        .run(
+            LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
+                .load_dylib(&bytes)
+                .unwrap(),
+        )
         .relocate()
         .unwrap();
     let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };

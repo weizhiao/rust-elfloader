@@ -14,6 +14,9 @@ fn unresolved_symbol_fails_bind_now() {
     let error = Relocator::new()
         .run(
             Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("missing.so", &output.data))
                 .expect("failed to load unresolved ELF"),
         )

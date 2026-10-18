@@ -6,6 +6,7 @@ use core::{
     panic::PanicInfo,
     ptr::{addr_of_mut, null},
 };
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
@@ -56,9 +57,11 @@ fn print_decimal(mut value: usize) {
 
 #[inline(always)]
 fn load_elf(name: &str) -> Result<RawElf<()>> {
-    let mut loader = Loader::new();
+    let loader = Loader::new();
     let object = ElfFile::from_path(name)?;
-    loader.load(object)
+    loader
+        .run(Domain::native(AddressSpaceId::PROCESS))
+        .load(object)
 }
 
 const AT_NULL: u64 = 0;

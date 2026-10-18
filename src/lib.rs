@@ -6,15 +6,17 @@
 //!
 //! ## Start with [`Loader`]
 //!
-//! - Use [`Loader::load`] to auto-detect whether the input is a dylib, executable, or
+//! Bind a runtime domain with [`Loader::run`] before loading an image.
+//!
+//! - Use [`LoaderRun::load`] to auto-detect whether the input is a dylib, executable, or
 //!   relocatable object.
 //! - Use [`Loader::scan`] to classify executable or dynamic ELF metadata without mapping it.
-//! - Use [`Loader::load_dylib`] or [`Loader::load_exec`] when you want strict type checks.
-//! - Use [`Loader::load_dynamic`] when you want any `PT_DYNAMIC` image, including a dynamic
+//! - Use [`LoaderRun::load_dylib`] or [`LoaderRun::load_exec`] when you want strict type checks.
+//! - Use [`LoaderRun::load_dynamic`] when you want any `PT_DYNAMIC` image, including a dynamic
 //!   `ET_EXEC`.
-//! - Use [`Loader::scan`] and [`Loader::load_scanned_dynamic`] to split dynamic metadata
+//! - Use [`Loader::scan`] and [`LoaderRun::load_scanned_dynamic`] to split dynamic metadata
 //!   discovery from mapping.
-//! - Use `Loader::load_object` to load `ET_REL` object files when the `object` feature is enabled.
+//! - Use `LoaderRun::load_object` to load `ET_REL` object files when the `object` feature is enabled.
 //! - Inputs can come from file paths, [`input::Path`] / [`input::PathBuf`], raw bytes,
 //!   [`input::ElfFile`], or [`input::ElfBinary`].
 //!
@@ -36,7 +38,7 @@
 //! ```rust,no_run
 //! use elf_loader::{
 //!     Loader, Relocator, Result,
-//!     runtime::{AddressSpaceId, Domain},
+//!     AddressSpaceId, Domain,
 //!     image::{SyntheticSymbol, SyntheticModule},
 //! };
 //!
@@ -45,7 +47,7 @@
 //! }
 //!
 //! fn main() -> Result<()> {
-//!     let domain = Domain::native_without_tls(AddressSpaceId::PROCESS);
+//!     let domain = Domain::native(AddressSpaceId::PROCESS);
 //!     let host = SyntheticModule::new(
 //!         &domain,
 //!         "__host",
@@ -118,7 +120,7 @@
 //!     arch::NativeArch,
 //!     observer::{BeforeLoadEvent, LoadObserver},
 //!     relocation::RelocationArch,
-//!     runtime::{AddressSpaceId, Domain},
+//!     AddressSpaceId, Domain,
 //! };
 //!
 //! struct TraceLoads;
@@ -136,7 +138,7 @@
 //!
 //! fn main() -> Result<()> {
 //!     let _raw = Loader::new()
-//!         .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+//!         .run(Domain::native(AddressSpaceId::PROCESS))
 //!         .with_observer(TraceLoads)
 //!         .load_dylib("path/to/lib.so")?;
 //!
@@ -146,13 +148,13 @@
 //!
 //! ## Feature Flags
 //!
-//! - TLS relocation handling is always available. Pass a [`runtime::Domain`] to
-//!   [`Loader::run`] or [`LinkContext::new`]. Use [`runtime::Domain::without_tls`]
-//!   to disable TLS explicitly.
+//! - TLS relocation handling is always available. Pass a [`Domain`] to
+//!   [`Loader::run`] or [`LinkContext::new`]. Domains start with TLS disabled;
+//!   use [`Domain::with_tls`] to enable it.
 //! - `lazy-binding`: enables the built-in `NativeLazyBinder`. Custom
 //!   [`lazy::LazyBinder`] implementations and [`RelocatorRun::lazy`] are always available;
 //!   [`Relocator::new`] remains eager until a binder is configured.
-//! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.
+//! - `object`: enables `LoaderRun::load_object` and relocatable object (`ET_REL`) loading.
 //! - `version`: enables version-aware `get_version` symbol lookups.
 //! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
 //!   specialized targets.
@@ -245,6 +247,7 @@ pub use input::ModuleSourceId;
 pub use linker::{GraphModule, LinkContext, Linker, LinkerRun, ModuleKey};
 pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};
+pub use runtime::{AddressSpaceId, Domain, DomainId};
 
 /// A type alias for `Result`s returned by `elf_loader` functions.
 ///

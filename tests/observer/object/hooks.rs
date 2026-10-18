@@ -1,4 +1,4 @@
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{Module, Relocator};
 
 #[test]
@@ -40,6 +40,9 @@ fn exports_survive_init_symtab() {
     let provider = Relocator::new()
         .run(
             Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("provider.so", &fixtures.provider))
                 .expect("failed to load object dependency"),
         )
@@ -56,7 +59,7 @@ fn exports_survive_init_symtab() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
-                .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+                .run(Domain::native(AddressSpaceId::PROCESS))
                 .with_object_section_groups(groups)
                 .with_observer(InitSymtabObserver { init_meta })
                 .load_object(ElfBinary::new("dependent.o", &fixtures.dependent_object))
@@ -148,7 +151,7 @@ fn exposes_sections() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
-                .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+                .run(Domain::native(AddressSpaceId::PROCESS))
                 .with_observer(SkipComment)
                 .load_object(elf_loader::input::ElfBinary::new("a.o", object))
                 .expect("failed to load object"),
@@ -209,6 +212,9 @@ fn can_clear_exports() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_object(elf_loader::input::ElfBinary::new("a.o", object))
                 .expect("failed to load object"),
         )

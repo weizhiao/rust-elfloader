@@ -1,4 +1,4 @@
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Module, Relocator,
     image::{SyntheticModule, SyntheticSymbol},
@@ -60,7 +60,7 @@ impl HostSymbols {
 
     fn module(&self) -> SyntheticModule {
         let mut module = SyntheticModule::empty(
-            &Domain::<elf_loader::arch::NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<elf_loader::arch::NativeArch>::native(AddressSpaceId::PROCESS),
             "__host",
         );
         for name in [EXTERNAL_FUNC_NAME, EXTERNAL_FUNC_NAME2] {
@@ -140,6 +140,9 @@ fn relocations_match() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_object(elf_loader::input::ElfBinary::new(
                     "test_static.o",
                     &object_file.data,
@@ -233,6 +236,9 @@ fn addends_apply() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_object(elf_loader::input::ElfBinary::new(
                     "test_static_addend.o",
                     &object_file.data,
@@ -268,6 +274,9 @@ fn retained_core_allows_relocation() {
         .expect("failed to generate object");
 
     let raw = elf_loader::Loader::new()
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_object(elf_loader::input::ElfBinary::new(
             "retained_core.o",
             &object_file.data,

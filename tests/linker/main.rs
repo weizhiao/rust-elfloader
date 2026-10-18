@@ -3,7 +3,7 @@
 mod fixture;
 #[path = "../fixture_build/mod.rs"]
 mod fixture_build;
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Error, GraphModule, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
@@ -196,7 +196,7 @@ impl KeyResolver for SyntheticDependencyResolver {
                 assert_eq!(*needed, b"dep");
                 Ok(ResolvedKey::module(
                     SyntheticModule::empty(
-                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+                        &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                         "dep",
                     ),
                     Vec::new(),
@@ -220,7 +220,7 @@ impl KeyResolver for SyntheticRootResolver {
         match req.input() {
             ResolveInput::Root { .. } => Ok(ResolvedKey::module(
                 SyntheticModule::new(
-                    &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+                    &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                     "synthetic-root",
                     [SyntheticSymbol::function(
                         c"synthetic_value",
@@ -251,7 +251,7 @@ impl KeyResolver for ResolvedGraphResolver {
             ResolveInput::Root { root } => {
                 let dependency = ResolvedKey::module(
                     SyntheticModule::empty(
-                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+                        &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                         "dep",
                     ),
                     Vec::new(),
@@ -263,7 +263,7 @@ impl KeyResolver for ResolvedGraphResolver {
                 };
                 Ok(ResolvedKey::module(
                     SyntheticModule::empty(
-                        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+                        &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                         *root,
                     ),
                     [ResolvedDependency::new("dep", dependency)],

@@ -18,7 +18,7 @@ use core::{fmt::Debug, ops::Deref};
 
 /// A mapped but unrelocated shared object.
 ///
-/// Values of this type are returned by [`crate::Loader::load_dylib`]. They expose
+/// Values of this type are returned by [`crate::LoaderRun::load_dylib`]. They expose
 /// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
 /// relocation. The wrapper dereferences to [`RawDynamic`], which owns the common
 /// implementation for dynamic ELF images.

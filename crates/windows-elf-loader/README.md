@@ -10,7 +10,7 @@ use std::ffi::CStr;
 use elf_loader::{
     image::{SyntheticSymbol, SyntheticModule},
     relocation::Relocator,
-    runtime::{AddressSpaceId, Domain},
+    AddressSpaceId, Domain,
     tls::DefaultTlsResolver,
 };
 use windows_elf_loader::WinElfLoader;
@@ -21,7 +21,7 @@ fn main() {
         println!("{}", s);
     }
     // Symbols required by dynamic library liba.so
-    let domain = Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap();
+    let domain = Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new()).unwrap();
     let host = SyntheticModule::new(
         &domain,
         "__host",

@@ -362,16 +362,15 @@ mod tests {
     }
 
     fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LocalScope {
-        let mut scope = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut scope =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         scope.extend(modules).unwrap();
         LocalScope::from_group(scope)
     }
 
     fn definition(name: &str, value: usize) -> SyntheticModule<NativeArch> {
         SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             name,
             [SyntheticSymbol::function(c"value", value as *const ())],
         )
@@ -380,7 +379,7 @@ mod tests {
     #[test]
     fn lookup_order_selects_scope() {
         let source = ModuleHandle::new(SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "source",
             [SyntheticSymbol::from_fields(
                 c"value",
@@ -394,9 +393,8 @@ mod tests {
             )],
         ));
         let local = scope([definition("local", 0x100)]);
-        let mut global = ModuleScope::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
-        );
+        let mut global =
+            ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         global
             .push(ModuleHandle::new(definition("global", 0x200)))
             .unwrap();
@@ -417,13 +415,13 @@ mod tests {
     #[test]
     fn symbol_visibility_controls_scope_lookup() {
         let source = ModuleHandle::new(SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "source",
             [SyntheticSymbol::function(c"value", 0x100usize as *const ())
                 .with_other(ElfSymbolVisibility::PROTECTED.raw())],
         ));
         let external = SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "external",
             [SyntheticSymbol::function(c"value", 0x200usize as *const ())],
         );
@@ -442,7 +440,7 @@ mod tests {
         assert_eq!(def.resolve().unwrap(), VmAddr::new(0x100));
 
         let source = ModuleHandle::new(SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "source",
             [SyntheticSymbol::from_fields(
                 c"value",
@@ -456,13 +454,13 @@ mod tests {
             )],
         ));
         let hidden = SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "hidden",
             [SyntheticSymbol::function(c"value", 0x200usize as *const ())
                 .with_other(ElfSymbolVisibility::HIDDEN.raw())],
         );
         let visible = SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "visible",
             [SyntheticSymbol::function(c"value", 0x300usize as *const ())],
         );
@@ -481,7 +479,7 @@ mod tests {
         assert_eq!(def.resolve().unwrap(), VmAddr::new(0x300));
 
         let hidden_ref = ModuleHandle::new(SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "source",
             [SyntheticSymbol::from_fields(
                 c"value",
@@ -512,7 +510,7 @@ mod tests {
     #[test]
     fn gnu_unique_is_canonical_within_one_registry() {
         let source = ModuleHandle::new(SyntheticModule::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "source",
             [SyntheticSymbol::from_fields(
                 c"value",
@@ -527,7 +525,7 @@ mod tests {
         ));
         let unique = |name, value| {
             SyntheticModule::new(
-                &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+                &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                 name,
                 [SyntheticSymbol::from_fields(
                     c"value",

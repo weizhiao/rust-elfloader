@@ -28,7 +28,7 @@ pub use object::{LoadedObject, RawObject};
 
 /// A mapped but unrelocated ELF image.
 ///
-/// This is the type returned by [`crate::Loader::load`]. It can hold a raw shared
+/// This is the type returned by [`crate::LoaderRun::load`]. It can hold a raw shared
 /// object, executable, or relocatable object depending on the ELF input.
 ///
 /// The optional `Arch` type parameter is forwarded to every variant, including

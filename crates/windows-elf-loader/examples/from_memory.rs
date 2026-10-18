@@ -1,4 +1,4 @@
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use std::ffi::CStr;
 
 use elf_loader::{
@@ -14,11 +14,9 @@ fn main() {
     }
 
     let host = ModuleHandle::from(SyntheticModule::new(
-        &Domain::native_with_tls(
-            AddressSpaceId::PROCESS,
-            elf_loader::tls::DefaultTlsResolver::new(),
-        )
-        .unwrap(),
+        &Domain::native(AddressSpaceId::PROCESS)
+            .with_tls(elf_loader::tls::DefaultTlsResolver::new())
+            .unwrap(),
         "__host",
         [SyntheticSymbol::function(c"print", print as *const ())],
     ));

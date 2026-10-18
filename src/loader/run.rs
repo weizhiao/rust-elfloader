@@ -16,7 +16,7 @@ use crate::{
     observer::{AfterDynamicLoadEvent, BeforeLoadEvent, LoadObserver},
     os::{DefaultMmap, Mmap},
     relocation::{ObjectArch, RelocationArch},
-    runtime::{AddressSpaceId, Domain},
+    runtime::Domain,
     segment::{
         ElfSegments,
         program::{load_segments, parse_segments},
@@ -245,7 +245,10 @@ where
     /// ```no_run
     /// use elf_loader::{Loader, Relocator};
     ///
-    /// let mut loader = Loader::new();
+    /// let config = Loader::new();
+    /// use elf_loader::{AddressSpaceId, Domain};
+    /// let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// let mut loader = config.run(domain);
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
     /// let lib = Relocator::new().run(raw).relocate().unwrap();
     /// ```
@@ -263,7 +266,7 @@ where
 
     /// Loads any dynamic ELF image into memory and returns a raw dynamic image.
     ///
-    /// Unlike [`Loader::load_dylib`], this accepts both `ET_DYN` shared objects
+    /// Unlike [`LoaderRun::load_dylib`], this accepts both `ET_DYN` shared objects
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
     /// value is mapped but not yet relocated. Pass it to
     /// [`crate::Relocator::run`] to resolve symbols and produce a
@@ -458,7 +461,10 @@ where
     /// ```no_run
     /// use elf_loader::Loader;
     ///
-    /// let mut loader = Loader::new();
+    /// let config = Loader::new();
+    /// use elf_loader::{AddressSpaceId, Domain};
+    /// let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// let mut loader = config.run(domain);
     /// let exec = loader.load_exec("path/to/program").unwrap();
     /// println!("entry = 0x{:x}", exec.entry());
     /// ```
@@ -575,84 +581,6 @@ where
         I: IntoElfReader<'static>,
     {
         scan::<Arch>(input, &mut ElfBuf::new(), None)
-    }
-}
-
-impl<D: Send + Sync + 'static, M> Loader<D, NativeArch, M>
-where
-    (): LoadObserver<D, NativeArch>,
-    D: Default + Send + Sync + 'static,
-    M: Mmap,
-{
-    /// Loads an ELF input and chooses the appropriate raw image type automatically.
-    #[inline]
-    pub fn load<'a, I>(&self, input: I) -> Result<RawElf<D, NativeArch, M::Region, ()>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load(input)
-    }
-
-    /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
-    #[inline]
-    pub fn load_dylib<'a, I>(&self, input: I) -> Result<RawDylib<D, NativeArch, M::Region, ()>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load_dylib(input)
-    }
-
-    /// Loads any dynamic ELF image into memory and returns a raw dynamic image.
-    #[inline]
-    pub fn load_dynamic<'a, I>(&self, input: I) -> Result<RawDynamic<D, NativeArch, M::Region, ()>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load_dynamic(input)
-    }
-
-    /// Maps a previously scanned dynamic image without rereading metadata.
-    #[inline]
-    pub fn load_scanned_dynamic(
-        &self,
-        scanned: ScannedDynamic<NativeArch>,
-    ) -> Result<RawDynamic<D, NativeArch, M::Region, ()>> {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load_scanned_dynamic(scanned)
-    }
-
-    /// Creates a raw dynamic image from an ELF object that is already mapped.
-    ///
-    /// # Safety
-    ///
-    /// `load_bias` and `phdrs` must describe a valid mapped ELF image that
-    /// remains accessible through the configured memory mapper for the
-    /// lifetime of the returned image.
-    #[inline]
-    pub unsafe fn load_mapped_dynamic(
-        &self,
-        path: impl Into<PathBuf>,
-        load_bias: VmAddr,
-        phdrs: impl Into<Vec<ElfPhdr<<NativeArch as RelocationArch>::Layout>>>,
-        entry: usize,
-    ) -> Result<RawDynamic<D, NativeArch, M::Region, ()>> {
-        unsafe {
-            self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-                .load_mapped_dynamic(path, load_bias, phdrs, entry)
-        }
-    }
-
-    /// Loads an executable image into memory and returns a raw executable.
-    #[inline]
-    pub fn load_exec<'a, I>(&self, input: I) -> Result<RawExec<D, NativeArch, M::Region, ()>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load_exec(input)
     }
 }
 

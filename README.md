@@ -125,7 +125,7 @@ host-runtime bridge, system-cache snapshot, validation and CI artifacts.
 | --- | --- | --- |
 | `libc` | Yes | Use the libc backend on Linux and Android |
 | `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
-| `object` | Yes | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
+| `object` | Yes | Enable relocatable object (`ET_REL`) loading and `LoaderRun::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enable `log` integration for loader and relocation diagnostics |
 | `portable-atomic` | No | Support targets without native pointer-sized atomics |

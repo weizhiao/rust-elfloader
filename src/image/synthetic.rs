@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn synthetic_module_resolves_absolute_symbols_from_scope() {
         let module = SyntheticModule::<NativeArch>::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__bridge",
             [SyntheticSymbol::function(
                 c"host_double",
@@ -675,7 +675,7 @@ mod tests {
         );
 
         let mut scope = ModuleScope::<NativeArch>::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         );
         scope.extend([module]).unwrap();
         let mut lookup = SymbolLookup::new("host_double");
@@ -703,7 +703,7 @@ mod tests {
         let observed = Arc::new(AtomicUsize::new(0));
         let hook_observed = Arc::clone(&observed);
         let module = SyntheticModule::<NativeArch>::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__hook",
             [SyntheticSymbol::function(
                 c"entry",
@@ -723,7 +723,7 @@ mod tests {
         assert_eq!(observed.load(Ordering::Relaxed), 0x1234);
 
         let failing = SyntheticModule::<NativeArch>::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__failing_hook",
             [SyntheticSymbol::function(
                 c"entry",
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn synthetic_module_uses_one_default_symbol() {
         let mut module = SyntheticModule::<NativeArch>::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__versions",
             [SyntheticSymbol::function(
                 c"entry",
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn synthetic_symbol_can_use_non_absolute_section() {
         let module = SyntheticModule::<NativeArch>::new(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__tls",
             [SyntheticSymbol::from_fields(
                 c"tls_slot",
@@ -824,7 +824,7 @@ mod tests {
             )],
         );
         let mut scope = ModuleScope::<NativeArch>::new(
-            Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS).id(),
+            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id(),
         );
         scope.extend([module]).unwrap();
         let mut lookup = SymbolLookup::new("tls_slot");
@@ -862,11 +862,9 @@ mod tests {
             .unwrap();
         let binding = tls.module().binding();
         let mut module = SyntheticModule::<NativeArch>::empty(
-            &Domain::native_with_tls(
-                AddressSpaceId::PROCESS,
-                crate::tls::DefaultTlsResolver::new(),
-            )
-            .unwrap(),
+            &Domain::native(AddressSpaceId::PROCESS)
+                .with_tls(crate::tls::DefaultTlsResolver::new())
+                .unwrap(),
             "__tls",
         )
         .with_tls(tls)
@@ -892,7 +890,7 @@ mod tests {
         let base = VmAddr::from_ptr(bytes.as_ptr());
         let memory = ElfSegments::new(region, base, VmOffset::new(0));
         let module = SyntheticModule::<NativeArch>::empty(
-            &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "__data",
         )
         .with_memory(memory);

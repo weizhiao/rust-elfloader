@@ -1,5 +1,5 @@
 use elf_loader::arch::NativeArch;
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader,
     image::{LoadedCore, Module, ModuleHandle, SyntheticModule, SyntheticSymbol},
@@ -52,6 +52,9 @@ fn load(name: &str, bytes: &[u8]) -> LoadedCore<()> {
     Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(name, bytes))
                 .expect("failed to load relocation fixture"),
         )
@@ -61,7 +64,7 @@ fn load(name: &str, bytes: &[u8]) -> LoadedCore<()> {
 
 fn host_module() -> SyntheticModule {
     let mut module = SyntheticModule::empty(
-        &Domain::<NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+        &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
         "__host",
     );
     let _ = module.insert(SyntheticSymbol::object(
@@ -92,6 +95,9 @@ mod native {
         let loaded = Relocator::new()
             .run(
                 LOADER
+                    .run(elf_loader::Domain::native(
+                        elf_loader::AddressSpaceId::PROCESS,
+                    ))
                     .load_dylib(ElfBinary::new(
                         "binding-consumer.so",
                         &fixtures.binding.consumer,
@@ -128,6 +134,9 @@ mod native {
         let loaded = Relocator::new()
             .run(
                 LOADER
+                    .run(elf_loader::Domain::native(
+                        elf_loader::AddressSpaceId::PROCESS,
+                    ))
                     .load_exec(ElfBinary::new(
                         "copy-relocations",
                         &fixtures.copy.executable,
@@ -181,6 +190,9 @@ mod native {
         let loaded = Relocator::new()
             .run(
                 LOADER
+                    .run(elf_loader::Domain::native(
+                        elf_loader::AddressSpaceId::PROCESS,
+                    ))
                     .load_dylib(ElfBinary::new("ifunc.so", &fixtures.ifunc))
                     .expect("failed to load IRELATIVE fixture"),
             )
@@ -206,6 +218,9 @@ fn synthetic_precedes_loaded() {
     let relocated = Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "scope-consumer.so",
                     &fixtures.scope.consumer,
@@ -238,6 +253,9 @@ fn loaded_precedes_synthetic() {
     let relocated = Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "scope-consumer.so",
                     &fixtures.scope.consumer,
@@ -279,6 +297,9 @@ fn extend_preserves_precedence() {
     let relocated = Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new(
                     "scope-consumer.so",
                     &fixtures.scope.consumer,
@@ -308,6 +329,9 @@ fn scope_interposes_by_default() {
     let relocated = Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("defining.so", &fixtures.scope.defining))
                 .expect("failed to load defining symbol fixture"),
         )
@@ -329,6 +353,9 @@ fn symbolic_prefers_self() {
     let relocated = Relocator::new()
         .run(
             LOADER
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("symbolic.so", &fixtures.scope.symbolic))
                 .expect("failed to load DF_SYMBOLIC fixture"),
         )
@@ -351,9 +378,7 @@ fn images_without_tls_retain_their_domain_at_admission() {
         error::TlsError,
         image::{LocalScope, ModuleScope},
         linker::SearchPathResolver,
-        tls::{
-            TlsInfo, TlsModuleId, TlsRegistration, TlsRequest, TlsResolver, TlsTemplate,
-        },
+        tls::{TlsInfo, TlsModuleId, TlsRegistration, TlsRequest, TlsResolver, TlsTemplate},
     };
     #[derive(Clone)]
     struct Resolver(usize);
@@ -372,7 +397,11 @@ fn images_without_tls_retain_their_domain_at_admission() {
     let fixtures = dynamic_fixtures();
     let load = || {
         LOADER
-            .run(Domain::native_with_tls(AddressSpaceId::PROCESS, Resolver(0x1000)).unwrap())
+            .run(
+                Domain::native(AddressSpaceId::PROCESS)
+                    .with_tls(Resolver(0x1000))
+                    .unwrap(),
+            )
             .load_dylib(ElfBinary::new("provider.so", &fixtures.binding.provider))
             .unwrap()
     };
@@ -380,7 +409,8 @@ fn images_without_tls_retain_their_domain_at_admission() {
     assert!(raw.tls().is_none());
     let foreign = Resolver(0x2000);
     let mut modules = ModuleScope::new(
-        Domain::native_with_tls(AddressSpaceId::PROCESS, foreign.clone())
+        Domain::native(AddressSpaceId::PROCESS)
+            .with_tls(foreign.clone())
             .unwrap()
             .id(),
     );
@@ -396,7 +426,9 @@ fn images_without_tls_retain_their_domain_at_admission() {
     ));
 
     let mut context = LinkContext::<(), NativeArch, Resolver>::new(
-        Domain::native_with_tls(AddressSpaceId::PROCESS, foreign).unwrap(),
+        Domain::native(AddressSpaceId::PROCESS)
+            .with_tls(foreign)
+            .unwrap(),
     );
     assert!(matches!(
         relocator.run(load()).global_scope(context.global_scope()),

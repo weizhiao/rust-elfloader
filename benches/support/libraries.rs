@@ -1,6 +1,6 @@
 //! Root library lookup and the shared, explicit host-runtime boundary.
 use elf::{ElfBytes, abi, endian::AnyEndian, symbol::Symbol};
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     LinkContext, Loader,
     arch::NativeArch,
@@ -144,7 +144,9 @@ impl HostLibraries {
 
     pub fn context(&self) -> LinkContext<(), NativeArch, DefaultTlsResolver> {
         let mut context = LinkContext::new(
-            Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
+            Domain::native(AddressSpaceId::PROCESS)
+                .with_tls(DefaultTlsResolver::new())
+                .unwrap(),
         );
         let modules = self
             .libraries
@@ -227,7 +229,9 @@ unsafe fn bridge_exports(
     let (symbols, strings) = elf.dynamic_symbol_table().unwrap().unwrap();
     let versions = elf.symbol_version_table().unwrap();
     let mut module = SyntheticModule::empty(
-        &Domain::native_with_tls(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
+        &Domain::native(AddressSpaceId::PROCESS)
+            .with_tls(DefaultTlsResolver::new())
+            .unwrap(),
         soname.to_owned(),
     )
     .with_user_data(HostModuleData {

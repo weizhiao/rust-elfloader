@@ -1,4 +1,4 @@
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader,
     arch::NativeArch,
@@ -50,7 +50,7 @@ fn observes_dynamic_load() {
     let bytes = &crate::fixture::fixtures().provider;
     let raw = Loader::new()
         .with_data::<LoadState>()
-        .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+        .run(Domain::native(AddressSpaceId::PROCESS))
         .with_observer(Recorder)
         .load_dylib(ElfBinary::new("observed.so", bytes))
         .expect("observed dynamic image should load");

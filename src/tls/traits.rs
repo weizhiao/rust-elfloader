@@ -67,7 +67,7 @@ pub unsafe trait TlsProvider: Send + Sync + 'static {
 /// This is essential for supporting TLS in environments with custom thread management,
 /// such as operating system kernels or bare-metal systems.
 ///
-/// A [`Domain`](crate::runtime::Domain) binds a fixed resolver to an address space.
+/// A [`Domain`](crate::Domain) binds a fixed resolver to an address space.
 /// Link contexts and standalone [`Loader::run`](crate::Loader::run) calls share
 /// that domain; its identity is used when admitting modules.
 /// Every loaded module retains that handle for registration, relocation,

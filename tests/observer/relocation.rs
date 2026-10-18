@@ -81,6 +81,9 @@ fn observes_symbol_binding() {
     let provider = Relocator::new()
         .run(
             loader
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("provider.so", &fixtures.provider))
                 .expect("failed to load symbol provider"),
         )
@@ -90,6 +93,9 @@ fn observes_symbol_binding() {
     let _loaded = Relocator::new()
         .run(
             loader
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("consumer.so", &fixtures.dependent))
                 .expect("failed to load symbol consumer"),
         )
@@ -175,6 +181,9 @@ fn handles_relocation_hooks() {
     Relocator::new()
         .run(
             Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("unresolved.so", bytes))
                 .expect("failed to load unresolved image"),
         )
@@ -234,6 +243,9 @@ impl RelocationObserver for LifecycleRecorder {
 fn defers_initialization() {
     let bytes = &crate::fixture::fixtures().provider;
     let raw = Loader::new()
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_dylib(ElfBinary::new("deferred.so", bytes))
         .expect("dynamic image should load");
     let state = Arc::new(Mutex::new(LifecycleState::default()));

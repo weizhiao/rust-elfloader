@@ -1,6 +1,7 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
+use elf_loader::{AddressSpaceId, Domain};
 use elf_loader::{Loader, Result};
 
 const LOADER: Loader = Loader::new();
@@ -11,11 +12,13 @@ fn main() -> Result<()> {
 
     let exec_path = fixture_support::ensure_native_exec();
 
-    let exec = LOADER.load_exec(
-        exec_path
-            .to_str()
-            .expect("fixture path must be valid UTF-8"),
-    )?;
+    let exec = LOADER
+        .run(Domain::native(AddressSpaceId::PROCESS))
+        .load_exec(
+            exec_path
+                .to_str()
+                .expect("fixture path must be valid UTF-8"),
+        )?;
     println!("Loaded executable: {}", exec.name().escape_ascii());
     println!("Entry point: 0x{:x}", exec.entry());
     println!("Base address: {}", exec.base());

@@ -17,6 +17,9 @@ fn requires_binder() {
         let relocator = Relocator::new().binding(configured);
         let run = relocator.run(
             Loader::new()
+                .run(elf_loader::Domain::native(
+                    elf_loader::AddressSpaceId::PROCESS,
+                ))
                 .load_dylib(ElfBinary::new("consumer.so", &fixtures().consumer))
                 .expect("failed to load lazy-binding consumer"),
         );

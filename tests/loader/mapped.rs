@@ -7,12 +7,19 @@ fn dynamic_reuses_mapping() {
     let bytes = crate::fixture::fixtures().dylib.clone();
 
     let owner = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_dylib(ElfBinary::new("owner.so", &bytes))
         .expect("failed to map owner dylib");
     let base = owner.segments().base();
 
     let borrowed = unsafe {
-        LOADER.load_mapped_dynamic("borrowed-main", base, owner.phdrs().to_vec(), owner.entry())
+        LOADER
+            .run(elf_loader::Domain::native(
+                elf_loader::AddressSpaceId::PROCESS,
+            ))
+            .load_mapped_dynamic("borrowed-main", base, owner.phdrs().to_vec(), owner.entry())
     }
     .expect("failed to wrap borrowed mapping");
 
@@ -50,6 +57,9 @@ fn scanned_dynamic_reuses_metadata() {
     let soname = scanned.soname().map(<[u8]>::to_vec);
 
     let raw = LOADER
+        .run(elf_loader::Domain::native(
+            elf_loader::AddressSpaceId::PROCESS,
+        ))
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 

@@ -105,25 +105,6 @@ pub struct Domain<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
-    /// Creates a TLS-enabled domain. Entry lookup failures are propagated, never
-    /// interpreted as disabling TLS. Both the resolver and executor must target
-    /// `address_space` and agree on the meaning of module addresses.
-    pub fn new(
-        address_space: AddressSpaceId,
-        tls: Tls,
-        executor: Arc<dyn CodeExecutor<Arch>>,
-    ) -> Result<Self> {
-        let entry = tls.bind_tls_get_addr()?;
-        Ok(Self {
-            id: DomainId {
-                address_space,
-                tls_entry: Some(entry),
-            },
-            tls,
-            executor,
-        })
-    }
-
     /// Returns the shared executor used by every module in this domain.
     pub fn executor(&self) -> &Arc<dyn CodeExecutor<Arch>> {
         &self.executor
@@ -142,10 +123,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
 
 impl<Arch: RelocationArch> Domain<Arch, ()> {
     /// Creates a domain with TLS explicitly disabled, without querying an entry.
-    pub fn without_tls(
-        address_space: AddressSpaceId,
-        executor: Arc<dyn CodeExecutor<Arch>>,
-    ) -> Self {
+    pub fn new(address_space: AddressSpaceId, executor: Arc<dyn CodeExecutor<Arch>>) -> Self {
         Self {
             id: DomainId {
                 address_space,
@@ -155,23 +133,30 @@ impl<Arch: RelocationArch> Domain<Arch, ()> {
             executor,
         }
     }
-}
 
-impl<Tls: TlsResolver<NativeArch>> Domain<NativeArch, Tls> {
-    /// Creates a TLS-enabled domain executing code in the current process.
-    pub fn native_with_tls(address_space: AddressSpaceId, tls: Tls) -> Result<Self> {
-        Self::new(
-            address_space,
+    /// Enables TLS in this domain, consuming the TLS-disabled configuration.
+    ///
+    /// The resolver must target this domain's address space and agree with its
+    /// executor on the meaning of module addresses. Entry lookup failures are
+    /// propagated, never interpreted as disabling TLS. Existing domain clones
+    /// keep their original identity and configuration.
+    pub fn with_tls<Tls: TlsResolver<Arch>>(self, tls: Tls) -> Result<Domain<Arch, Tls>> {
+        let entry = tls.bind_tls_get_addr()?;
+        Ok(Domain {
+            id: DomainId {
+                address_space: self.id.address_space,
+                tls_entry: Some(entry),
+            },
             tls,
-            arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<NativeArch>),
-        )
+            executor: self.executor,
+        })
     }
 }
 
 impl Domain<NativeArch, ()> {
     /// Creates a TLS-disabled domain executing code in the current process.
-    pub fn native_without_tls(address_space: AddressSpaceId) -> Self {
-        Self::without_tls(
+    pub fn native(address_space: AddressSpaceId) -> Self {
+        Self::new(
             address_space,
             arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<NativeArch>),
         )

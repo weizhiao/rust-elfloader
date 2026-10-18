@@ -16,14 +16,14 @@ use super::BindingMode;
 /// ```rust,no_run
 /// use elf_loader::{
 ///     Loader, Relocator, Result,
-///     runtime::{AddressSpaceId, Domain},
+///     AddressSpaceId, Domain,
 ///     image::{SyntheticModule, SyntheticSymbol},
 /// };
 ///
 /// extern "C" fn host_log(_value: i32) {}
 ///
 /// fn main() -> Result<()> {
-///     let domain = Domain::native_without_tls(AddressSpaceId::PROCESS);
+///     let domain = Domain::native(AddressSpaceId::PROCESS);
 ///     let host = SyntheticModule::new(
 ///         &domain,
 ///         "__host",

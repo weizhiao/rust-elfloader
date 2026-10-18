@@ -37,7 +37,10 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// ```no_run
 /// use elf_loader::{Loader, Relocator};
 ///
-/// let mut loader = Loader::new();
+/// let config = Loader::new();
+/// use elf_loader::{AddressSpaceId, Domain};
+/// let domain = Domain::native(AddressSpaceId::PROCESS);
+/// let mut loader = config.run(domain);
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = Relocator::new().run(raw).relocate().unwrap();
 /// ```
@@ -326,7 +329,7 @@ mod tests {
 
     #[test]
     fn run_preserves_runtime_domain() {
-        let domain = Domain::native_without_tls(AddressSpaceId::new());
+        let domain = Domain::native(AddressSpaceId::new());
         let loader = Loader::new().with_data::<()>();
         let run = loader.run(domain.clone());
 

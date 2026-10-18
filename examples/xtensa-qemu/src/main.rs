@@ -5,7 +5,7 @@ use core::{
     ffi::{CStr, c_char},
     ptr::addr_of_mut,
 };
-use elf_loader::runtime::{AddressSpaceId, Domain};
+use elf_loader::{AddressSpaceId, Domain};
 
 use elf_loader::{
     Loader, Relocator,
@@ -45,12 +45,13 @@ fn main() -> ! {
     esp_alloc::heap_allocator!(size: 128 * 1024);
 
     let host = SyntheticModule::new(
-        &Domain::<elf_loader::arch::NativeArch>::native_without_tls(AddressSpaceId::PROCESS),
+        &Domain::<elf_loader::arch::NativeArch>::native(AddressSpaceId::PROCESS),
         "__host",
         [SyntheticSymbol::function(c"print", print as *const ())],
     );
     let plugin = Loader::new()
         .with_mmap(plugin_memory())
+        .run(Domain::native(AddressSpaceId::PROCESS))
         .load_dylib(ElfBinary::new("fixture.so", FIXTURE))
         .and_then(|raw| Relocator::new().run(raw).modules([host])?.relocate());
 

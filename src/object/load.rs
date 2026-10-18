@@ -2,9 +2,8 @@ use super::{
     ObjectBuilder, ObjectSections,
     layout::{SectionGroups, SectionSegments},
 };
-use crate::runtime::{AddressSpaceId, Domain};
 use crate::{
-    Loader, LoaderRun, ParseShdrError, RelocationError, Result,
+    LoaderRun, ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
@@ -46,7 +45,10 @@ where
     /// ```no_run
     /// use elf_loader::{Loader, input::ElfBinary};
     ///
-    /// let mut loader = Loader::new();
+    /// let config = Loader::new();
+    /// use elf_loader::{AddressSpaceId, Domain};
+    /// let domain = Domain::native(AddressSpaceId::PROCESS);
+    /// let mut loader = config.run(domain);
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
@@ -109,26 +111,6 @@ where
         logging::info!("Loaded object: {} at {}", raw.name().escape_ascii(), base);
 
         Ok(raw)
-    }
-}
-
-impl<D: Send + Sync + 'static, M> Loader<D, crate::arch::NativeArch, M>
-where
-    (): LoadObserver<D, crate::arch::NativeArch>,
-    D: Default + Send + Sync + 'static,
-    M: Mmap,
-{
-    /// Loads a relocatable object file into memory and prepares it for relocation.
-    #[inline]
-    pub fn load_object<'a, I>(
-        &self,
-        input: I,
-    ) -> Result<RawObject<D, crate::arch::NativeArch, M::Region, ()>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        self.run(Domain::native_without_tls(AddressSpaceId::PROCESS))
-            .load_object(input)
     }
 }
 
@@ -599,7 +581,11 @@ mod tests {
         write_bytes(&mut bytes, shstrtab_offset, shstrtab);
 
         let loader = Loader::new();
-        let result = loader.load_object(ElfBinary::owned("bad.o", bytes));
+        let result = loader
+            .run(crate::runtime::Domain::native(
+                crate::runtime::AddressSpaceId::PROCESS,
+            ))
+            .load_object(ElfBinary::owned("bad.o", bytes));
         assert!(matches!(
             result,
             Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
@@ -609,10 +595,14 @@ mod tests {
     #[test]
     fn load_object_rejects_section_name_table_without_nul() {
         let loader = Loader::new();
-        let result = loader.load_object(ElfBinary::owned(
-            "bad.o",
-            make_two_section_object(b"\0.shstrtab", 1),
-        ));
+        let result = loader
+            .run(crate::runtime::Domain::native(
+                crate::runtime::AddressSpaceId::PROCESS,
+            ))
+            .load_object(ElfBinary::owned(
+                "bad.o",
+                make_two_section_object(b"\0.shstrtab", 1),
+            ));
         assert!(matches!(
             result,
             Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
@@ -622,8 +612,11 @@ mod tests {
     #[test]
     fn load_object_rejects_section_name_offset_past_table() {
         let loader = Loader::new();
-        let result =
-            loader.load_object(ElfBinary::owned("bad.o", make_two_section_object(b"\0", 1)));
+        let result = loader
+            .run(crate::runtime::Domain::native(
+                crate::runtime::AddressSpaceId::PROCESS,
+            ))
+            .load_object(ElfBinary::owned("bad.o", make_two_section_object(b"\0", 1)));
         assert!(matches!(
             result,
             Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
@@ -635,7 +628,7 @@ mod tests {
         let mut observer = ObjectObserver::default();
         let loader = Loader::new().with_data::<ObjectData>();
         let mut run = loader
-            .run(Domain::native_without_tls(AddressSpaceId::PROCESS))
+            .run(Domain::native(AddressSpaceId::PROCESS))
             .with_observer(&mut observer);
 
         let _ = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));

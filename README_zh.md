@@ -136,7 +136,7 @@ fn main() -> Result<()> {
 | --- | --- | --- |
 | `libc` | 是 | 在 Linux 和 Android 上使用 libc 后端 |
 | `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
-| `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
+| `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `LoaderRun::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
 | `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
