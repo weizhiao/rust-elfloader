@@ -3,30 +3,27 @@ use crate::{
     arch::NativeArch,
     image::{Module, ModuleHandle, ModuleScope},
     relocation::RelocationArch,
-    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{fmt, ops::Deref};
 
 /// One module detached from a link context by [`super::LinkContext::release`].
-pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
-{
+pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch> {
     id: ModuleId,
-    module: ModuleHandle<Arch, Tls>,
-    _retained: ModuleScope<Arch, Tls>,
+    module: ModuleHandle<Arch>,
+    _retained: ModuleScope<Arch>,
     meta: Meta,
 }
 
-impl<Meta, Arch, Tls> UnloadedModule<Meta, Arch, Tls>
+impl<Meta, Arch> UnloadedModule<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(super) const fn new(
         id: ModuleId,
-        module: ModuleHandle<Arch, Tls>,
-        retained: ModuleScope<Arch, Tls>,
+        module: ModuleHandle<Arch>,
+        retained: ModuleScope<Arch>,
         meta: Meta,
     ) -> Self {
         Self {
@@ -45,7 +42,7 @@ where
 
     /// Borrows the detached module while its unload group retains dependencies.
     #[inline]
-    pub fn module(&self) -> &dyn Module<Arch, Tls> {
+    pub fn module(&self) -> &dyn Module<Arch> {
         self.module.as_ref()
     }
 
@@ -65,10 +62,9 @@ where
     }
 }
 
-impl<Meta, Arch, Tls> fmt::Debug for UnloadedModule<Meta, Arch, Tls>
+impl<Meta, Arch> fmt::Debug for UnloadedModule<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnloadedModule")
@@ -83,27 +79,25 @@ where
 /// The collection retains the complete unload group so finalizers may still
 /// call code in dependencies that were detached at the same time. It dereferences
 /// to the detached modules in finalization order.
-pub struct UnloadGroup<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Vec<UnloadedModule<Meta, Arch, Tls>>,
+pub struct UnloadGroup<Meta = (), Arch: RelocationArch = NativeArch> {
+    modules: Vec<UnloadedModule<Meta, Arch>>,
 }
 
-impl<Meta, Arch, Tls> UnloadGroup<Meta, Arch, Tls>
+impl<Meta, Arch> UnloadGroup<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(super) fn new(modules: Vec<UnloadedModule<Meta, Arch, Tls>>) -> Self {
+    pub(super) fn new(modules: Vec<UnloadedModule<Meta, Arch>>) -> Self {
         Self { modules }
     }
 }
 
-impl<Meta, Arch, Tls> Deref for UnloadGroup<Meta, Arch, Tls>
+impl<Meta, Arch> Deref for UnloadGroup<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
-    type Target = [UnloadedModule<Meta, Arch, Tls>];
+    type Target = [UnloadedModule<Meta, Arch>];
 
     /// Returns detached modules in finalization order.
     #[inline]
@@ -112,10 +106,9 @@ where
     }
 }
 
-impl<Meta, Arch, Tls> fmt::Debug for UnloadGroup<Meta, Arch, Tls>
+impl<Meta, Arch> fmt::Debug for UnloadGroup<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

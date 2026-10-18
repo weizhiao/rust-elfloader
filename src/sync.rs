@@ -49,6 +49,22 @@ macro_rules! arc_unsize {
 
 pub(crate) use arc_unsize;
 
+macro_rules! arc_downgrade_unsize {
+    ($arc:expr => $target:ty) => {{
+        let arc: &$crate::sync::Arc<_> = $arc;
+        // SAFETY: Copy the handle without incrementing its strong count. The
+        // borrowed original keeps the allocation alive throughout this block.
+        // arc_unsize only transfers the copied handle through raw pointers;
+        // ManuallyDrop prevents it from releasing the original's strong count.
+        let borrowed = core::mem::ManuallyDrop::new($crate::sync::arc_unsize!(
+            unsafe { core::ptr::read(arc) } => $target
+        ));
+        $crate::sync::Arc::downgrade(&borrowed)
+    }};
+}
+
+pub(crate) use arc_downgrade_unsize;
+
 #[cfg(test)]
 mod tests {
     use super::*;

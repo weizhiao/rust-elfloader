@@ -10,7 +10,7 @@ use crate::{
     input::{ModuleSourceId, PathBuf},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::ObjectArch,
-    runtime::{CodeExecutor, DomainId},
+    runtime::{CodeExecutor, Domain},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -18,7 +18,7 @@ use alloc::boxed::Box;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<
-    Tls,
+    Tls: TlsResolver<Arch>,
     D = (),
     Arch: ObjectArch = NativeArch,
     R: RegionAccess = HostRegion,
@@ -34,8 +34,7 @@ pub(crate) struct ObjectBuilder<
     pub(crate) pltgot: PltGotSection,
     pub(crate) user_data: D,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
-    pub(crate) domain: DomainId,
-    pub(crate) tls_resolver: Tls,
+    pub(crate) domain: Domain<Arch, Tls>,
 }
 
 struct ObjectSectionData<Arch: ObjectArch> {
@@ -100,8 +99,7 @@ where
         pltgot: PltGotSection,
         user_data: D,
         executor: Arc<dyn CodeExecutor<Arch>>,
-        domain: DomainId,
-        tls_resolver: T,
+        domain: Domain<Arch, T>,
     ) -> Result<Self> {
         let shdrs = sections.headers();
         let ObjectSectionData { symtab, init, fini } = {
@@ -122,7 +120,6 @@ where
             user_data,
             executor,
             domain,
-            tls_resolver,
         })
     }
 }

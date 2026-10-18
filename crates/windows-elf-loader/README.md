@@ -3,11 +3,16 @@ Be capable of loading the elf dynamic library on Windows. This crate is implemen
 
 # Example
 ```
-$ cargo run -r --example load 
+$ cargo run -r --example load
 ```
 ```rust
 use std::ffi::CStr;
-use elf_loader::{image::{SyntheticSymbol, SyntheticModule}, relocation::Relocator};
+use elf_loader::{
+    image::{SyntheticSymbol, SyntheticModule},
+    relocation::Relocator,
+    runtime::{AddressSpaceId, Domain},
+    tls::DefaultTlsResolver,
+};
 use windows_elf_loader::WinElfLoader;
 
 fn main() {
@@ -18,6 +23,7 @@ fn main() {
     // Symbols required by dynamic library liba.so
     let host = SyntheticModule::new(
         "__host",
+        Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap().id(),
         [SyntheticSymbol::function("print", print as *const ())],
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
@@ -29,6 +35,7 @@ fn main() {
                 .unwrap(),
         )
         .modules([host])
+        .unwrap()
         .relocate()
         .unwrap();
     // Call function a in liba.so

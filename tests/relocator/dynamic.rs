@@ -1,3 +1,5 @@
+use elf_loader::arch::NativeArch;
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader,
     image::{LoadedCore, Module, ModuleHandle, SyntheticModule, SyntheticSymbol},
@@ -58,7 +60,10 @@ fn load(name: &str, bytes: &[u8]) -> LoadedCore<()> {
 }
 
 fn host_module() -> SyntheticModule {
-    let mut module = SyntheticModule::empty("__host");
+    let mut module = SyntheticModule::empty(
+        "__host",
+        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+    );
     let _ = module.insert(SyntheticSymbol::object(
         SYMBOL,
         &raw const HOST_VALUE as *const (),
@@ -94,6 +99,7 @@ mod native {
                     .expect("failed to load relocation consumer"),
             )
             .modules([&provider])
+            .expect("incompatible relocation modules")
             .relocate()
             .expect("failed to relocate consumer");
 
@@ -129,6 +135,7 @@ mod native {
                     .expect("failed to load COPY relocation executable"),
             )
             .modules([&provider])
+            .expect("incompatible relocation modules")
             .relocate()
             .expect("failed to relocate COPY executable");
         let core = loaded
@@ -209,6 +216,7 @@ fn synthetic_precedes_loaded() {
             ModuleHandle::from(host_module()),
             ModuleHandle::from(&provider),
         ])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate symbol consumer");
 
@@ -240,6 +248,7 @@ fn loaded_precedes_synthetic() {
             ModuleHandle::from(&provider),
             ModuleHandle::from(host_module()),
         ])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate symbol consumer");
 
@@ -277,6 +286,7 @@ fn extend_preserves_precedence() {
                 .expect("failed to load symbol consumer"),
         )
         .modules([&first, &second])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate symbol consumer");
 
@@ -302,6 +312,7 @@ fn scope_interposes_by_default() {
                 .expect("failed to load defining symbol fixture"),
         )
         .modules(std::slice::from_ref(&provider))
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate defining symbol fixture");
 
@@ -322,6 +333,7 @@ fn symbolic_prefers_self() {
                 .expect("failed to load DF_SYMBOLIC fixture"),
         )
         .modules(std::slice::from_ref(&provider))
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate DF_SYMBOLIC fixture");
 
@@ -329,4 +341,71 @@ fn symbolic_prefers_self() {
         pointer(&relocated, "external_pointer"),
         symbol(&relocated, SYMBOL)
     );
+}
+
+#[test]
+fn images_without_tls_retain_their_domain_at_admission() {
+    use elf_loader::{
+        Error, LinkContext, Linker, Result,
+        arch::NativeArch,
+        error::TlsError,
+        image::{LocalScope, ModuleScope},
+        linker::SearchPathResolver,
+        tls::{TlsImageSource, TlsInfo, TlsModule, TlsModuleId, TlsRequest, TlsResolver},
+    };
+    #[derive(Clone)]
+    struct Resolver(usize);
+    impl TlsResolver<NativeArch> for Resolver {
+        fn register(&self, _: TlsInfo, _: TlsRequest) -> Result<TlsModule> {
+            Err(TlsError::ResolverUnsupported.into())
+        }
+        fn publish(&self, _: TlsImageSource, _: TlsModuleId) -> Result<()> {
+            Err(TlsError::ResolverUnsupported.into())
+        }
+        fn unregister(&self, _: TlsModuleId) {}
+        fn bind_tls_get_addr(&self) -> Result<VmAddr> {
+            Ok(VmAddr::new(self.0))
+        }
+    }
+    let fixtures = dynamic_fixtures();
+    let load = || {
+        LOADER
+            .run(Domain::new(AddressSpaceId::PROCESS, Resolver(0x1000)).unwrap())
+            .load_dylib(ElfBinary::new("provider.so", &fixtures.binding.provider))
+            .unwrap()
+    };
+    let raw = load();
+    assert!(raw.tls().is_none());
+    let foreign = Resolver(0x2000);
+    let mut modules = ModuleScope::new(
+        Domain::new(AddressSpaceId::PROCESS, foreign.clone())
+            .unwrap()
+            .id(),
+    );
+    assert!(matches!(
+        modules.push(ModuleHandle::from(raw.clone())),
+        Err(Error::DomainMismatch(_))
+    ));
+    let scope = LocalScope::from_group(modules);
+    let relocator = Relocator::new();
+    assert!(matches!(
+        relocator.run(load()).local_scope(scope),
+        Err(Error::DomainMismatch(_))
+    ));
+
+    let mut context = LinkContext::<(), NativeArch, Resolver>::new(
+        Domain::new(AddressSpaceId::PROCESS, foreign).unwrap(),
+    );
+    assert!(matches!(
+        relocator.run(load()).global_scope(context.global_scope()),
+        Err(Error::DomainMismatch(_))
+    ));
+    let linker = Linker::new().resolver(SearchPathResolver::new());
+    assert!(matches!(
+        linker
+            .run()
+            .prepare_mapped(&mut context, "provider.so".into(), raw.into()),
+        Err(Error::DomainMismatch(_))
+    ));
+    assert!(context.is_empty());
 }

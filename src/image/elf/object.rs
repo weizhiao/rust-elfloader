@@ -21,7 +21,7 @@ use crate::{
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
-    runtime::DomainId,
+    runtime::Domain,
     sync::{Arc, OnceCell, arc_unsize},
     tls::{ImageTlsState, TlsResolver},
 };
@@ -89,14 +89,15 @@ where
         let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
-            state: ModuleState::new(self.source_id, self.domain),
+            state: ModuleState::new(self.source_id, self.domain.id()),
             lifecycle: OnceCell::new(),
             search: ModuleSearch::new(self.path),
             exports: arc_unsize!(Arc::clone(&exports) => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: None,
             lazy_lookup: OnceCell::new(),
-            tls: ImageTlsState::without_module(self.tls_resolver),
+            tls: ImageTlsState::borrowed(None),
+            domain: self.domain,
             segments,
         };
         let inner = Arc::new(inner);
@@ -151,14 +152,13 @@ where
     type Arch = Arch;
     type Tls = Tls;
 
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.core.state().domain_id()
+    fn domain(&self) -> &Domain<Arch, Tls> {
+        self.core.domain()
     }
 
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -223,7 +223,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(object: LoadedObject<D, Arch, R, Tls>) -> Self {
@@ -236,7 +236,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(object: &LoadedObject<D, Arch, R, Tls>) -> Self {

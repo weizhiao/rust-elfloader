@@ -1,3 +1,4 @@
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use std::ffi::CStr;
 
 use elf_loader::{
@@ -14,6 +15,12 @@ fn main() {
 
     let host = ModuleHandle::from(SyntheticModule::new(
         "__host",
+        Domain::new(
+            AddressSpaceId::PROCESS,
+            elf_loader::tls::DefaultTlsResolver::new(),
+        )
+        .unwrap()
+        .id(),
         [SyntheticSymbol::function("print", print as *const ())],
     ));
     let mut loader = WinElfLoader::new();
@@ -24,6 +31,7 @@ fn main() {
                 .unwrap(),
         )
         .modules([host.clone()])
+        .unwrap()
         .relocate()
         .unwrap();
     let libb = Relocator::new()
@@ -33,6 +41,7 @@ fn main() {
                 .unwrap(),
         )
         .modules([host.clone(), ModuleHandle::from(&liba)])
+        .unwrap()
         .relocate()
         .unwrap();
     let libc = Relocator::new()
@@ -42,6 +51,7 @@ fn main() {
                 .unwrap(),
         )
         .modules([host.clone(), ModuleHandle::from(&libb)])
+        .unwrap()
         .relocate()
         .unwrap();
     let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

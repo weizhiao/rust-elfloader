@@ -1,3 +1,4 @@
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{Module, Relocator};
 
 #[test]
@@ -230,7 +231,7 @@ fn applies_final_protection() {
                 .with_mmap(RecordingMmap {
                     calls: Arc::clone(&calls),
                 })
-                .run()
+                .run(Domain::without_tls(AddressSpaceId::PROCESS))
                 .with_object_section_groups(groups)
                 .with_observer(ReadOnlyAfterInit { ro_after_init })
                 .load_object(ElfBinary::new("a.o", object))

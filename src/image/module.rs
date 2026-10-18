@@ -7,9 +7,8 @@ use crate::{
     input::ModuleSourceId,
     memory::VmAddr,
     relocation::RelocationArch,
-    runtime::DomainId,
+    runtime::{AddressSpaceId, Domain, DomainId},
     sync::{Arc, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
-    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{fmt, ops::Deref};
@@ -43,13 +42,12 @@ impl Drop for InitializationGuard<'_> {
 }
 
 #[inline]
-pub(super) fn lookup_symbol<Arch, Tls>(
-    module: &dyn Module<Arch, Tls>,
+pub(super) fn lookup_symbol<Arch>(
+    module: &dyn Module<Arch>,
     lookup: &mut SymbolLookup<'_>,
 ) -> Result<Option<VmAddr>>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     let Some(symbol) = module.exports().lookup(lookup) else {
         return Ok(None);
@@ -136,15 +134,10 @@ impl ModuleState {
         self.id
     }
 
-    /// Returns the runtime domain in which this module's addresses are meaningful.
+    /// Returns the complete runtime domain identity.
     #[inline]
     pub const fn domain_id(&self) -> DomainId {
         self.domain
-    }
-
-    #[inline]
-    pub(super) fn set_domain(&mut self, domain: DomainId) {
-        self.domain = domain;
     }
 
     #[inline]
@@ -252,7 +245,10 @@ impl ModuleState {
 impl Default for ModuleState {
     #[inline]
     fn default() -> Self {
-        Self::new(ModuleSourceId::fresh(), DomainId::PROCESS)
+        Self::new(
+            ModuleSourceId::fresh(),
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        )
     }
 }
 
@@ -261,11 +257,11 @@ impl Default for ModuleState {
 /// Finalization follows the lifetime of the underlying module allocation, not
 /// an individual handle. Cloning or dropping a handle only changes the [`Arc`]
 /// ownership count.
-pub struct ModuleHandle<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    module: Arc<dyn Module<Arch, Tls>>,
+pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
+    module: Arc<dyn Module<Arch>>,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleHandle<Arch, Tls> {
+impl<Arch: RelocationArch> Clone for ModuleHandle<Arch> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -274,7 +270,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleHandle<Arch, 
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, Tls> {
+impl<Arch: RelocationArch> ModuleHandle<Arch> {
     /// Creates the canonical shared handle for a module.
     ///
     /// Clone this handle when the same logical module is used in another scope
@@ -282,19 +278,19 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     #[inline]
     pub fn new<M>(module: M) -> Self
     where
-        M: Module<Arch, Tls> + 'static,
+        M: Module<Arch> + 'static,
     {
-        Self::from_shared(arc_unsize!(Arc::new(module) => dyn Module<Arch, Tls>))
+        Self::from_shared(arc_unsize!(Arc::new(module) => dyn Module<Arch>))
     }
 
     /// Wraps a shared module while preserving the state owned by that module.
     #[inline]
-    pub fn from_shared(module: Arc<dyn Module<Arch, Tls>>) -> Self {
+    pub fn from_shared(module: Arc<dyn Module<Arch>>) -> Self {
         Self { module }
     }
 
     #[inline]
-    pub(crate) fn downgrade(&self) -> Weak<dyn Module<Arch, Tls>> {
+    pub(crate) fn downgrade(&self) -> Weak<dyn Module<Arch>> {
         Arc::downgrade(&self.module)
     }
 
@@ -318,8 +314,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> Deref for ModuleHandle<Arch, Tls> {
-    type Target = dyn Module<Arch, Tls>;
+impl<Arch: RelocationArch> Deref for ModuleHandle<Arch> {
+    type Target = dyn Module<Arch>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -327,11 +323,9 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> Deref for ModuleHan
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> AsRef<dyn Module<Arch, Tls>>
-    for ModuleHandle<Arch, Tls>
-{
+impl<Arch: RelocationArch> AsRef<dyn Module<Arch>> for ModuleHandle<Arch> {
     #[inline]
-    fn as_ref(&self) -> &(dyn Module<Arch, Tls> + 'static) {
+    fn as_ref(&self) -> &(dyn Module<Arch> + 'static) {
         &*self.module
     }
 }
@@ -340,9 +334,11 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> AsRef<dyn Module<Ar
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
 /// this scope. Clones remain stable when another clone is modified. The scope
-/// dereferences to its ordered module slice for read-only access.
-pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Arc<Vec<ModuleHandle<Arch, Tls>>>,
+/// dereferences to its ordered module slice for read-only access. Each scope is
+/// bound to a fixed runtime domain identity; additions are validated before
+/// changing the scope. The scope does not retain the domain's TLS resolver.
+pub struct ModuleScope<Arch: RelocationArch = NativeArch> {
+    modules: Arc<Vec<ModuleHandle<Arch>>>,
     domain: DomainId,
 }
 
@@ -351,9 +347,9 @@ pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
 /// The eager scope is used for ordinary relocation. The lazy scope is always
 /// present and is retained by standalone loaded images. Linker-managed images
 /// normally use their dependency closure as the lazy scope.
-pub struct LocalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    groups: Arc<[ModuleScope<Arch, Tls>]>,
-    lazy: ModuleScope<Arch, Tls>,
+pub struct LocalScope<Arch: RelocationArch = NativeArch> {
+    groups: Arc<[ModuleScope<Arch>]>,
+    lazy: ModuleScope<Arch>,
 }
 
 /// Weak references used by deferred lookup to recover local and global scopes.
@@ -361,9 +357,9 @@ pub struct LocalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> 
 /// Linker-managed images use their retained dependency closure instead of the
 /// wider eager-relocation load group. This deliberately gives lazy binding the
 /// conservative `retained + global` lookup semantics documented by the linker.
-pub(crate) struct WeakLocalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    local: Weak<Vec<ModuleHandle<Arch, Tls>>>,
-    global: Option<Weak<GlobalScopeInner<Arch, Tls>>>,
+pub(crate) struct WeakLocalScope<Arch: RelocationArch = NativeArch> {
+    local: Weak<Vec<ModuleHandle<Arch>>>,
+    global: Option<Weak<GlobalScopeInner<Arch>>>,
     domain: DomainId,
 }
 
@@ -373,16 +369,16 @@ pub(crate) struct WeakLocalScope<Arch: RelocationArch = NativeArch, Tls: TlsReso
 /// [`LinkContext::promote_global`](crate::LinkContext::promote_global) or
 /// [`LinkContext::extend_global`](crate::LinkContext::extend_global) to change
 /// its contents without bypassing the context's lifetime bookkeeping.
-pub struct GlobalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    inner: Arc<GlobalScopeInner<Arch, Tls>>,
+pub struct GlobalScope<Arch: RelocationArch = NativeArch> {
+    inner: Arc<GlobalScopeInner<Arch>>,
 }
 
-struct GlobalScopeInner<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    modules: RwLock<ModuleScope<Arch, Tls>>,
+struct GlobalScopeInner<Arch: RelocationArch> {
+    modules: RwLock<ModuleScope<Arch>>,
     domain: DomainId,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, Tls> {
+impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -392,10 +388,9 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, T
     }
 }
 
-impl<Arch, Tls> fmt::Debug for ModuleScope<Arch, Tls>
+impl<Arch> fmt::Debug for ModuleScope<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
@@ -404,8 +399,8 @@ where
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Deref for ModuleScope<Arch, Tls> {
-    type Target = [ModuleHandle<Arch, Tls>];
+impl<Arch: RelocationArch> Deref for ModuleScope<Arch> {
+    type Target = [ModuleHandle<Arch>];
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -413,9 +408,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Deref for ModuleScope<Arch, T
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
-    /// Creates an empty module scope for `domain`.
-    #[inline]
+impl<Arch: RelocationArch> ModuleScope<Arch> {
+    /// Creates an empty scope bound to a fixed runtime domain.
     pub fn new(domain: DomainId) -> Self {
         Self {
             modules: Arc::new(Vec::new()),
@@ -423,56 +417,67 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
         }
     }
 
-    /// Returns the runtime domain shared by this module group.
-    #[inline]
+    /// Returns the complete runtime domain identity.
     pub const fn domain_id(&self) -> DomainId {
         self.domain
     }
 
-    /// Checks that this scope and all its modules belong to `expected`.
-    pub fn check_domain(&self, expected: DomainId) -> Result<()> {
-        expected.ensure(self.domain)?;
-        for module in self.modules.iter() {
-            expected.ensure(module.domain_id())?;
-        }
-        Ok(())
+    /// Checks compatibility without revisiting modules already admitted here.
+    pub(crate) fn check_scope(&self, other: &Self) -> Result<()> {
+        self.domain.ensure(other.domain)
     }
 
-    /// Appends a module without modifying existing snapshots.
-    pub fn push(&mut self, module: ModuleHandle<Arch, Tls>) {
+    fn check_module(&self, module: &ModuleHandle<Arch>) -> Result<()> {
+        self.domain.ensure(module.domain_id())
+    }
+
+    // Only context/session records that have already passed admission use this.
+    pub(crate) fn push_admitted(&mut self, module: ModuleHandle<Arch>) {
         Arc::make_mut(&mut self.modules).push(module);
     }
 
-    /// Replaces this scope's modules without modifying existing snapshots.
-    pub fn replace<I, R>(&mut self, modules: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        if let Some(current) = Arc::get_mut(&mut self.modules) {
-            current.clear();
-            current.extend(modules.into_iter().map(Into::into));
-        } else {
-            self.modules = Arc::new(modules.into_iter().map(Into::into).collect());
-        }
+    /// Admits a module without modifying existing snapshots.
+    pub fn push(&mut self, module: ModuleHandle<Arch>) -> Result<()> {
+        self.check_module(&module)?;
+        self.push_admitted(module);
+        Ok(())
     }
 
-    /// Appends modules without modifying existing snapshots.
-    pub fn extend<I, R>(&mut self, modules: I)
+    /// Replaces the scope atomically after admitting every supplied module.
+    pub fn replace<I, R>(&mut self, modules: I) -> Result<()>
     where
         I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
+        R: Into<ModuleHandle<Arch>>,
     {
-        Arc::make_mut(&mut self.modules).extend(modules.into_iter().map(Into::into));
+        let modules = modules.into_iter().map(Into::into).collect::<Vec<_>>();
+        for module in &modules {
+            self.check_module(module)?;
+        }
+        self.modules = Arc::new(modules);
+        Ok(())
+    }
+
+    /// Appends modules atomically after admitting every supplied module.
+    pub fn extend<I, R>(&mut self, modules: I) -> Result<()>
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch>>,
+    {
+        let modules = modules.into_iter().map(Into::into).collect::<Vec<_>>();
+        for module in &modules {
+            self.check_module(module)?;
+        }
+        Arc::make_mut(&mut self.modules).extend(modules);
+        Ok(())
     }
 
     /// Retains only modules accepted by `keep` without modifying existing snapshots.
-    pub fn retain(&mut self, keep: impl FnMut(&ModuleHandle<Arch, Tls>) -> bool) {
+    pub fn retain(&mut self, keep: impl FnMut(&ModuleHandle<Arch>) -> bool) {
         Arc::make_mut(&mut self.modules).retain(keep);
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LocalScope<Arch, Tls> {
+impl<Arch: RelocationArch> Clone for LocalScope<Arch> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -482,7 +487,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LocalScope<Arch, Tl
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for GlobalScope<Arch, Tls> {
+impl<Arch: RelocationArch> Clone for GlobalScope<Arch> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -491,10 +496,9 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for GlobalScope<Arch, T
     }
 }
 
-impl<Arch, Tls> fmt::Debug for LocalScope<Arch, Tls>
+impl<Arch> fmt::Debug for LocalScope<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalScope")
@@ -504,102 +508,93 @@ where
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LocalScope<Arch, Tls> {
-    /// Creates an empty local scope for `domain`.
-    #[inline]
+impl<Arch: RelocationArch> LocalScope<Arch> {
+    /// Creates an empty local scope bound to a fixed runtime.
     pub fn empty(domain: DomainId) -> Self {
-        Self::new([], ModuleScope::new(domain))
-    }
-
-    /// Creates a local scope with explicit eager groups and deferred scope.
-    pub fn new<I>(groups: I, lazy: ModuleScope<Arch, Tls>) -> Self
-    where
-        I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
-    {
-        let groups = groups.into_iter().collect::<Vec<_>>();
-        debug_assert!(
-            groups
-                .iter()
-                .all(|group| group.domain_id() == lazy.domain_id())
-        );
         Self {
-            groups: Arc::from(groups),
-            lazy,
+            groups: Arc::from([]),
+            lazy: ModuleScope::new(domain),
         }
     }
 
-    /// Returns the runtime domain shared by this lookup scope.
-    #[inline]
+    /// Uses one admitted group for both eager and deferred lookup.
+    pub fn from_group(group: ModuleScope<Arch>) -> Self {
+        Self {
+            groups: Arc::from([group.clone()]),
+            lazy: group,
+        }
+    }
+
+    /// Combines compatible eager groups and a deferred scope.
+    pub fn new<I>(groups: I, lazy: ModuleScope<Arch>) -> Result<Self>
+    where
+        I: IntoIterator<Item = ModuleScope<Arch>>,
+    {
+        let groups = groups.into_iter().collect::<Vec<_>>();
+        for group in &groups {
+            lazy.check_scope(group)?;
+        }
+        Ok(Self {
+            groups: Arc::from(groups),
+            lazy,
+        })
+    }
+
+    /// Returns the complete runtime domain identity.
     pub const fn domain_id(&self) -> DomainId {
         self.lazy.domain_id()
     }
 
-    /// Checks that the eager and deferred scopes belong to `expected`.
-    #[inline]
-    pub fn check_domain(&self, expected: DomainId) -> Result<()> {
-        for group in self.groups.iter() {
-            group.check_domain(expected)?;
-        }
-        self.lazy.check_domain(expected)
+    pub(crate) fn check_scope(&self, other: &Self) -> Result<()> {
+        self.lazy.check_scope(&other.lazy)
     }
 
     #[inline]
-    pub(crate) fn downgrade(
-        &self,
-        global: Option<&GlobalScope<Arch, Tls>>,
-    ) -> WeakLocalScope<Arch, Tls> {
+    pub(crate) fn downgrade(&self, global: Option<&GlobalScope<Arch>>) -> WeakLocalScope<Arch> {
         let domain = self.domain_id();
         debug_assert!(global.is_none_or(|global| global.domain_id() == domain));
         WeakLocalScope {
             local: Arc::downgrade(&self.lazy.modules),
             global: global.map(GlobalScope::downgrade),
-            domain,
+            domain: self.lazy.domain,
         }
     }
 
     /// Returns the eager module groups in lookup order.
     #[inline]
-    pub fn groups(&self) -> &[ModuleScope<Arch, Tls>] {
+    pub fn groups(&self) -> &[ModuleScope<Arch>] {
         &self.groups
     }
 
     /// Returns the local scope retained for deferred PLT lookup.
     #[inline]
-    pub const fn lazy_scope(&self) -> &ModuleScope<Arch, Tls> {
+    pub const fn lazy_scope(&self) -> &ModuleScope<Arch> {
         &self.lazy
     }
 
-    /// Appends an eager lookup group without changing deferred lookup.
-    pub fn push(&mut self, group: ModuleScope<Arch, Tls>) {
-        debug_assert_eq!(group.domain_id(), self.domain_id());
-        let mut groups = Vec::with_capacity(self.groups.len() + 1);
-        groups.extend(self.groups.iter().cloned());
-        groups.push(group);
-        self.groups = Arc::from(groups);
+    /// Appends a compatible eager group without changing deferred lookup.
+    pub fn push(&mut self, group: ModuleScope<Arch>) -> Result<()> {
+        self.extend([group])
     }
 
-    /// Appends eager lookup groups without changing deferred lookup.
-    pub fn extend<I>(&mut self, groups: I)
+    /// Appends compatible eager groups atomically.
+    pub fn extend<I>(&mut self, groups: I) -> Result<()>
     where
-        I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
+        I: IntoIterator<Item = ModuleScope<Arch>>,
     {
-        let mut groups = groups.into_iter().peekable();
-        if groups.peek().is_none() {
-            return;
+        let groups = groups.into_iter().collect::<Vec<_>>();
+        for group in &groups {
+            self.lazy.check_scope(group)?;
         }
-        let (lower, _) = groups.size_hint();
-        let mut current = Vec::with_capacity(self.groups.len() + lower);
-        current.extend(self.groups.iter().cloned());
-        for group in groups {
-            debug_assert_eq!(group.domain_id(), self.domain_id());
-            current.push(group);
-        }
+        let mut current = self.groups.to_vec();
+        current.extend(groups);
         self.groups = Arc::from(current);
+        Ok(())
     }
 
     /// Iterates over eager lookup modules in order.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
+    pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch>> {
         self.groups.iter().flat_map(|group| group.iter())
     }
 
@@ -617,24 +612,25 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LocalScope<Arch, Tls> {
 
     /// Replaces the local scope retained for deferred PLT lookup.
     #[inline]
-    pub fn set_lazy_scope(&mut self, scope: ModuleScope<Arch, Tls>) {
-        debug_assert_eq!(scope.domain_id(), self.domain_id());
+    pub fn set_lazy_scope(&mut self, scope: ModuleScope<Arch>) -> Result<()> {
+        self.lazy.check_scope(&scope)?;
         self.lazy = scope;
+        Ok(())
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLocalScope<Arch, Tls> {
+impl<Arch: RelocationArch> WeakLocalScope<Arch> {
     #[inline]
-    pub(crate) fn upgrade_local(&self) -> Option<LocalScope<Arch, Tls>> {
+    pub(crate) fn upgrade_local(&self) -> Option<LocalScope<Arch>> {
         let scope = ModuleScope {
             modules: self.local.upgrade()?,
             domain: self.domain,
         };
-        Some(LocalScope::new([scope.clone()], scope))
+        Some(LocalScope::from_group(scope))
     }
 
     #[inline]
-    pub(crate) fn upgrade_global(&self) -> Option<GlobalScope<Arch, Tls>> {
+    pub(crate) fn upgrade_global(&self) -> Option<GlobalScope<Arch>> {
         self.global
             .as_ref()
             .and_then(Weak::upgrade)
@@ -642,7 +638,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLocalScope<Arch, Tls> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
+impl<Arch: RelocationArch> GlobalScope<Arch> {
     #[inline]
     pub(crate) fn new(domain: DomainId) -> Self {
         Self {
@@ -659,8 +655,12 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
         self.inner.domain
     }
 
+    pub(crate) fn check_scope(&self, scope: &LocalScope<Arch>) -> Result<()> {
+        self.inner.domain.ensure(scope.domain_id())
+    }
+
     #[inline]
-    fn downgrade(&self) -> Weak<GlobalScopeInner<Arch, Tls>> {
+    fn downgrade(&self) -> Weak<GlobalScopeInner<Arch>> {
         Arc::downgrade(&self.inner)
     }
 
@@ -669,23 +669,24 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
     ///
     /// The returned copy-on-write scope remains stable if the context later
     /// promotes or unloads modules.
-    pub fn modules(&self) -> ModuleScope<Arch, Tls> {
+    pub fn modules(&self) -> ModuleScope<Arch> {
         self.read().clone()
     }
 
     #[inline]
-    pub(crate) fn read(&self) -> RwLockReadGuard<'_, ModuleScope<Arch, Tls>> {
+    pub(crate) fn read(&self) -> RwLockReadGuard<'_, ModuleScope<Arch>> {
         self.inner.modules.read()
     }
 
     #[inline]
-    pub(crate) fn write(&self) -> RwLockWriteGuard<'_, ModuleScope<Arch, Tls>> {
+    pub(crate) fn write(&self) -> RwLockWriteGuard<'_, ModuleScope<Arch>> {
         self.inner.modules.write()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::tls::TlsResolver;
     extern crate std;
 
     use super::*;
@@ -693,7 +694,10 @@ mod tests {
 
     #[test]
     fn shared_module_preserves_identity() {
-        let module = Arc::new(SyntheticModule::<NativeArch>::empty("shared"));
+        let module = Arc::new(SyntheticModule::<NativeArch>::empty(
+            "shared",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
         let first: ModuleHandle = ModuleHandle::new(module.clone());
         let second: ModuleHandle = ModuleHandle::new(module);
 
@@ -701,15 +705,100 @@ mod tests {
     }
 
     #[test]
+    fn scope_admission_preserves_runtime_and_snapshots() {
+        use crate::tls::{TlsBinding, TlsImageSource, TlsInfo, TlsModule, TlsModuleId, TlsRequest};
+
+        #[derive(Clone)]
+        struct Resolver(usize);
+        impl TlsResolver<NativeArch> for Resolver {
+            fn register(&self, _: TlsInfo, _: TlsRequest) -> Result<TlsModule> {
+                // This metadata-only registration never resolves storage.
+                let entry = self.bind_tls_get_addr()?;
+                Ok(unsafe { TlsModule::new(TlsBinding::new(TlsModuleId::new(1), None), entry) })
+            }
+            fn publish(&self, _: TlsImageSource, _: TlsModuleId) -> Result<()> {
+                Ok(())
+            }
+            fn unregister(&self, _: TlsModuleId) {}
+            fn bind_tls_get_addr(&self) -> Result<VmAddr> {
+                Ok(VmAddr::new(self.0))
+            }
+        }
+        let first = Resolver(0x1000);
+        let second = Resolver(0x2000);
+        let foreign: ModuleHandle<NativeArch> = ModuleHandle::new(
+            SyntheticModule::<NativeArch>::empty(
+                "foreign",
+                Domain::new(AddressSpaceId::PROCESS, second.clone())
+                    .unwrap()
+                    .id(),
+            )
+            .with_tls(
+                second
+                    .register(TlsInfo::default(), TlsRequest::Dynamic)
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut group = ModuleScope::new(Domain::new(AddressSpaceId::PROCESS, first).unwrap().id());
+        group
+            .push(ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+                "retained",
+                group.domain_id(),
+            )))
+            .unwrap();
+        let snapshot = group.clone();
+
+        let error = group
+            .extend([
+                ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+                    "extra",
+                    group.domain_id(),
+                )),
+                foreign.clone(),
+            ])
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::DomainMismatch(_)));
+        assert_eq!(group.len(), 1);
+        assert!(group.replace([foreign.clone()]).is_err());
+        assert!(group.push(foreign).is_err());
+        assert_eq!(group[0].name(), b"retained");
+        assert_eq!(snapshot[0].name(), b"retained");
+
+        // An empty group still carries a runtime identity: later additions must not
+        // change which namespace a composed or live global scope accepts.
+        let foreign = ModuleScope::new(
+            Domain::new(AddressSpaceId::PROCESS, second.clone())
+                .unwrap()
+                .id(),
+        );
+        assert!(LocalScope::new([foreign.clone()], group.clone()).is_err());
+        let mut local = LocalScope::from_group(group.clone());
+        assert!(local.extend([group, foreign.clone()]).is_err());
+        assert_eq!(local.groups().len(), 1);
+        assert!(local.set_lazy_scope(foreign.clone()).is_err());
+        assert!(local.push(foreign).is_err());
+        assert_eq!(local.lazy_scope()[0].name(), b"retained");
+        let global = GlobalScope::new(Domain::new(AddressSpaceId::PROCESS, second).unwrap().id());
+        assert!(global.check_scope(&local).is_err());
+    }
+
+    #[test]
     fn module_scope_mutation_preserves_snapshots() {
-        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("first"));
-        let second: ModuleHandle =
-            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("second"));
-        let mut scope: ModuleScope = ModuleScope::new(DomainId::PROCESS);
-        scope.push(first);
+        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "first",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let second: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "second",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let mut scope: ModuleScope =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        scope.push(first).unwrap();
         let snapshot = scope.clone();
 
-        scope.push(second);
+        scope.push(second).unwrap();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(scope.len(), 2);
 
@@ -720,20 +809,30 @@ mod tests {
 
     #[test]
     fn local_scope_retains_modules_and_tracks_live_global() {
-        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("first"));
-        let second: ModuleHandle =
-            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("second"));
-        let local: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("local"));
-        let global = GlobalScope::new(DomainId::PROCESS);
-        global.write().push(first);
+        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "first",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let second: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "second",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let local: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "local",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let global =
+            GlobalScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        global.write().push(first).unwrap();
         let prepared = global.modules();
 
-        let mut local_scope = ModuleScope::new(DomainId::PROCESS);
-        local_scope.push(local);
-        let scope = LocalScope::new([local_scope.clone()], local_scope);
+        let mut local_scope =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        local_scope.push(local).unwrap();
+        let scope = LocalScope::from_group(local_scope);
         let weak = scope.downgrade(Some(&global));
 
-        global.write().replace([second]);
+        global.write().replace([second]).unwrap();
         assert_eq!(
             prepared
                 .iter()
@@ -786,20 +885,30 @@ mod tests {
 
     #[test]
     fn deferred_scope_uses_retained_dependencies() {
-        let root: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("root"));
-        let dependency: ModuleHandle =
-            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("dependency"));
-        let unrelated: ModuleHandle =
-            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("unrelated"));
-        let mut group = ModuleScope::new(DomainId::PROCESS);
-        group.extend([root, dependency.clone()]);
-        let mut retained = ModuleScope::new(DomainId::PROCESS);
-        retained.push(dependency);
+        let root: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "root",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let dependency: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "dependency",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let unrelated: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty(
+            "unrelated",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let mut group =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        group.extend([root, dependency.clone()]).unwrap();
+        let mut retained =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        retained.push(dependency).unwrap();
         let owner = retained.clone();
-        let mut scope = LocalScope::new([group], retained);
-        let mut extra = ModuleScope::new(DomainId::PROCESS);
-        extra.push(unrelated);
-        scope.push(extra);
+        let mut scope = LocalScope::new([group], retained).unwrap();
+        let mut extra =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        extra.push(unrelated).unwrap();
+        scope.push(extra).unwrap();
         let weak = scope.downgrade(None);
 
         assert_eq!(
@@ -834,7 +943,10 @@ mod tests {
 
     #[test]
     fn initializer_panic_marks_module_failed() {
-        let state = ModuleState::new(ModuleSourceId::fresh(), DomainId::PROCESS);
+        let state = ModuleState::new(
+            ModuleSourceId::fresh(),
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = state.initialize(|| -> crate::Result<()> { panic!("initializer panic") });
         }));
@@ -846,7 +958,10 @@ mod tests {
 
     #[test]
     fn module_state_ignores_self_binding() {
-        let module = SyntheticModule::<NativeArch>::empty("module");
+        let module = SyntheticModule::<NativeArch>::empty(
+            "module",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
         let state = <SyntheticModule<NativeArch> as Module<NativeArch>>::state(&module);
         let binding = state.instance_id();
 
@@ -858,9 +973,15 @@ mod tests {
     #[test]
     fn binding_distinguishes_reloaded_source() {
         let source = ModuleSourceId::fresh();
-        let old = ModuleState::new(source, DomainId::PROCESS);
+        let old = ModuleState::new(
+            source,
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
         let binding = old.instance_id();
-        let replacement = ModuleState::new(source, DomainId::PROCESS);
+        let replacement = ModuleState::new(
+            source,
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
 
         assert_eq!(binding, old.instance_id());
         assert_ne!(binding, replacement.instance_id());

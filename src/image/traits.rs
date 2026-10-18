@@ -9,7 +9,7 @@ use crate::{
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
-    tls::{ModuleTls, TlsResolver},
+    tls::TlsModule,
 };
 use core::any::Any;
 
@@ -60,9 +60,9 @@ where
 ///
 /// Implementations may be backed by a loaded ELF image, a synthetic/virtual DSO,
 /// or any other module that can expose ELF-like symbol definitions.
-pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>:
-    Any + Send + Sync
-{
+/// The concrete implementation retains its TLS runtime. Lookup interfaces erase
+/// the resolver type; scopes check compatibility using the domain in [`Self::state`].
+pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &[u8];
 
@@ -84,8 +84,11 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// IFUNC, and module-specific symbols become target-visible addresses.
     fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr>;
 
-    /// Returns TLS metadata when this module owns a TLS block.
-    fn tls(&self) -> Option<ModuleTls> {
+    /// Returns the registration used for TLS relocation and current-thread lookup.
+    /// The registration must belong to the domain in `state()`. Implementations
+    /// must keep it and its runtime valid for all module uses;
+    /// the returned metadata does not own or retain the registration.
+    fn tls(&self) -> Option<&TlsModule> {
         None
     }
 
@@ -114,23 +117,22 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     }
 }
 
-impl<Arch, Tls> dyn Module<Arch, Tls>
+impl<Arch> dyn Module<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     /// Downcasts this borrowed module to a concrete implementation.
     #[inline]
     pub fn downcast_ref<M>(&self) -> Option<&M>
     where
-        M: Module<Arch, Tls> + 'static,
+        M: Module<Arch> + 'static,
     {
         (self as &dyn Any).downcast_ref()
     }
 
     /// Returns whether two borrowed views refer to the same logical module.
     #[inline]
-    pub fn ptr_eq(&self, other: &dyn Module<Arch, Tls>) -> bool {
+    pub fn ptr_eq(&self, other: &dyn Module<Arch>) -> bool {
         core::ptr::eq(self.state(), other.state())
     }
 
@@ -140,7 +142,8 @@ where
     ///
     /// # Safety
     ///
-    /// `T` must match the symbol's type and calling convention.
+    /// `T` must match the symbol's type and calling convention. A TLS address may
+    /// only be used in the resolving thread while its module and thread are alive.
     #[inline]
     pub unsafe fn try_get<T>(&self, name: impl AsRef<[u8]>) -> Result<Option<Symbol<'_, T>>> {
         let addr = lookup_symbol(self, &mut SymbolLookup::new(name.as_ref()))?;
@@ -151,7 +154,8 @@ where
     ///
     /// # Safety
     ///
-    /// `T` must match the symbol's type and calling convention.
+    /// `T` must match the symbol's type and calling convention. A TLS address may
+    /// only be used in the resolving thread while its module and thread are alive.
     #[inline]
     pub unsafe fn get<T>(&self, name: impl AsRef<[u8]>) -> Option<Symbol<'_, T>> {
         unsafe { self.try_get(name).ok().flatten() }
@@ -163,7 +167,8 @@ where
     ///
     /// # Safety
     ///
-    /// `T` must match the symbol's type and calling convention.
+    /// `T` must match the symbol's type and calling convention. A TLS address may
+    /// only be used in the resolving thread while its module and thread are alive.
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn try_get_version<T>(
@@ -182,7 +187,8 @@ where
     ///
     /// # Safety
     ///
-    /// `T` must match the symbol's type and calling convention.
+    /// `T` must match the symbol's type and calling convention. A TLS address may
+    /// only be used in the resolving thread while its module and thread are alive.
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn get_version<T>(
@@ -194,11 +200,10 @@ where
     }
 }
 
-impl<M, Arch, Tls> Module<Arch, Tls> for Arc<M>
+impl<M, Arch> Module<Arch> for Arc<M>
 where
-    M: Module<Arch, Tls> + ?Sized + 'static,
+    M: Module<Arch> + ?Sized + 'static,
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &[u8] {
@@ -226,7 +231,7 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
+    fn tls(&self) -> Option<&TlsModule> {
         (**self).tls()
     }
 

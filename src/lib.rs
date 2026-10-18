@@ -36,6 +36,7 @@
 //! ```rust,no_run
 //! use elf_loader::{
 //!     Loader, Relocator, Result,
+//!     runtime::{AddressSpaceId, Domain},
 //!     image::{SyntheticSymbol, SyntheticModule},
 //! };
 //!
@@ -44,14 +45,16 @@
 //! }
 //!
 //! fn main() -> Result<()> {
+//!     let domain = Domain::without_tls(AddressSpaceId::PROCESS);
 //!     let host = SyntheticModule::new(
 //!         "__host",
+//!         domain.id(),
 //!         [SyntheticSymbol::function("host_double", host_double as *const ())],
 //!     );
 //!
 //!     let lib = Relocator::new()
-//!         .run(Loader::new().load_dylib("path/to/plugin.so")?)
-//!         .modules([host])
+//!         .run(Loader::new().run(domain).load_dylib("path/to/plugin.so")?)
+//!         .modules([host])?
 //!         .relocate()?;
 //!
 //!     let run = unsafe {
@@ -115,6 +118,7 @@
 //!     arch::NativeArch,
 //!     observer::{BeforeLoadEvent, LoadObserver},
 //!     relocation::RelocationArch,
+//!     runtime::{AddressSpaceId, Domain},
 //! };
 //!
 //! struct TraceLoads;
@@ -132,7 +136,7 @@
 //!
 //! fn main() -> Result<()> {
 //!     let _raw = Loader::new()
-//!         .run()
+//!         .run(Domain::without_tls(AddressSpaceId::PROCESS))
 //!         .with_observer(TraceLoads)
 //!         .load_dylib("path/to/lib.so")?;
 //!
@@ -142,8 +146,9 @@
 //!
 //! ## Feature Flags
 //!
-//! - TLS relocation handling is always available. For TLS-using modules, start from
-//!   `Loader::with_default_tls_resolver` or provide a custom TLS resolver.
+//! - TLS relocation handling is always available. Pass a [`runtime::Domain`] to
+//!   [`Loader::run`] or [`LinkContext::new`]. Use [`runtime::Domain::without_tls`]
+//!   to disable TLS explicitly.
 //! - `lazy-binding`: enables the built-in `NativeLazyBinder`. Custom
 //!   [`lazy::LazyBinder`] implementations and [`RelocatorRun::lazy`] are always available;
 //!   [`Relocator::new`] remains eager until a binder is configured.

@@ -94,6 +94,7 @@ fn observes_symbol_binding() {
                 .expect("failed to load symbol consumer"),
         )
         .modules([&provider])
+        .expect("incompatible relocation modules")
         .observer(BindingRecorder(Arc::clone(&state)))
         .relocate()
         .expect("failed to relocate symbol consumer");

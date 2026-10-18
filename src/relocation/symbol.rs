@@ -8,23 +8,22 @@ use crate::{
     logging,
     memory::VmAddr,
     sync::{Arc, Weak},
-    tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use spin::Mutex;
 
-struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+struct UniqueDef<Arch: RelocationArch> {
     symbol: Arc<ElfSymbol<Arch::Layout>>,
-    source: Weak<dyn Module<Arch, Tls>>,
+    source: Weak<dyn Module<Arch>>,
 }
 
 /// GNU unique symbol state shared by one linker context.
-pub(crate) struct SymbolRegistry<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    unique: Mutex<BTreeMap<Box<[u8]>, UniqueDef<Arch, Tls>>>,
+pub(crate) struct SymbolRegistry<Arch: RelocationArch> {
+    unique: Mutex<BTreeMap<Box<[u8]>, UniqueDef<Arch>>>,
     pending_pins: Mutex<Vec<ModuleInstanceId>>,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
+impl<Arch: RelocationArch> SymbolRegistry<Arch> {
     #[inline]
     pub(crate) const fn new() -> Self {
         Self {
@@ -50,8 +49,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
         &self,
         name: &[u8],
         symbol: &ElfSymbol<Arch::Layout>,
-        source: &ModuleHandle<Arch, Tls>,
-    ) -> SymDef<'lib, Arch, Tls> {
+        source: &ModuleHandle<Arch>,
+    ) -> SymDef<'lib, Arch> {
         let mut defs = self.unique.lock();
         let (symbol, source) = if let Some((symbol, source)) =
             defs.get(name).and_then(|definition| {
@@ -94,29 +93,29 @@ impl BindingEffect {
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub enum SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub enum SymDef<'lib, Arch: RelocationArch> {
     Defined {
         symbol: &'lib ElfSymbol<Arch::Layout>,
-        source: &'lib dyn Module<Arch, Tls>,
+        source: &'lib dyn Module<Arch>,
     },
     Unique {
         symbol: Arc<ElfSymbol<Arch::Layout>>,
-        source: ModuleHandle<Arch, Tls>,
+        source: ModuleHandle<Arch>,
     },
     WeakUndef,
 }
 
-impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, Arch, Tls> {
+impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
     #[inline]
     pub(crate) fn defined(
         symbol: &'lib ElfSymbol<Arch::Layout>,
-        source: &'lib dyn Module<Arch, Tls>,
+        source: &'lib dyn Module<Arch>,
     ) -> Self {
         Self::Defined { symbol, source }
     }
 
     #[inline]
-    pub(crate) fn definition(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch, Tls>)> {
+    pub(crate) fn definition(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch>)> {
         match self {
             Self::Defined { symbol, source } => Some((symbol, *source)),
             Self::Unique { symbol, source } => Some((symbol, source.as_ref())),
@@ -153,26 +152,25 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 }
 
-pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    source: &'lib ModuleHandle<Arch, Tls>,
-    scope: LocalScope<Arch, Tls>,
-    global: Option<&'lib ModuleScope<Arch, Tls>>,
-    registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
+pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch> {
+    source: &'lib ModuleHandle<Arch>,
+    scope: LocalScope<Arch>,
+    global: Option<&'lib ModuleScope<Arch>>,
+    registry: Option<&'lib SymbolRegistry<Arch>>,
     symbolic: bool,
     order: LookupOrder,
 }
 
-impl<'lib, Arch, Tls> SymbolResolver<'lib, Arch, Tls>
+impl<'lib, Arch> SymbolResolver<'lib, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     pub(crate) fn new(
-        source: &'lib ModuleHandle<Arch, Tls>,
-        scope: LocalScope<Arch, Tls>,
-        global: Option<&'lib ModuleScope<Arch, Tls>>,
-        registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
+        source: &'lib ModuleHandle<Arch>,
+        scope: LocalScope<Arch>,
+        global: Option<&'lib ModuleScope<Arch>>,
+        registry: Option<&'lib SymbolRegistry<Arch>>,
         symbolic: bool,
         order: LookupOrder,
     ) -> Self {
@@ -187,12 +185,12 @@ where
     }
 
     #[inline]
-    pub(crate) const fn scope(&self) -> &LocalScope<Arch, Tls> {
+    pub(crate) const fn scope(&self) -> &LocalScope<Arch> {
         &self.scope
     }
 
     #[inline]
-    pub(crate) fn into_scope(self) -> LocalScope<Arch, Tls> {
+    pub(crate) fn into_scope(self) -> LocalScope<Arch> {
         self.scope
     }
 
@@ -200,7 +198,7 @@ where
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
         lookup: &mut SymbolLookup<'_>,
-        source: &'find ModuleHandle<Arch, Tls>,
+        source: &'find ModuleHandle<Arch>,
     ) -> Option<&'find ElfSymbol<Arch::Layout>> {
         let symbol = source
             .exports()
@@ -218,11 +216,8 @@ where
     fn lookup_in_scope<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-        mut accept: impl FnMut(&ModuleHandle<Arch, Tls>) -> bool,
-    ) -> Option<(
-        &'find ElfSymbol<Arch::Layout>,
-        &'find ModuleHandle<Arch, Tls>,
-    )> {
+        mut accept: impl FnMut(&ModuleHandle<Arch>) -> bool,
+    ) -> Option<(&'find ElfSymbol<Arch::Layout>, &'find ModuleHandle<Arch>)> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
         match self.order {
             LookupOrder::GlobalFirst => self
@@ -250,7 +245,7 @@ where
     fn find_def<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch, Tls>> {
+    ) -> Option<SymDef<'find, Arch>> {
         let sym = entry.symbol();
         let self_def = || (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source));
         let scope_def = || {
@@ -272,8 +267,8 @@ where
         &self,
         name: &[u8],
         symbol: &'find ElfSymbol<Arch::Layout>,
-        source: &'find ModuleHandle<Arch, Tls>,
-    ) -> SymDef<'find, Arch, Tls> {
+        source: &'find ModuleHandle<Arch>,
+    ) -> SymDef<'find, Arch> {
         if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
             self.bind_unique(name, symbol, source)
         } else {
@@ -287,8 +282,8 @@ where
         &self,
         name: &[u8],
         symbol: &'find ElfSymbol<Arch::Layout>,
-        source: &'find ModuleHandle<Arch, Tls>,
-    ) -> SymDef<'find, Arch, Tls> {
+        source: &'find ModuleHandle<Arch>,
+    ) -> SymDef<'find, Arch> {
         if let Some(registry) = &self.registry {
             registry.resolve_unique(name, symbol, source)
         } else {
@@ -302,7 +297,7 @@ where
     pub(crate) fn find<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch, Tls>> {
+    ) -> Option<SymDef<'find, Arch>> {
         let sym = entry.symbol();
         self.find_def(entry).or_else(|| Self::weak_undef(sym))
     }
@@ -312,7 +307,7 @@ where
     pub(crate) fn find_copy<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<(SymDef<'find, Arch, Tls>, BindingEffect)> {
+    ) -> Option<(SymDef<'find, Arch>, BindingEffect)> {
         let source_id = self.source.source_id();
         let (symbol, source) =
             self.lookup_in_scope(entry, |source| source.source_id() != source_id)?;
@@ -333,7 +328,7 @@ where
     }
 
     #[cold]
-    fn weak_undef<'find>(sym: &'find ElfSymbol<Arch::Layout>) -> Option<SymDef<'find, Arch, Tls>> {
+    fn weak_undef<'find>(sym: &'find ElfSymbol<Arch::Layout>) -> Option<SymDef<'find, Arch>> {
         if sym.is_weak() && sym.is_undef() {
             debug_assert_eq!(sym.st_value(), 0);
             Some(SymDef::WeakUndef)
@@ -346,6 +341,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{LookupOrder, SymbolRegistry, SymbolResolver};
+    use crate::runtime::{AddressSpaceId, Domain};
     use crate::{
         arch::NativeArch,
         elf::{
@@ -354,7 +350,6 @@ mod tests {
         },
         image::{LocalScope, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol},
         memory::VmAddr,
-        runtime::DomainId,
     };
 
     fn symbol(module: &ModuleHandle<NativeArch>) -> SymbolEntry<'_, NativeElfLayout> {
@@ -367,14 +362,16 @@ mod tests {
     }
 
     fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LocalScope {
-        let mut scope = ModuleScope::new(DomainId::PROCESS);
-        scope.extend(modules);
-        LocalScope::new([scope.clone()], scope)
+        let mut scope =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        scope.extend(modules).unwrap();
+        LocalScope::from_group(scope)
     }
 
     fn definition(name: &str, value: usize) -> SyntheticModule<NativeArch> {
         SyntheticModule::new(
             name,
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("value", value as *const ())],
         )
     }
@@ -383,6 +380,7 @@ mod tests {
     fn lookup_order_selects_scope() {
         let source = ModuleHandle::new(SyntheticModule::new(
             "source",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::from_fields(
                 "value",
                 0,
@@ -395,8 +393,11 @@ mod tests {
             )],
         ));
         let local = scope([definition("local", 0x100)]);
-        let mut global = ModuleScope::new(DomainId::PROCESS);
-        global.push(ModuleHandle::new(definition("global", 0x200)));
+        let mut global =
+            ModuleScope::new(Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id());
+        global
+            .push(ModuleHandle::new(definition("global", 0x200)))
+            .unwrap();
 
         for (order, expected) in [
             (LookupOrder::GlobalFirst, 0x200),
@@ -415,11 +416,13 @@ mod tests {
     fn symbol_visibility_controls_scope_lookup() {
         let source = ModuleHandle::new(SyntheticModule::new(
             "source",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("value", 0x100usize as *const ())
                 .with_other(ElfSymbolVisibility::PROTECTED.raw())],
         ));
         let external = SyntheticModule::new(
             "external",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("value", 0x200usize as *const ())],
         );
         let external_scope = scope([external]);
@@ -438,6 +441,7 @@ mod tests {
 
         let source = ModuleHandle::new(SyntheticModule::new(
             "source",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::from_fields(
                 "value",
                 0,
@@ -451,11 +455,13 @@ mod tests {
         ));
         let hidden = SyntheticModule::new(
             "hidden",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("value", 0x200usize as *const ())
                 .with_other(ElfSymbolVisibility::HIDDEN.raw())],
         );
         let visible = SyntheticModule::new(
             "visible",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("value", 0x300usize as *const ())],
         );
         let scope = scope([hidden, visible]);
@@ -474,6 +480,7 @@ mod tests {
 
         let hidden_ref = ModuleHandle::new(SyntheticModule::new(
             "source",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::from_fields(
                 "value",
                 0,
@@ -504,6 +511,7 @@ mod tests {
     fn gnu_unique_is_canonical_within_one_registry() {
         let source = ModuleHandle::new(SyntheticModule::new(
             "source",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::from_fields(
                 "value",
                 0,
@@ -518,6 +526,7 @@ mod tests {
         let unique = |name, value| {
             SyntheticModule::new(
                 name,
+                Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                 [SyntheticSymbol::from_fields(
                     "value",
                     value,

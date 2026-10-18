@@ -6,7 +6,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
     relocation::RelocationArch,
-    runtime::{CodeExecutor, DomainId},
+    runtime::{CodeExecutor, Domain},
     segment::{ElfSegments, MemoryProtection},
     sync::Arc,
     tls::{TlsInfo, TlsResolver},
@@ -66,11 +66,8 @@ pub(crate) struct ImageBuilder<
     /// Runtime-code executor used by loaded dynamic cores.
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 
-    /// Runtime domain shared by all addresses in this image.
-    pub(crate) domain: DomainId,
-
-    /// TLS resolver shared by every module loaded from this loader.
-    pub(crate) tls_resolver: Tls,
+    /// Fixed runtime domain selected by the loader run.
+    pub(crate) domain: Domain<Arch, Tls>,
 
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,
@@ -128,8 +125,7 @@ where
         page_size: usize,
         user_data: D,
         executor: Arc<dyn CodeExecutor<Arch>>,
-        domain: DomainId,
-        tls_resolver: Tls,
+        domain: Domain<Arch, Tls>,
     ) -> Self {
         Self {
             path,
@@ -145,7 +141,6 @@ where
             user_data,
             executor,
             domain,
-            tls_resolver,
             interp: None,
             eh_frame_hdr: None,
         }

@@ -2,6 +2,7 @@ use super::{
     ObjectBuilder, ObjectSections,
     layout::{SectionGroups, SectionSegments},
 };
+use crate::runtime::{AddressSpaceId, Domain};
 use crate::{
     Loader, LoaderRun, ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
@@ -105,8 +106,7 @@ where
             pltgot,
             user_data,
             executor,
-            self.loader.domain_id(),
-            self.loader.tls_resolver(),
+            self.domain.clone(),
         )?;
         let mut raw = builder.build_object();
         observer.on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
@@ -118,22 +118,22 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Arch, M, Exec> Loader<D, Arch, M, Exec>
 where
     (): LoadObserver<D, Arch>,
     D: Default + Send + Sync + 'static,
-    Tls: TlsResolver<Arch>,
     Arch: ObjectArch,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads a relocatable object file into memory and prepares it for relocation.
     #[inline]
-    pub fn load_object<'a, I>(&self, input: I) -> Result<RawObject<D, Arch, M::Region, Tls>>
+    pub fn load_object<'a, I>(&self, input: I) -> Result<RawObject<D, Arch, M::Region, ()>>
     where
         I: IntoElfReader<'a>,
     {
-        self.run().load_object(input)
+        self.run(Domain::without_tls(AddressSpaceId::PROCESS))
+            .load_object(input)
     }
 }
 
@@ -260,6 +260,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::elf::{ElfHeader, ElfShdr, ElfSymbol};
+    use crate::runtime::{AddressSpaceId, Domain};
     use crate::{
         Error, IoError, Loader, ParseShdrError, Result,
         arch::NativeArch,
@@ -638,7 +639,9 @@ mod tests {
     fn load_object_notifies_object_load_observers() {
         let mut observer = ObjectObserver::default();
         let loader = Loader::new().with_data::<ObjectData>();
-        let mut run = loader.run().with_observer(&mut observer);
+        let mut run = loader
+            .run(Domain::without_tls(AddressSpaceId::PROCESS))
+            .with_observer(&mut observer);
 
         let _ = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));
         drop(run);

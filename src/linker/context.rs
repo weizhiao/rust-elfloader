@@ -8,7 +8,7 @@ use crate::{
     linker::{AddressIndex, AddressMatch},
     memory::VmAddr,
     relocation::{RelocationArch, SymbolRegistry},
-    runtime::DomainId,
+    runtime::{AddressSpaceId, Domain, DomainId},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -18,7 +18,9 @@ use alloc::{collections::VecDeque, vec::Vec};
 ///
 /// `LinkContext` is the mutable state paired with [`Linker`](crate::Linker).
 /// It owns module ids, loaded module handles, aliases, and direct dependency
-/// edges produced by successful linker loads.
+/// edges produced by successful linker loads. Its fixed domain supplies the TLS
+/// resolver to loader runs; reusable loader configuration cannot replace it.
+/// Existing modules must have the same complete domain identity.
 ///
 /// Each context is one symbol namespace. Multiple contexts may target the same
 /// runtime domain while retaining independent module graphs and GNU unique
@@ -30,9 +32,10 @@ use alloc::{collections::VecDeque, vec::Vec};
 /// entry during unloading. State that must follow the underlying module allocation
 /// belongs in the concrete module type instead.
 pub struct LinkContext<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    pub(super) global: GlobalScope<Arch, Tls>,
-    pub(super) committed: CommittedStorage<Meta, Arch, Tls>,
-    pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
+    pub(super) domain: Domain<Arch, Tls>,
+    pub(super) global: GlobalScope<Arch>,
+    pub(super) committed: CommittedStorage<Meta, Arch>,
+    pub(super) symbols: Arc<SymbolRegistry<Arch>>,
     pub(crate) search_paths: SearchPathPool,
 }
 
@@ -43,7 +46,7 @@ impl LinkContext<(), NativeArch, ()> {
     /// explicit target architecture or TLS resolver, or another runtime domain.
     #[inline]
     pub fn for_process() -> Self {
-        Self::new(DomainId::PROCESS)
+        Self::new(Domain::without_tls(AddressSpaceId::PROCESS))
     }
 }
 
@@ -52,15 +55,20 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    /// Creates an empty link context for `domain`.
-    #[inline]
-    pub fn new(domain: DomainId) -> Self {
+    /// Creates an empty link context bound to a fixed runtime domain.
+    pub fn new(domain: Domain<Arch, Tls>) -> Self {
         Self {
-            global: GlobalScope::new(domain),
-            committed: CommittedStorage::new(ContextId::fresh(), domain),
+            global: GlobalScope::new(domain.id()),
+            committed: CommittedStorage::new(ContextId::fresh(), domain.id()),
+            domain,
             symbols: Arc::new(SymbolRegistry::new()),
             search_paths: SearchPathPool::default(),
         }
+    }
+
+    /// Returns the fixed domain used by this context and all its loader runs.
+    pub fn domain(&self) -> &Domain<Arch, Tls> {
+        &self.domain
     }
 
     /// Returns this context's symbol-namespace identity.
@@ -82,7 +90,7 @@ where
     /// to a standalone [`Relocator`](crate::Relocator) run when that relocation
     /// should share this context's global namespace.
     #[inline]
-    pub const fn global_scope(&self) -> &GlobalScope<Arch, Tls> {
+    pub const fn global_scope(&self) -> &GlobalScope<Arch> {
         &self.global
     }
 
@@ -125,7 +133,7 @@ where
     ///
     /// A different instance loaded from the same source does not match.
     #[inline]
-    pub fn module_id_for(&self, module: &dyn Module<Arch, Tls>) -> Option<ModuleId> {
+    pub fn module_id_for(&self, module: &dyn Module<Arch>) -> Option<ModuleId> {
         self.committed
             .module_for_binding(module.state().instance_id())
             .map(|slot| self.committed.make_module_id(slot))
@@ -169,7 +177,7 @@ where
     /// let elf = module.downcast_ref::<ElfModule<MyData, MyArch, MyRegion, MyTls>>();
     /// ```
     #[inline]
-    pub fn module(&self, id: ModuleId) -> Result<&dyn Module<Arch, Tls>> {
+    pub fn module(&self, id: ModuleId) -> Result<&dyn Module<Arch>> {
         let slot = self.committed.module_slot(id)?;
         Ok(self
             .committed
@@ -305,7 +313,7 @@ where
                 .iter()
                 .any(|candidate| candidate.source_id() == module.handle().source_id())
             {
-                global.push(module.handle().clone());
+                global.push_admitted(module.handle().clone());
             }
             queue.extend(module.direct_deps().iter().copied());
         }
@@ -338,7 +346,7 @@ where
                 .iter()
                 .any(|candidate| candidate.source_id() == module.handle().source_id())
             {
-                global.push(module.handle().clone());
+                global.push_admitted(module.handle().clone());
             }
         }
         Ok(())
@@ -351,7 +359,7 @@ where
     ///
     /// The returned collection keeps the entire unload group alive. Drop it
     /// after releasing any external registry lock to run pending finalizers.
-    pub fn release(&mut self, lease: ModuleLease) -> Result<UnloadGroup<Meta, Arch, Tls>> {
+    pub fn release(&mut self, lease: ModuleLease) -> Result<UnloadGroup<Meta, Arch>> {
         let id = lease.id();
         let slot = self.committed.module_slot(id)?;
         let refs = self
@@ -425,7 +433,7 @@ where
     }
 
     /// Returns the retained breadth-first dependency scope rooted at `root`.
-    pub fn load_group(&mut self, root: ModuleId) -> Result<ModuleScope<Arch, Tls>> {
+    pub fn load_group(&mut self, root: ModuleId) -> Result<ModuleScope<Arch>> {
         let root_slot = self.committed.module_slot(root)?;
         let root_module = self
             .committed
@@ -435,7 +443,7 @@ where
             return Ok(scope.clone());
         }
 
-        let mut scope = ModuleScope::new(self.domain_id());
+        let mut scope = ModuleScope::new(self.domain.id());
         let mut visited = EntitySet::default();
         let mut queue = VecDeque::new();
         visited.insert(root_slot);
@@ -447,7 +455,7 @@ where
                 .module(slot)
                 .expect("load group traversal must only contain committed modules");
 
-            scope.push(module.handle().clone());
+            scope.push_admitted(module.handle().clone());
             for &dep in module.direct_deps() {
                 if visited.insert(dep) {
                     queue.push_back(dep);
@@ -477,7 +485,7 @@ mod tests {
         linker::{GraphModule, ModuleId},
         memory::{ImageMemory, VmAddr},
         relocation::RelocationArch,
-        runtime::DomainId,
+        runtime::{AddressSpaceId, Domain, DomainId},
         sync::Arc,
     };
     use alloc::{string::String, vec::Vec};
@@ -532,7 +540,10 @@ mod tests {
     ) -> ModuleHandle<NativeArch> {
         let module = ModuleHandle::new(FinalizeModule {
             name,
-            module: SyntheticModule::empty(name),
+            module: SyntheticModule::empty(
+                name,
+                Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+            ),
             calls: Arc::clone(calls),
         });
         module.initialize().unwrap();
@@ -540,7 +551,7 @@ mod tests {
     }
 
     fn domain_module(name: &'static str, domain: DomainId) -> SyntheticModule<NativeArch> {
-        SyntheticModule::empty(name).with_domain(domain)
+        SyntheticModule::empty(name, domain)
     }
 
     fn node(key: &str, module: impl Into<ModuleHandle<NativeArch>>) -> GraphModule<(), NativeArch> {
@@ -562,14 +573,27 @@ mod tests {
 
     #[test]
     fn load_group_is_cached_by_its_root_entry() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dependency = context
-            .insert(node("dependency", SyntheticModule::empty("dependency")))
+            .insert(node(
+                "dependency",
+                SyntheticModule::empty(
+                    "dependency",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let root = context
             .insert(
-                node("root", SyntheticModule::empty("root"))
-                    .dependencies([instance(&context, dependency.id())]),
+                node(
+                    "root",
+                    SyntheticModule::empty(
+                        "root",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([instance(&context, dependency.id())]),
             )
             .unwrap();
 
@@ -587,14 +611,21 @@ mod tests {
     fn process_context_uses_native_defaults() {
         let context = LinkContext::for_process();
 
-        assert_eq!(context.domain_id(), DomainId::PROCESS);
+        assert_eq!(
+            context.domain_id(),
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id()
+        );
         assert!(context.is_empty());
     }
 
     #[test]
     fn module_id_for_tracks_committed_instance() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
-        let module = ModuleHandle::new(SyntheticModule::empty("module"));
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let module = ModuleHandle::new(SyntheticModule::empty(
+            "module",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
         let lease = context.insert(node("module", module.clone())).unwrap();
 
         assert_eq!(context.module_id_for(module.as_ref()), Some(lease.id()));
@@ -605,10 +636,81 @@ mod tests {
     }
 
     #[test]
+    fn tls_admission_rejects_foreign_runtime_without_partial_changes() {
+        use crate::tls::{
+            TlsBinding, TlsImageSource, TlsInfo, TlsModule, TlsModuleId, TlsRequest, TlsResolver,
+        };
+
+        // A metadata-only runtime: no storage is accessed by this admission test.
+        #[derive(Clone)]
+        struct Runtime(usize);
+        impl TlsResolver<NativeArch> for Runtime {
+            fn register(&self, _: TlsInfo, _: TlsRequest) -> Result<TlsModule> {
+                let entry = self.bind_tls_get_addr()?;
+                Ok(unsafe { TlsModule::new(TlsBinding::new(TlsModuleId::new(1), None), entry) })
+            }
+            fn publish(&self, _: TlsImageSource, _: TlsModuleId) -> Result<()> {
+                Ok(())
+            }
+            fn unregister(&self, _: TlsModuleId) {}
+            fn bind_tls_get_addr(&self) -> Result<VmAddr> {
+                Ok(VmAddr::new(self.0))
+            }
+        }
+
+        let first = Runtime(0x1000);
+        let second = Runtime(0x2000);
+        let tls = first
+            .register(TlsInfo::default(), TlsRequest::Dynamic)
+            .unwrap();
+        let module = ModuleHandle::<NativeArch>::new(
+            SyntheticModule::<NativeArch>::empty(
+                "foreign",
+                Domain::new(AddressSpaceId::PROCESS, first.clone())
+                    .unwrap()
+                    .id(),
+            )
+            .with_tls(tls)
+            .unwrap(),
+        );
+        let mut source = LinkContext::<(), NativeArch, Runtime>::new(
+            Domain::new(AddressSpaceId::PROCESS, first.clone()).unwrap(),
+        );
+        let root = source
+            .insert(GraphModule::new("foreign", module.clone()))
+            .unwrap();
+        let mut target = LinkContext::<(), NativeArch, Runtime>::new(
+            Domain::new(AddressSpaceId::PROCESS, second).unwrap(),
+        );
+        let error = target.import(&source, root.id()).unwrap_err();
+        assert!(matches!(error, Error::DomainMismatch(_)));
+        assert!(target.is_empty());
+
+        let error = target
+            .insert_batch([
+                GraphModule::new(
+                    "plain",
+                    SyntheticModule::<NativeArch>::empty("plain", target.domain_id()),
+                ),
+                GraphModule::new("foreign", module),
+            ])
+            .unwrap_err();
+        assert!(matches!(error, Error::DomainMismatch(_)));
+        assert!(target.is_empty());
+
+        let mut shared = LinkContext::<(), NativeArch, Runtime>::new(
+            Domain::new(AddressSpaceId::PROCESS, first).unwrap(),
+        );
+        let imported = shared.import(&source, root.id()).unwrap();
+        assert!(shared.module(imported.id()).is_ok());
+    }
+
+    #[test]
     fn context_rejects_modules_from_another_domain() {
-        let first = DomainId::new();
-        let second = DomainId::new();
-        let mut context = LinkContext::<(), NativeArch>::new(first);
+        let first = Domain::<NativeArch>::without_tls(AddressSpaceId::new()).id();
+        let second = Domain::<NativeArch>::without_tls(AddressSpaceId::new()).id();
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(first.address_space()));
 
         let _ = context
             .insert(node("first", domain_module("first", first)))
@@ -620,26 +722,29 @@ mod tests {
         assert_eq!(context.domain_id(), first);
         assert!(matches!(
             error,
-            Error::DomainMismatch { expected, actual }
-                if expected == first && actual == second
+            Error::DomainMismatch(details)
+                if details.expected == first && details.actual == second
         ));
     }
 
     #[test]
     fn module_scope_rejects_mixed_domains() {
-        let first = DomainId::new();
-        let second = DomainId::new();
-        let mut scope = ModuleScope::<NativeArch>::new(first);
-        scope.extend([
-            domain_module("first", first),
-            domain_module("second", second),
-        ]);
-
-        let error = scope.check_domain(first).unwrap_err();
+        let first = Domain::<NativeArch>::without_tls(AddressSpaceId::new()).id();
+        let second = Domain::<NativeArch>::without_tls(AddressSpaceId::new()).id();
+        let mut scope = ModuleScope::<NativeArch>::new(
+            Domain::<NativeArch>::without_tls((first).address_space()).id(),
+        );
+        let error = scope
+            .extend([
+                domain_module("first", first),
+                domain_module("second", second),
+            ])
+            .unwrap_err();
+        assert!(scope.is_empty());
         assert!(matches!(
             error,
-            Error::DomainMismatch { expected, actual }
-                if expected == first && actual == second
+            Error::DomainMismatch(details)
+                if details.expected == first && details.actual == second
         ));
     }
 
@@ -652,14 +757,28 @@ mod tests {
 
     #[test]
     fn module_ids_do_not_cross_contexts() {
-        let mut first = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut first =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first_root = first
-            .insert(node("root", SyntheticModule::empty("first")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "first",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert first module");
 
-        let mut second = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut second =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let second_root = second
-            .insert(node("root", SyntheticModule::empty("second")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "second",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert second module");
 
         assert_ne!(first.context_id(), second.context_id());
@@ -674,7 +793,7 @@ mod tests {
     #[test]
     fn release_detaches_before_finalize() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let id = context
             .insert(node("removed", finalize_module("removed", &calls)))
             .unwrap();
@@ -691,7 +810,7 @@ mod tests {
     #[test]
     fn pin_keeps_module_until_context_drop() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dependency = context
             .insert(node("dependency", finalize_module("dependency", &calls)))
             .unwrap();
@@ -716,8 +835,14 @@ mod tests {
     }
 
     fn modules_with_pinned_binding() -> (ModuleHandle<NativeArch>, ModuleHandle<NativeArch>) {
-        let provider = ModuleHandle::new(SyntheticModule::empty("provider"));
-        let owner = ModuleHandle::new(SyntheticModule::empty("owner"));
+        let provider = ModuleHandle::new(SyntheticModule::empty(
+            "provider",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let owner = ModuleHandle::new(SyntheticModule::empty(
+            "owner",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
         let provider_id = provider.state().instance_id();
         owner.state().install_effects([provider_id], [provider_id]);
         (provider, owner)
@@ -726,7 +851,7 @@ mod tests {
     #[test]
     fn insert_applies_binding_pin() {
         let (provider, owner) = modules_with_pinned_binding();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let mut leases = context
             .insert_batch([node("provider", provider), node("owner", owner)])
             .unwrap()
@@ -745,12 +870,12 @@ mod tests {
     #[test]
     fn import_applies_binding_pin() {
         let (provider, owner) = modules_with_pinned_binding();
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let leases = source
             .insert_batch([node("provider", provider), node("owner", owner)])
             .unwrap();
         let owner = leases[1].id();
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
 
         let owner = target.import(&source, owner).unwrap();
         let unloaded = target.release(owner).unwrap();
@@ -762,9 +887,15 @@ mod tests {
 
     #[test]
     fn reload_invalidates_old_module_id() {
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first = context
-            .insert(node("module", SyntheticModule::empty("first")))
+            .insert(node(
+                "module",
+                SyntheticModule::empty(
+                    "first",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let first_id = first.id();
         drop(context.release(first).unwrap());
@@ -772,7 +903,13 @@ mod tests {
         assert_eq!(context.module_id("module"), None);
 
         let second = context
-            .insert(node("module", SyntheticModule::empty("second")))
+            .insert(node(
+                "module",
+                SyntheticModule::empty(
+                    "second",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         assert_ne!(second.id(), first_id);
         assert_eq!(context.module_id("module"), Some(second.id()));
@@ -790,8 +927,8 @@ mod tests {
     fn shared_module_finalizes_after_last_handle() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let module = finalize_module("shared", &calls);
-        let mut first = LinkContext::<()>::new(DomainId::PROCESS);
-        let mut second = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut first = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
+        let mut second = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first_id = first.insert(node("shared", module.clone())).unwrap();
         let second_id = second.insert(node("shared", module.clone())).unwrap();
 
@@ -807,10 +944,16 @@ mod tests {
 
     #[test]
     fn duplicate_handles_share_slot() {
-        let fallback = ModuleHandle::new(SyntheticModule::empty("fallback"));
-        let module = ModuleHandle::new(SyntheticModule::empty("shared"));
+        let fallback = ModuleHandle::new(SyntheticModule::empty(
+            "fallback",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let module = ModuleHandle::new(SyntheticModule::empty(
+            "shared",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
         let source = module.source_id();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let fallback = context.insert(node("fallback", fallback)).unwrap();
         context.add_alias(fallback.id(), "second").unwrap();
         let first = context.insert(node("first", module.clone())).unwrap();
@@ -830,9 +973,13 @@ mod tests {
     #[test]
     fn module_data_outlives_context_entry() {
         let module = ModuleHandle::new(
-            SyntheticModule::empty("stateful").with_user_data(String::from("module data")),
+            SyntheticModule::empty(
+                "stateful",
+                Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+            )
+            .with_user_data(String::from("module data")),
         );
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let id = context.insert(node("stateful", module.clone())).unwrap();
 
         drop(context.release(id).unwrap());
@@ -847,7 +994,7 @@ mod tests {
     fn context_drop_finalizes_in_lifecycle_order() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         {
-            let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+            let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
             let dep = context
                 .insert(node("dep", finalize_module("dep", &calls)))
                 .unwrap();
@@ -862,9 +1009,15 @@ mod tests {
 
     #[test]
     fn releases_all_acquisitions() {
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let id = context
-            .insert(node("root", SyntheticModule::empty("root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let module_id = id.id();
         let second = context.acquire(module_id).unwrap();
@@ -879,17 +1032,39 @@ mod tests {
 
     #[test]
     fn shared_dependencies_remain_reachable() {
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let shared = context
-            .insert(node("shared", SyntheticModule::empty("shared")))
+            .insert(node(
+                "shared",
+                SyntheticModule::empty(
+                    "shared",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let shared_instance = instance(&context, shared.id());
         let first = context
-            .insert(node("first", SyntheticModule::empty("first")).dependencies([shared_instance]))
+            .insert(
+                node(
+                    "first",
+                    SyntheticModule::empty(
+                        "first",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([shared_instance]),
+            )
             .unwrap();
         let second = context
             .insert(
-                node("second", SyntheticModule::empty("second")).dependencies([shared_instance]),
+                node(
+                    "second",
+                    SyntheticModule::empty(
+                        "second",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([shared_instance]),
             )
             .unwrap();
 
@@ -914,7 +1089,7 @@ mod tests {
     #[test]
     fn finalizes_dependents_before_dependencies() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dep = context
             .insert(node("dep", finalize_module("dep", &calls)))
             .unwrap();
@@ -932,9 +1107,16 @@ mod tests {
 
     #[test]
     fn alias_growth_preserves_bound_dependencies() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let canonical = context
-            .insert(node("canonical", SyntheticModule::empty("canonical")))
+            .insert(node(
+                "canonical",
+                SyntheticModule::empty(
+                    "canonical",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert canonical module");
         let canonical_id = canonical.id();
         context
@@ -942,11 +1124,26 @@ mod tests {
             .expect("failed to add alias");
         let canonical_instance = instance(&context, canonical_id);
         let root = context
-            .insert(node("root", SyntheticModule::empty("root")).dependencies([canonical_instance]))
+            .insert(
+                node(
+                    "root",
+                    SyntheticModule::empty(
+                        "root",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([canonical_instance]),
+            )
             .expect("failed to insert root module");
         let root_id = root.id();
         let replacement = context
-            .insert(node("replacement", SyntheticModule::empty("replacement")))
+            .insert(node(
+                "replacement",
+                SyntheticModule::empty(
+                    "replacement",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert replacement module");
         let replacement_id = replacement.id();
         context
@@ -963,12 +1160,25 @@ mod tests {
 
     #[test]
     fn alias_uses_registration_order() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first = context
-            .insert(node("first", SyntheticModule::empty("first")))
+            .insert(node(
+                "first",
+                SyntheticModule::empty(
+                    "first",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert first module");
         let second = context
-            .insert(node("second", SyntheticModule::empty("second")))
+            .insert(node(
+                "second",
+                SyntheticModule::empty(
+                    "second",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert second module");
         let first_id = first.id();
         let second_id = second.id();
@@ -993,17 +1203,36 @@ mod tests {
 
     #[test]
     fn load_order_tracks_reused_slots() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first = context
-            .insert(node("first", SyntheticModule::empty("first")))
+            .insert(node(
+                "first",
+                SyntheticModule::empty(
+                    "first",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let second = context
-            .insert(node("second", SyntheticModule::empty("second")))
+            .insert(node(
+                "second",
+                SyntheticModule::empty(
+                    "second",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
 
         drop(context.release(first).unwrap());
         let first = context
-            .insert(node("first", SyntheticModule::empty("first")))
+            .insert(node(
+                "first",
+                SyntheticModule::empty(
+                    "first",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let names = context
             .load_order()
@@ -1017,13 +1246,26 @@ mod tests {
 
     #[test]
     fn duplicate_keys_preserve_insertion_order() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first = context
-            .insert(node("root", SyntheticModule::empty("old-root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "old-root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert root module");
         let first_id = first.id();
         let second = context
-            .insert(node("root", SyntheticModule::empty("new-root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "new-root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert fallback module");
 
         assert_eq!(context.module_id("root"), Some(first_id));
@@ -1034,22 +1276,44 @@ mod tests {
 
     #[test]
     fn keys_use_registration_order() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut context =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let root = context
-            .insert(node("root", SyntheticModule::empty("root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert root module");
         let root_id = root.id();
         context
             .add_alias(root_id, "alias")
             .expect("failed to add alias");
         let dep_module = context
-            .insert(node("dep", SyntheticModule::empty("dep")))
+            .insert(node(
+                "dep",
+                SyntheticModule::empty(
+                    "dep",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert dependency");
         let dep_module_id = dep_module.id();
         let dep_instance = instance(&context, dep_module_id);
 
         let fallback = context
-            .insert(node("alias", SyntheticModule::empty("alias")).dependencies([dep_instance]))
+            .insert(
+                node(
+                    "alias",
+                    SyntheticModule::empty(
+                        "alias",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([dep_instance]),
+            )
             .expect("failed to insert fallback module");
         assert_ne!(fallback.id(), root_id);
         assert_eq!(context.module_id("alias"), Some(root_id));
@@ -1068,9 +1332,16 @@ mod tests {
 
     #[test]
     fn import_roots_preserves_bound_dependencies() {
-        let mut source = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut source =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let canonical = source
-            .insert(node("canonical", SyntheticModule::empty("canonical")))
+            .insert(node(
+                "canonical",
+                SyntheticModule::empty(
+                    "canonical",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert canonical module");
         let canonical_id = canonical.id();
         source
@@ -1078,17 +1349,33 @@ mod tests {
             .expect("failed to add alias");
         let canonical_instance = instance(&source, canonical_id);
         let root = source
-            .insert(node("root", SyntheticModule::empty("root")).dependencies([canonical_instance]))
+            .insert(
+                node(
+                    "root",
+                    SyntheticModule::empty(
+                        "root",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([canonical_instance]),
+            )
             .expect("failed to insert root module");
         let root_id = root.id();
         let replacement = source
-            .insert(node("replacement", SyntheticModule::empty("replacement")))
+            .insert(node(
+                "replacement",
+                SyntheticModule::empty(
+                    "replacement",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .expect("failed to insert replacement module");
         source
             .add_alias(replacement.id(), "alias")
             .expect("failed to add alias fallback");
 
-        let mut target = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let mut target =
+            LinkContext::<(), NativeArch>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let imported = target
             .import_roots(&source)
             .expect("failed to import context roots");
@@ -1119,17 +1406,20 @@ mod tests {
 
     #[test]
     fn imported_modules_have_context_local_metadata() {
-        let mut source = LinkContext::<usize>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<usize>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_lease = source
             .insert(GraphModule::with_meta(
                 "module",
-                SyntheticModule::empty("module"),
+                SyntheticModule::empty(
+                    "module",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
                 7,
             ))
             .unwrap();
         let source_id = source_lease.id();
 
-        let mut target = LinkContext::<String>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<String>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let target_lease = target.import(&source, source_id).unwrap();
         let target_id = target_lease.id();
 
@@ -1152,23 +1442,42 @@ mod tests {
 
     #[test]
     fn import_copies_only_dependency_closure() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_dep = source
-            .insert(node("dep", SyntheticModule::empty("dep")))
+            .insert(node(
+                "dep",
+                SyntheticModule::empty(
+                    "dep",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let source_dep_instance = instance(&source, source_dep.id());
         let source_root = source
             .insert(
-                node("root", SyntheticModule::empty("root")).dependencies([source_dep_instance]),
+                node(
+                    "root",
+                    SyntheticModule::empty(
+                        "root",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([source_dep_instance]),
             )
             .unwrap();
         let source_dep_id = source_dep.id();
         let source_root_id = source_root.id();
         let _ = source
-            .insert(node("unrelated", SyntheticModule::empty("unrelated")))
+            .insert(node(
+                "unrelated",
+                SyntheticModule::empty(
+                    "unrelated",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
 
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let root = target.import(&source, source_root_id).unwrap();
         let root_id = root.id();
         let dep = target
@@ -1202,20 +1511,39 @@ mod tests {
 
     #[test]
     fn import_preserves_conflicting_key_order() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dep = source
-            .insert(node("dep", SyntheticModule::empty("dep")))
+            .insert(node(
+                "dep",
+                SyntheticModule::empty(
+                    "dep",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let dep_instance = instance(&source, dep.id());
         let source_root = source
             .insert(
-                node("root", SyntheticModule::empty("source-root")).dependencies([dep_instance]),
+                node(
+                    "root",
+                    SyntheticModule::empty(
+                        "source-root",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                )
+                .dependencies([dep_instance]),
             )
             .unwrap();
 
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let existing = target
-            .insert(node("root", SyntheticModule::empty("target-root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "target-root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let existing_id = existing.id();
         let imported = target.import(&source, source_root.id()).unwrap();
@@ -1230,13 +1558,19 @@ mod tests {
 
     #[test]
     fn import_uses_entry_key() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_root = source
-            .insert(node("canonical", SyntheticModule::empty("canonical")))
+            .insert(node(
+                "canonical",
+                SyntheticModule::empty(
+                    "canonical",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         source.add_alias(source_root.id(), "alias").unwrap();
 
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let imported = target.import(&source, source_root.id()).unwrap();
 
         assert_eq!(
@@ -1249,10 +1583,13 @@ mod tests {
 
     #[test]
     fn import_reuses_shared_handle() {
-        let module = ModuleHandle::new(SyntheticModule::empty("shared"));
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let module = ModuleHandle::new(SyntheticModule::empty(
+            "shared",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ));
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_lease = source.insert(node("source", module.clone())).unwrap();
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let target_lease = target.insert(node("target", module)).unwrap();
 
         let imported = target.import(&source, source_lease.id()).unwrap();
@@ -1266,15 +1603,27 @@ mod tests {
 
     #[test]
     fn import_does_not_follow_target_alias() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_root = source
-            .insert(node("source", SyntheticModule::empty("source")))
+            .insert(node(
+                "source",
+                SyntheticModule::empty(
+                    "source",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         source.add_alias(source_root.id(), "alias").unwrap();
 
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let existing = target
-            .insert(node("target", SyntheticModule::empty("target")))
+            .insert(node(
+                "target",
+                SyntheticModule::empty(
+                    "target",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let existing_id = existing.id();
         target.add_alias(existing_id, "alias").unwrap();
@@ -1288,7 +1637,7 @@ mod tests {
     #[test]
     fn import_roots_preserves_lifecycle() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dep = source
             .insert(node("dep", finalize_module("dep", &calls)))
             .unwrap();
@@ -1296,7 +1645,7 @@ mod tests {
         let _ = source
             .insert(node("root", finalize_module("root", &calls)).dependencies([dep_instance]))
             .unwrap();
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let imported = target.import_roots(&source).unwrap();
         let target_dep_id = target.module_id("dep").unwrap();
         let target_root_id = target.module_id("root").unwrap();
@@ -1314,14 +1663,20 @@ mod tests {
 
     #[test]
     fn import_roots_acquires_each_root_once() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let source_root = source
-            .insert(node("root", SyntheticModule::empty("root")))
+            .insert(node(
+                "root",
+                SyntheticModule::empty(
+                    "root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let source_root_id = source_root.id();
         let _second = source.acquire(source_root_id).unwrap();
 
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let imported = target.import_roots(&source).unwrap();
 
         assert_eq!(imported.len(), 1);

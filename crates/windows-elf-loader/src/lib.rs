@@ -5,6 +5,7 @@
 //! the symbol scope and relocation policy themselves.
 #![warn(missing_docs)]
 
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     Error, Loader,
     arch::NativeArch,
@@ -18,13 +19,13 @@ type ElfDylib<D = ()> = RawDylib<D, NativeArch, HostRegion, DefaultTlsResolver>;
 
 /// Reusable Windows configuration for mapping ELF shared libraries.
 pub struct WinElfLoader {
-    loader: Loader<(), DefaultTlsResolver>,
+    loader: Loader,
 }
 
 impl WinElfLoader {
     /// Creates a loader using Relink's default mapper and TLS resolver.
     pub fn new() -> Self {
-        let loader = Loader::new().with_default_tls_resolver();
+        let loader = Loader::new();
         Self { loader }
     }
 
@@ -38,12 +39,22 @@ impl WinElfLoader {
         bytes: impl AsRef<[u8]>,
     ) -> Result<ElfDylib<()>, Error> {
         let object = ElfBinary::new(name, bytes.as_ref());
-        self.loader.load_dylib(object)
+        self.loader
+            .run(Domain::new(
+                AddressSpaceId::PROCESS,
+                DefaultTlsResolver::new(),
+            )?)
+            .load_dylib(object)
     }
 
     /// Opens and loads an ELF shared library from `name`.
     pub fn load_file(&mut self, name: &str) -> Result<ElfDylib<()>, Error> {
         let object = ElfFile::from_path(name)?;
-        self.loader.load_dylib(object)
+        self.loader
+            .run(Domain::new(
+                AddressSpaceId::PROCESS,
+                DefaultTlsResolver::new(),
+            )?)
+            .load_dylib(object)
     }
 }

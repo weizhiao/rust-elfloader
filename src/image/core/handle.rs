@@ -10,9 +10,9 @@ use crate::{
     input::{ModuleSourceId, PathBuf},
     memory::{HostRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
-    runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
+    runtime::{CodeExecutor, Domain, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::{Arc, OnceCell, Weak, arc_unsize},
+    sync::{Arc, OnceCell, Weak, arc_downgrade_unsize, arc_unsize},
     tls::{ImageTlsState, TlsImageProvider, TlsImageSource, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -61,8 +61,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     TlsImageProvider for ElfModule<D, Arch, R, Tls>
 {
-    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        self.tls.with_image(f)
+    fn tls_image(&self) -> Result<&[u8]> {
+        self.tls.image()
     }
 }
 
@@ -116,20 +116,19 @@ impl<
     #[inline]
     pub(crate) fn set_lazy_lookup(
         &self,
-        scope: &LocalScope<Arch, Tls>,
-        global: Option<&GlobalScope<Arch, Tls>>,
-        symbols: Option<&Arc<SymbolRegistry<Arch, Tls>>>,
+        scope: &LocalScope<Arch>,
+        global: Option<&GlobalScope<Arch>>,
+        symbols: Option<&Arc<SymbolRegistry<Arch>>>,
         order: LookupOrder,
     ) {
         if self.inner.runtime.lazy_values().is_none() {
             return;
         }
-        let source = self.module_handle();
         assert!(
             self.inner
                 .lazy_lookup
                 .set(LazyLookup {
-                    source: source.downgrade(),
+                    source: arc_downgrade_unsize!(&self.inner => dyn Module<Arch>),
                     scope: scope.downgrade(global),
                     symbols: symbols.map(Arc::downgrade),
                     order,
@@ -140,24 +139,25 @@ impl<
     }
 
     pub(crate) fn publish_tls(&self) -> Result<()> {
-        if self.inner.tls.module().is_none() {
+        let Some(module) = self.inner.tls.module() else {
             return Ok(());
-        }
-        let provider = arc_unsize!(self.inner.clone() => dyn TlsImageProvider);
+        };
+        let provider = arc_downgrade_unsize!(&self.inner => dyn TlsImageProvider);
         self.inner
-            .tls
-            .publish(TlsImageSource::new(Arc::downgrade(&provider)))
+            .domain
+            .tls_resolver()
+            .publish(TlsImageSource::new(provider), module.mod_id())
     }
 
     #[inline]
-    pub(crate) fn into_module_handle(self) -> crate::image::ModuleHandle<Arch, Tls> {
-        crate::image::ModuleHandle::from_shared(arc_unsize!(self.inner => dyn Module<Arch, Tls>))
+    pub(crate) fn into_module_handle(self) -> crate::image::ModuleHandle<Arch> {
+        crate::image::ModuleHandle::from_shared(arc_unsize!(self.inner => dyn Module<Arch>))
     }
 
     #[inline]
-    pub(crate) fn module_handle(&self) -> crate::image::ModuleHandle<Arch, Tls> {
+    pub(crate) fn module_handle(&self) -> crate::image::ModuleHandle<Arch> {
         crate::image::ModuleHandle::from_shared(
-            arc_unsize!(Arc::clone(&self.inner) => dyn Module<Arch, Tls>),
+            arc_unsize!(Arc::clone(&self.inner) => dyn Module<Arch>),
         )
     }
 }
@@ -178,7 +178,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(core: ElfCore<D, Arch, R, Tls>) -> Self {
@@ -191,7 +191,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<&ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<&ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(core: &ElfCore<D, Arch, R, Tls>) -> Self {
@@ -213,16 +213,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     pub(super) unsafe fn from_raw(
         path: PathBuf,
         source_id: ModuleSourceId,
-        base: VmAddr,
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         dynamic_addr: VmAddr,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
-        mut segments: ElfSegments<R>,
-        tls: ImageTlsState<Arch, Tls>,
+        segments: ElfSegments<R>,
+        tls: ImageTlsState,
+        domain: Domain<Arch, Tls>,
         user_data: D,
     ) -> Result<Self> {
-        segments.set_base(base);
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
         let symtab = Arc::new(SymbolTable::from_dynamic(&dynamic, &segments)?);
         let exports = symtab.clone();
@@ -247,7 +246,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             search,
-            state: ModuleState::initialized(source_id, DomainId::PROCESS),
+            state: ModuleState::initialized(source_id, domain.id()),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(exports => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
@@ -258,6 +257,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             })),
             lazy_lookup: OnceCell::new(),
             tls,
+            domain,
             segments,
             user_data,
         });

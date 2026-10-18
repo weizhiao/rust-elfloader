@@ -1,3 +1,4 @@
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use std::sync::OnceLock;
 
 use elf_loader::{
@@ -98,7 +99,14 @@ fn load() -> TlsScenario {
             ],
         )
         .expect("failed to generate TLS consumer");
-    let loader = Loader::new().with_default_tls_resolver();
+    let loader = Loader::new();
+    let mut loader = loader.run(
+        Domain::new(
+            AddressSpaceId::PROCESS,
+            elf_loader::tls::DefaultTlsResolver::new(),
+        )
+        .unwrap(),
+    );
     let provider = Relocator::new()
         .run(
             loader
@@ -114,6 +122,7 @@ fn load() -> TlsScenario {
                 .expect("failed to load TLS consumer"),
         )
         .modules([&provider])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate TLS consumer");
 

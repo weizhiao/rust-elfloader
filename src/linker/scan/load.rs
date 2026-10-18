@@ -21,14 +21,14 @@ use crate::{
     observer::{LinkerObserver, LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
-    runtime::CodeExecutor,
+    runtime::{CodeExecutor, Domain},
     tls::TlsResolver,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 
 #[allow(private_bounds)]
 impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
-    LinkerRun<'run, 'pipe, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
+    LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
@@ -37,7 +37,7 @@ where
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
-    Resolver: KeyResolver<Arch, Tls>,
+    Resolver: KeyResolver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
@@ -66,9 +66,6 @@ where
         context: &mut LinkContext<Meta, Arch, Tls>,
         root: Resolver::Root,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        context
-            .committed
-            .ensure_domain(self.linker.loader.domain_id())?;
         let caller = self
             .caller
             .map(|id| context.committed.module_slot(id))
@@ -85,7 +82,7 @@ where
             let mut loader = self
                 .linker
                 .loader
-                .run()
+                .run(context.domain.clone())
                 .with_search_path_pool(&mut context.search_paths)
                 .with_observer(&mut self.observer);
             let mut resolve_context =
@@ -94,6 +91,7 @@ where
         };
 
         let (dynamics, mut session) = session.split_dynamics();
+        let domain = context.domain.clone();
         let search_paths = &mut context.search_paths;
         let dynamic_ids = dynamics.keys().copied().collect::<EntitySet<_>>();
         let entries: BTreeMap<_, _> = dynamics
@@ -140,6 +138,7 @@ where
                     module_id,
                     module,
                     search_paths,
+                    &domain,
                 )?;
                 session.restore_dynamic(id, key, raw, direct_deps);
             }
@@ -178,19 +177,20 @@ where
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
         search_paths: &mut SearchPathPool,
+        domain: &Domain<Arch, Tls>,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
         {
             Materialization::SectionRegions => {
-                self.materialize_arena_raw(mapped_runtime, module_id, scanned, search_paths)
+                self.materialize_arena_raw(mapped_runtime, module_id, scanned, search_paths, domain)
             }
             Materialization::WholeDsoRegion => {
                 let mut raw = self
                     .linker
                     .loader
-                    .run()
+                    .run(domain.clone())
                     .with_search_path_pool(search_paths)
                     .load_scanned_dynamic(scanned)?;
                 apply_section_overrides(&mut raw, module_id, plan)?;
@@ -205,6 +205,7 @@ where
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
         search_paths: &mut SearchPathPool,
+        domain: &Domain<Arch, Tls>,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let runtime = mapped_runtime
             .as_mut()
@@ -220,8 +221,7 @@ where
             scanned,
             runtime,
             force_static_tls,
-            self.linker.loader.domain_id(),
-            self.linker.loader.tls_resolver(),
+            domain.clone(),
             search_paths,
         )?;
         Ok(raw)

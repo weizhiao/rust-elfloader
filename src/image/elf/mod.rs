@@ -14,7 +14,7 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
-    runtime::DomainId,
+    runtime::Domain,
     tls::TlsResolver,
 };
 
@@ -286,18 +286,18 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
     type Arch = Arch;
     type Tls = Tls;
 
-    fn domain_id(&self) -> DomainId {
+    fn domain(&self) -> &Domain<Arch, Tls> {
         match self {
-            Self::Dylib(dylib) => Relocatable::domain_id(dylib),
-            Self::Exec(exec) => Relocatable::domain_id(exec),
+            Self::Dylib(image) => Relocatable::domain(image),
+            Self::Exec(image) => Relocatable::domain(image),
             #[cfg(feature = "object")]
-            Self::Object(object) => Relocatable::domain_id(object),
+            Self::Object(image) => Relocatable::domain(image),
         }
     }
 
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Arch> + ?Sized,

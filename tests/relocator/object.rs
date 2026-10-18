@@ -1,3 +1,4 @@
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     Module, Relocator,
     image::{SyntheticModule, SyntheticSymbol},
@@ -58,7 +59,10 @@ impl HostSymbols {
     }
 
     fn module(&self) -> SyntheticModule {
-        let mut module = SyntheticModule::empty("__host");
+        let mut module = SyntheticModule::empty(
+            "__host",
+            Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
         for name in [EXTERNAL_FUNC_NAME, EXTERNAL_FUNC_NAME2] {
             let _ = module.insert(SyntheticSymbol::function(name, self.func as *const ()));
         }
@@ -140,6 +144,7 @@ fn relocations_match() {
                 .expect("failed to load object"),
         )
         .modules([host_symbols.module()])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("relocation failed");
     assert!(loaded_object.state().is_initialized());
@@ -232,6 +237,7 @@ fn addends_apply() {
                 .expect("failed to load object"),
         )
         .modules([host_symbols.module()])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("relocation failed");
 

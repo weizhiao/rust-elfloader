@@ -1,4 +1,5 @@
 use super::*;
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use std::sync::OnceLock;
 
 #[cfg(target_pointer_width = "64")]
@@ -67,7 +68,7 @@ fn break_section_name_table(mut bytes: Vec<u8>) -> Vec<u8> {
 fn arena_materializes_section_bytes() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_root.so",
@@ -139,7 +140,7 @@ fn arena_materializes_section_bytes() {
 fn arena_supports_assign_next() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_assign_next_root.so",
@@ -222,7 +223,7 @@ fn arena_supports_assign_next() {
 fn defaults_to_section_regions() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "default_section_regions_root.so",
@@ -269,7 +270,7 @@ fn defaults_to_section_regions() {
 fn missing_sections_become_opaque() {
     let bytes = fixtures().missing_sections.as_slice();
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "opaque_root.so",
@@ -323,7 +324,7 @@ fn missing_sections_become_opaque() {
 fn invalid_sections_become_opaque() {
     let bytes = fixtures().invalid_sections.as_slice();
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "broken_shstr_root.so",
@@ -353,7 +354,7 @@ fn invalid_sections_become_opaque() {
 fn whole_dso_supports_section_overrides() {
     let bytes = fixtures().basic;
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "whole_region_root.so",
@@ -423,7 +424,7 @@ fn whole_dso_supports_section_overrides() {
 fn section_data_rejects_section_regions() {
     let bytes = fixtures().basic;
 
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "illegal_section_region_root.so",

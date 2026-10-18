@@ -134,12 +134,8 @@ host-runtime bridge, system-cache snapshot, validation and CI artifacts.
 
 Notes:
 
-- TLS relocation and `DefaultTlsResolver` are always available; custom runtimes can provide their own resolver.
-- Call `Loader::with_default_tls_resolver()` when native modules use TLS; `Loader::new()` starts with no TLS runtime.
-- Custom `LazyBinder` implementations are always available; `lazy-binding` only adds `NativeLazyBinder`.
-- `Relocator::new()` uses eager binding until a binder is configured with `lazy_binder()`.
-- The default feature set is `full`, equivalent to `lazy-binding` + `object` + `libc`.
-- `load_object()` is still controlled by the `object` feature. Default builds include it; with `--no-default-features`, enable it explicitly.
+- TLS requires no feature flag; use `DefaultTlsResolver` or a custom resolver.
+- `lazy-binding` only enables the built-in implementation; custom `LazyBinder` implementations do not require this feature.
 
 ## Platform Support
 

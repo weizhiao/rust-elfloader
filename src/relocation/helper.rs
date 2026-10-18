@@ -68,7 +68,7 @@ pub(crate) struct RelocHelper<
     Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
-    resolver: SymbolResolver<'find, Arch, Tls>,
+    resolver: SymbolResolver<'find, Arch>,
     bindings: BindingDeps,
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
@@ -87,7 +87,7 @@ where
 {
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R, Tls>,
-        resolver: SymbolResolver<'find, Arch, Tls>,
+        resolver: SymbolResolver<'find, Arch>,
         bindings: BindingDeps,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
@@ -104,7 +104,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LocalScope<Arch, Tls>, BindingDeps) {
+    pub(crate) fn into_parts(self) -> (LocalScope<Arch>, BindingDeps) {
         (self.resolver.into_scope(), self.bindings)
     }
 
@@ -197,7 +197,7 @@ where
     pub(crate) fn find_symdef<'a>(
         &'a self,
         symbol: &SymbolEntry<'a, Arch::Layout>,
-    ) -> Option<SymDef<'a, Arch, Tls>> {
+    ) -> Option<SymDef<'a, Arch>> {
         self.resolver.find(symbol)
     }
 
@@ -205,7 +205,7 @@ where
     pub(crate) fn find_copy_symdef<'a>(
         &'a self,
         symbol: &SymbolEntry<'a, Arch::Layout>,
-    ) -> Option<(SymDef<'a, Arch, Tls>, BindingEffect)> {
+    ) -> Option<(SymDef<'a, Arch>, BindingEffect)> {
         self.resolver.find_copy(symbol)
     }
 
@@ -223,7 +223,13 @@ where
         let (resolved, effect) =
             if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
                 (
-                    Some(self.core.tls_resolver().bind_tls_get_addr()?),
+                    Some(
+                        self.core
+                            .domain()
+                            .id()
+                            .tls_entry()
+                            .expect("TLS entry override requires a TLS-enabled domain"),
+                    ),
                     BindingEffect::default(),
                 )
             } else {

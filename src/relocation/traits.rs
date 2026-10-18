@@ -14,7 +14,7 @@ use crate::{
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     observer::{RelocationEvent, RelocationObserver},
     relocation::SymbolRegistry,
-    runtime::DomainId,
+    runtime::Domain,
     sync::Arc,
     tls::TlsResolver,
 };
@@ -296,16 +296,10 @@ pub enum LookupOrder {
 }
 
 /// Internal relocation configuration shared across raw image types.
-pub struct RelocateArgs<
-    'a,
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-    Obs: ?Sized,
-    Binder: ?Sized,
-> {
-    pub(crate) scope: LocalScope<Arch, Tls>,
-    pub(crate) global: Option<GlobalScope<Arch, Tls>>,
-    pub(crate) symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+pub struct RelocateArgs<'a, Arch: RelocationArch, Obs: ?Sized, Binder: ?Sized> {
+    pub(crate) scope: LocalScope<Arch>,
+    pub(crate) global: Option<GlobalScope<Arch>>,
+    pub(crate) symbols: Option<Arc<SymbolRegistry<Arch>>>,
     pub(crate) binding: BindingMode,
     pub(crate) lookup_order: LookupOrder,
     pub(crate) run_init: bool,
@@ -336,13 +330,13 @@ pub trait Relocatable<D = ()>: Sized {
     /// TLS resolver used by this image and every module in its relocation scope.
     type Tls: TlsResolver<Self::Arch>;
 
-    /// Returns the runtime domain in which this image was loaded.
-    fn domain_id(&self) -> DomainId;
+    /// Returns the fixed runtime domain selected when this image was loaded.
+    fn domain(&self) -> &Domain<Self::Arch, Self::Tls>;
 
     /// Executes relocation using the implementor's target architecture.
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Self::Arch, Self::Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Self::Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Self::Arch> + ?Sized,

@@ -1,3 +1,4 @@
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     image::{SyntheticModule, SyntheticSymbol},
     relocation::Relocator,
@@ -13,6 +14,12 @@ fn main() {
     // Symbols required by dynamic library liba.so
     let host = SyntheticModule::new(
         "__host",
+        Domain::new(
+            AddressSpaceId::PROCESS,
+            elf_loader::tls::DefaultTlsResolver::new(),
+        )
+        .unwrap()
+        .id(),
         [SyntheticSymbol::function("print", print as *const ())],
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
@@ -24,6 +31,7 @@ fn main() {
                 .unwrap(),
         )
         .modules([host])
+        .unwrap()
         .relocate()
         .unwrap();
     // Call function a in liba.so

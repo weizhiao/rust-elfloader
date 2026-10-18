@@ -10,7 +10,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
-    runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
+    runtime::{CodeExecutor, Domain, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, arc_unsize},
     tls::TlsResolver,
@@ -259,8 +259,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory<R>,
     force_static_tls: bool,
-    domain: DomainId,
-    tls_resolver: Tls,
+    domain: Domain<Arch, Tls>,
     search_paths: &mut SearchPathPool,
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
@@ -289,7 +288,6 @@ where
         D::default(),
         arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
         domain,
-        tls_resolver,
     );
     builder.build_dynamic(&phdrs, Some(search_paths))
 }

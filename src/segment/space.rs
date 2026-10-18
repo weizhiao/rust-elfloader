@@ -181,12 +181,6 @@ impl<R: RegionAccess> ElfSegments<R> {
         }
     }
 
-    /// Rebinds the module base address while preserving the existing range layout.
-    #[inline]
-    pub(crate) fn set_base(&mut self, base: VmAddr) {
-        self.base = base;
-    }
-
     /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {

@@ -12,10 +12,10 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
     relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
-    runtime::{CodeContext, CodeExecutor, DomainId},
+    runtime::{CodeContext, CodeExecutor, Domain, DomainId},
     segment::{ElfSegments, MappedRange},
     sync::{Arc, OnceCell, Weak},
-    tls::{ImageTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
+    tls::{ImageTlsState, TLS_GET_ADDR_SYMBOL, TlsModule, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
@@ -92,10 +92,10 @@ pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
     fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
 }
 
-pub(crate) struct LazyLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    pub(super) source: Weak<dyn Module<Arch, Tls>>,
-    pub(super) scope: WeakLocalScope<Arch, Tls>,
-    pub(super) symbols: Option<Weak<SymbolRegistry<Arch, Tls>>>,
+pub(crate) struct LazyLookup<Arch: RelocationArch> {
+    pub(super) source: Weak<dyn Module<Arch>>,
+    pub(super) scope: WeakLocalScope<Arch>,
+    pub(super) symbols: Option<Weak<SymbolRegistry<Arch>>>,
     pub(super) order: LookupOrder,
 }
 
@@ -134,7 +134,12 @@ where
 
     fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
         if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-            return self.tls.resolver().bind_tls_get_addr().map(Some);
+            return Ok(Some(
+                self.domain
+                    .id()
+                    .tls_entry()
+                    .expect("TLS entry override requires a TLS-enabled domain"),
+            ));
         }
 
         let Some(lazy) = self.lazy_lookup.get() else {
@@ -207,10 +212,13 @@ pub struct ElfModule<
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
     /// Weak state used by lazy symbol lookup without retaining dependencies.
-    pub(crate) lazy_lookup: OnceCell<LazyLookup<Arch, Tls>>,
+    pub(crate) lazy_lookup: OnceCell<LazyLookup<Arch>>,
 
     /// TLS runtime state for this loaded object.
-    pub(crate) tls: ImageTlsState<Arch, Tls>,
+    pub(crate) tls: ImageTlsState,
+
+    /// Fixed runtime domain shared by every view of this module.
+    pub(crate) domain: Domain<Arch, Tls>,
 
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,
@@ -252,9 +260,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         &self.state
     }
 
-    /// Returns TLS metadata when this image owns a TLS block.
+    /// Returns the registration used for TLS relocation and current-thread lookup.
     #[inline]
-    pub fn tls(&self) -> Option<ModuleTls> {
+    pub fn tls(&self) -> Option<&TlsModule> {
         self.tls.module()
     }
 
@@ -318,8 +326,16 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     #[inline]
+    pub(crate) fn retain_tls_descriptor(&self, state: Option<alloc::boxed::Box<dyn Send + Sync>>) {
+        self.tls.retain_descriptor(state);
+    }
+
+    pub(crate) fn domain(&self) -> &Domain<Arch, Tls> {
+        &self.domain
+    }
+
     pub(crate) fn tls_resolver(&self) -> &Tls {
-        self.tls.resolver()
+        self.domain.tls_resolver()
     }
 
     #[inline]
@@ -344,7 +360,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for ElfModule<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch> for ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -373,16 +389,14 @@ where
 
     fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
         if symbol.symbol_type() == ElfSymbolType::TLS {
-            let index = self
-                .tls
-                .index(symbol.st_value())
-                .ok_or(TlsError::TemplateUnavailable)?;
-            let resolver = self.tls.resolver().bind_tls_get_addr()?;
-            self.executor.resolve_tls(
-                CodeContext::new(self.name(), &self.segments),
-                resolver,
-                index,
-            )
+            self.tls
+                .module()
+                .ok_or(TlsError::TemplateUnavailable)?
+                .resolve(
+                    self.executor.as_ref(),
+                    CodeContext::new(self.name(), &self.segments),
+                    symbol.st_value(),
+                )
         } else {
             let addr = if symbol.st_shndx().is_abs() {
                 VmAddr::new(symbol.st_value())
@@ -398,7 +412,7 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
+    fn tls(&self) -> Option<&TlsModule> {
         self.tls()
     }
 
@@ -441,6 +455,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 "finalization lifecycle failed for {}: {err}",
                 self.name().escape_ascii()
             );
+        }
+        self.tls.clear_descriptors();
+        if let Some(module) = self.tls.owned_module() {
+            self.domain.tls_resolver().unregister(module.mod_id());
         }
     }
 }

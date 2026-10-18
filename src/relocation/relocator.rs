@@ -16,21 +16,24 @@ use super::BindingMode;
 /// ```rust,no_run
 /// use elf_loader::{
 ///     Loader, Relocator, Result,
+///     runtime::{AddressSpaceId, Domain},
 ///     image::{SyntheticModule, SyntheticSymbol},
 /// };
 ///
 /// extern "C" fn host_log(_value: i32) {}
 ///
 /// fn main() -> Result<()> {
+///     let domain = Domain::without_tls(AddressSpaceId::PROCESS);
 ///     let host = SyntheticModule::new(
 ///         "__host",
+///         domain.id(),
 ///         [SyntheticSymbol::function("host_log", host_log as *const ())],
 ///     );
 ///
-///     let raw = Loader::new().load_dylib("plugin.so")?;
+///     let raw = Loader::new().run(domain).load_dylib("plugin.so")?;
 ///     let loaded = Relocator::new()
 ///         .run(raw)
-///         .modules([host])
+///         .modules([host])?
 ///         .relocate()?;
 ///
 ///     let run = unsafe {

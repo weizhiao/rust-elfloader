@@ -1,4 +1,4 @@
-use super::defs::{ModuleTls, TlsDescRequest};
+use super::{TlsDescRequest, TlsModule};
 use crate::{
     ByteRepr, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
@@ -15,7 +15,7 @@ pub(crate) enum TlsRelocOutcome {
 
 struct TlsDef {
     offset: usize,
-    module: ModuleTls,
+    module: TlsModule,
     effect: BindingEffect,
 }
 
@@ -48,7 +48,7 @@ where
             };
             Ok(TlsDef {
                 offset: symbol.st_value(),
-                module,
+                module: module.clone(),
                 effect,
             })
         }
@@ -88,7 +88,7 @@ where
             }
             value if Arch::DTPMOD == Some(value) => {
                 let tls = if r_sym == 0 {
-                    self.core.tls()
+                    self.core.tls().cloned()
                 } else {
                     let symbol = match self.tls_def(rel) {
                         Ok(symbol) => symbol,
@@ -110,7 +110,7 @@ where
             }
             value if Arch::TPOFF == value => {
                 let (tls, symbol_value) = if r_sym == 0 {
-                    (self.core.tls(), 0)
+                    (self.core.tls().cloned(), 0)
                 } else {
                     let symbol = match self.tls_def(rel) {
                         Ok(symbol) => symbol,
@@ -119,7 +119,7 @@ where
                     effect = symbol.effect;
                     (Some(symbol.module), symbol.offset)
                 };
-                let Some(tp_offset) = tls.and_then(ModuleTls::tp_offset) else {
+                let Some(tp_offset) = tls.as_ref().and_then(TlsModule::tp_offset) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
                 };
                 let tls_val =
@@ -136,7 +136,7 @@ where
                 let request = if r_sym == 0 {
                     // By convention in ld.bfd and lld, an omitted symbol on a
                     // TLS relocation is a reference to the current module.
-                    let Some(module) = self.core.tls() else {
+                    let Some(module) = self.core.tls().cloned() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                     };
                     TlsDescRequest::Defined {
@@ -163,7 +163,7 @@ where
                                 ));
                             };
                             TlsDescRequest::Defined {
-                                module: tls,
+                                module: tls.clone(),
                                 offset: VmAddr::new(sym.st_value())
                                     .wrapping_add_signed(r_addend)
                                     .get(),
@@ -171,7 +171,8 @@ where
                         }
                     }
                 };
-                let desc = self.core.tls_resolver().bind_tlsdesc(request)?;
+                let setup = self.core.tls_resolver().bind_tlsdesc(request)?;
+                let (desc, state) = setup.into_parts();
                 let arg_place = place
                     + VmOffset::new(core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>());
                 unsafe {
@@ -184,6 +185,7 @@ where
                         <Arch::Layout as ElfLayout>::Word::from_usize(desc.arg()),
                     )?;
                 }
+                self.core.retain_tls_descriptor(state);
             }
             _ => unreachable!("handle_tls_reloc called with a non-TLS relocation"),
         }

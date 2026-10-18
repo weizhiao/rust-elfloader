@@ -14,10 +14,10 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
-    runtime::DomainId,
+    runtime::Domain,
     segment::ElfSegments,
-    sync::{Arc, arc_unsize},
-    tls::{ImageTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver},
+    sync::{Arc, arc_downgrade_unsize},
+    tls::{ImageTlsState, TlsImageProvider, TlsImageSource, TlsModule, TlsRequest, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -80,7 +80,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns TLS metadata when this image owns a TLS block.
-    pub fn tls(&self) -> Option<ModuleTls> {
+    pub fn tls(&self) -> Option<&TlsModule> {
         self.inner.tls.module()
     }
 
@@ -111,8 +111,9 @@ struct StaticExecInner<
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    // Keep TLS first so it unregisters before user data and mapped memory drop.
-    tls: ImageTlsState<Arch, Tls>,
+    // Descriptor state is cleared before unregistering in Drop.
+    tls: ImageTlsState,
+    domain: Domain<Arch, Tls>,
 
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
@@ -128,16 +129,24 @@ struct StaticExecInner<
 
     /// Program headers
     phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
+}
 
-    /// Runtime domain in which this executable was loaded.
-    domain: DomainId,
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
+    for StaticExecInner<D, Arch, R, Tls>
+{
+    fn drop(&mut self) {
+        self.tls.clear_descriptors();
+        if let Some(module) = self.tls.owned_module() {
+            self.domain.tls_resolver().unregister(module.mod_id());
+        }
+    }
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     TlsImageProvider for StaticExecInner<D, Arch, R, Tls>
 {
-    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        self.tls.with_image(f)
+    fn tls_image(&self) -> Result<&[u8]> {
+        self.tls.image()
     }
 }
 
@@ -148,16 +157,16 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     type Arch = Arch;
     type Tls = Tls;
 
-    fn domain_id(&self) -> DomainId {
+    fn domain(&self) -> &Domain<Arch, Tls> {
         match self {
-            Self::Dynamic(image) => image.domain_id(),
-            Self::Static(image) => image.inner.domain,
+            Self::Dynamic(image) => image.domain(),
+            Self::Static(image) => &image.inner.domain,
         }
     }
 
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -248,7 +257,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns TLS metadata when this executable owns a TLS block.
-    pub fn tls(&self) -> Option<ModuleTls> {
+    pub fn tls(&self) -> Option<&TlsModule> {
         match self {
             RawExec::Dynamic(image) => image.tls(),
             RawExec::Static(image) => image.tls(),
@@ -410,7 +419,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns TLS metadata when this executable owns a TLS block.
-    pub fn tls(&self) -> Option<ModuleTls> {
+    pub fn tls(&self) -> Option<&TlsModule> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.tls(),
             LoadedExecInner::Static(static_image) => static_image.tls(),
@@ -444,18 +453,18 @@ where
                 .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
                 .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
             // Static executables always use static TLS if PT_TLS is present.
-            ImageTlsState::with_module(
-                self.tls_resolver.clone(),
-                self.tls_resolver
-                    .register(*info, TlsRequest::Static(None))?,
-                image,
-            )
+            let module = self
+                .domain
+                .tls_resolver()
+                .register(*info, TlsRequest::Static(None))?;
+            ImageTlsState::owned(module, image)
         } else {
-            ImageTlsState::without_module(self.tls_resolver)
+            ImageTlsState::borrowed(None)
         };
 
-        let inner = Arc::new(StaticExecInner {
+        let inner = StaticExecInner {
             tls,
+            domain: self.domain,
             entry,
             path: self.path,
             user_data: self.user_data,
@@ -465,15 +474,16 @@ where
             } else {
                 Some(phdrs.to_vec())
             },
-            domain: self.domain,
-        });
+        };
+        let inner = Arc::new(inner);
 
-        if inner.tls.module().is_some() {
+        if let Some(module) = inner.tls.module() {
             // Upgrading this provider retains the mapping for the whole template read.
-            let provider = arc_unsize!(inner.clone() => dyn TlsImageProvider);
+            let provider = arc_downgrade_unsize!(&inner => dyn TlsImageProvider);
             inner
-                .tls
-                .publish(TlsImageSource::new(Arc::downgrade(&provider)))?;
+                .domain
+                .tls_resolver()
+                .publish(TlsImageSource::new(provider), module.mod_id())?;
         }
 
         Ok(StaticExec { inner })

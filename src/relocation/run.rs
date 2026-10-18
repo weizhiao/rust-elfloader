@@ -8,44 +8,35 @@ use crate::{
         BindingMode, LookupOrder, Relocatable, RelocateArgs, RelocationArch, SymbolRegistry,
     },
     sync::Arc,
-    tls::TlsResolver,
 };
 
 /// Per-image relocation run state.
 ///
 /// A run owns the raw image being relocated and the scope being assembled for
 /// that image. It consumes itself when [`relocate`](Self::relocate) is called.
-pub struct RelocatorRun<
-    'cfg,
-    T,
-    Arch: RelocationArch = NativeArch,
-    Obs = (),
-    Tls: TlsResolver<Arch> = (),
-    Binder = (),
-> {
+pub struct RelocatorRun<'cfg, T, Arch: RelocationArch = NativeArch, Obs = (), Binder = ()> {
     object: T,
-    scope: LocalScope<Arch, Tls>,
-    global: Option<GlobalScope<Arch, Tls>>,
+    scope: LocalScope<Arch>,
+    global: Option<GlobalScope<Arch>>,
     observer: Obs,
     binding: BindingMode,
     lookup_order: LookupOrder,
-    symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+    symbols: Option<Arc<SymbolRegistry<Arch>>>,
     relocator: &'cfg Relocator<Binder>,
 }
 
 impl<Binder> Relocator<Binder> {
     /// Starts a relocation run using this reusable configuration.
     #[inline]
-    pub fn run<D: Send + Sync + 'static, T, Arch, Tls>(
+    pub fn run<D: Send + Sync + 'static, T, Arch>(
         &self,
         object: T,
-    ) -> RelocatorRun<'_, T, Arch, (), Tls, Binder>
+    ) -> RelocatorRun<'_, T, Arch, (), Binder>
     where
         Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-        T: Relocatable<D, Arch = Arch, Tls = Tls>,
+        T: Relocatable<D, Arch = Arch>,
     {
-        let domain = object.domain_id();
+        let domain = object.domain().id();
         RelocatorRun {
             object,
             scope: LocalScope::empty(domain),
@@ -59,10 +50,9 @@ impl<Binder> Relocator<Binder> {
     }
 }
 
-impl<'cfg, T, Arch, Obs, Tls, Binder> Clone for RelocatorRun<'cfg, T, Arch, Obs, Tls, Binder>
+impl<'cfg, T, Arch, Obs, Binder> Clone for RelocatorRun<'cfg, T, Arch, Obs, Binder>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
     T: Clone,
     Obs: Clone,
 {
@@ -81,17 +71,13 @@ where
     }
 }
 
-impl<'cfg, T, Arch, Obs, Tls, Binder> RelocatorRun<'cfg, T, Arch, Obs, Tls, Binder>
+impl<'cfg, T, Arch, Obs, Binder> RelocatorRun<'cfg, T, Arch, Obs, Binder>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
     Binder: LazyBinder<Arch>,
 {
     /// Sets the runtime-linker observer used during relocation.
-    pub fn observer<NewObs>(
-        self,
-        observer: NewObs,
-    ) -> RelocatorRun<'cfg, T, Arch, NewObs, Tls, Binder>
+    pub fn observer<NewObs>(self, observer: NewObs) -> RelocatorRun<'cfg, T, Arch, NewObs, Binder>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -133,46 +119,48 @@ where
     }
 
     #[inline]
-    pub(crate) fn symbol_registry(mut self, symbols: Arc<SymbolRegistry<Arch, Tls>>) -> Self {
+    pub(crate) fn symbol_registry(mut self, symbols: Arc<SymbolRegistry<Arch>>) -> Self {
         self.symbols = Some(symbols);
         self
     }
 
-    /// Uses a [`LinkContext`](crate::LinkContext) global symbol scope.
+    /// Attaches a compatible [`LinkContext`](crate::LinkContext) global scope.
     ///
     /// The shared handle is retained only for the relocation run. Deferred
     /// binding stores a weak reference and therefore does not keep the context
     /// or unrelated global modules alive.
     #[inline]
-    pub fn global_scope(mut self, global: &GlobalScope<Arch, Tls>) -> Self {
+    pub fn global_scope(mut self, global: &GlobalScope<Arch>) -> Result<Self> {
+        global.check_scope(&self.scope)?;
         self.global = Some(global.clone());
-        self
+        Ok(self)
     }
 
-    /// Uses the same ordered modules for eager and deferred symbol lookup.
-    pub fn modules<I, R>(mut self, modules: I) -> Self
+    /// Admits modules for both eager and deferred lookup.
+    /// Incompatible address domains or TLS runtimes are rejected before relocation.
+    pub fn modules<I, R>(mut self, modules: I) -> Result<Self>
     where
         I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
+        R: Into<ModuleHandle<Arch>>,
     {
         let mut group = ModuleScope::new(self.scope.domain_id());
-        group.replace(modules);
-        self.scope = LocalScope::new([group.clone()], group);
-        self
+        group.replace(modules)?;
+        self.scope = LocalScope::from_group(group);
+        Ok(self)
     }
 
-    /// Replaces the complete eager and deferred symbol lookup scope.
-    pub fn local_scope(mut self, scope: LocalScope<Arch, Tls>) -> Self {
+    /// Attaches a compatible eager and deferred lookup scope.
+    pub fn local_scope(mut self, scope: LocalScope<Arch>) -> Result<Self> {
+        self.scope.check_scope(&scope)?;
         self.scope = scope;
-        self
+        Ok(self)
     }
 }
 
-impl<'cfg, T, Arch, Obs, Tls, Binder> RelocatorRun<'cfg, T, Arch, Obs, Tls, Binder>
+impl<'cfg, T, Arch, Obs, Binder> RelocatorRun<'cfg, T, Arch, Obs, Binder>
 where
     T: SupportLazy,
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
     Binder: LazyBinder<Arch>,
 {
     /// Forces eager binding.
@@ -190,10 +178,9 @@ where
     }
 }
 
-impl<'cfg, T, Arch, Obs, Tls, Binder> RelocatorRun<'cfg, T, Arch, Obs, Tls, Binder>
+impl<'cfg, T, Arch, Obs, Binder> RelocatorRun<'cfg, T, Arch, Obs, Binder>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
     Obs: RelocationObserver<Arch>,
     Binder: LazyBinder<Arch>,
 {
@@ -201,7 +188,7 @@ where
     pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
     where
         D: Send + Sync + 'static,
-        T: Relocatable<D, Arch = Arch, Tls = Tls>,
+        T: Relocatable<D, Arch = Arch>,
     {
         let RelocatorRun {
             object,

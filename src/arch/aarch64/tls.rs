@@ -48,7 +48,7 @@ pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
         stp q4, q5, [sp, #224]
         stp q6, q7, [sp, #256]
 
-        ldr x1, [x0, #8] // Get TlsDescDynamicArg pointer
+        ldr x1, [x0, #8] // Get dynamic descriptor arguments
         ldr x16, [x1]    // Get tls_get_addr pointer
         add x0, x1, #8   // Get pointer to TlsIndex (first arg of tls_get_addr)
         blr x16          // Call tls_get_addr

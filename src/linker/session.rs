@@ -51,21 +51,20 @@ impl<P> GraphEntry<P> {
     }
 }
 
-struct PendingModule<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+struct PendingModule<Arch: RelocationArch> {
     entry_key: ModuleKey,
-    module: ModuleHandle<Arch, Tls>,
+    module: ModuleHandle<Arch>,
     direct_deps: Box<[ModuleSlot]>,
 }
 
-impl<Arch, Tls> PendingModule<Arch, Tls>
+impl<Arch> PendingModule<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
         entry_key: ModuleKey,
-        module: ModuleHandle<Arch, Tls>,
+        module: ModuleHandle<Arch>,
         direct_deps: Box<[ModuleSlot]>,
     ) -> Self {
         Self {
@@ -76,7 +75,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn module(&self) -> &ModuleHandle<Arch, Tls> {
+    pub(crate) fn module(&self) -> &ModuleHandle<Arch> {
         &self.module
     }
 
@@ -86,26 +85,26 @@ where
     }
 }
 
-struct ReadyModule<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    pending: PendingModule<Arch, Tls>,
-    retained: ModuleScope<Arch, Tls>,
+struct ReadyModule<Arch: RelocationArch> {
+    pending: PendingModule<Arch>,
+    retained: ModuleScope<Arch>,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ReadyModule<Arch, Tls> {
+impl<Arch: RelocationArch> ReadyModule<Arch> {
     #[inline]
-    fn new(pending: PendingModule<Arch, Tls>, retained: ModuleScope<Arch, Tls>) -> Self {
+    fn new(pending: PendingModule<Arch>, retained: ModuleScope<Arch>) -> Self {
         Self { pending, retained }
     }
 
     #[inline]
-    fn module(&self) -> &ModuleHandle<Arch, Tls> {
+    fn module(&self) -> &ModuleHandle<Arch> {
         self.pending.module()
     }
 }
 
-pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
     dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
-    modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
+    modules: BTreeMap<ModuleSlot, PendingModule<Arch>>,
     committed_deps: BTreeMap<ModuleSlot, Box<[ModuleSlot]>>,
     // Generations observed while resolving. Publication rejects the whole
     // transaction if any referenced slot changed before commit.
@@ -116,10 +115,9 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     pins: Vec<ModuleSlot>,
 }
 
-impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
+impl<P, Arch> ResolveSession<P, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -244,7 +242,7 @@ where
         slot: ModuleSlot,
         generation: u32,
         entry_key: ModuleKey,
-        module: ModuleHandle<Arch, Tls>,
+        module: ModuleHandle<Arch>,
         direct_deps: Box<[ModuleSlot]>,
     ) {
         self.track(slot, generation);
@@ -258,10 +256,7 @@ where
 
     pub(crate) fn split_dynamics<Q>(
         self,
-    ) -> (
-        BTreeMap<ModuleSlot, GraphEntry<P>>,
-        ResolveSession<Q, Arch, Tls>,
-    ) {
+    ) -> (BTreeMap<ModuleSlot, GraphEntry<P>>, ResolveSession<Q, Arch>) {
         let Self {
             dynamics,
             modules,
@@ -330,7 +325,7 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -339,7 +334,7 @@ where
     pub(crate) fn build_scope<Meta>(
         &self,
         context: &LinkContext<Meta, Arch, Tls>,
-    ) -> ModuleScope<Arch, Tls> {
+    ) -> ModuleScope<Arch> {
         let mut scope = ModuleScope::new(context.domain_id());
         for index in 0..self.group_order.len() {
             let id = self.group_order[index];
@@ -354,7 +349,7 @@ where
                     .map(|module| module.handle().clone())
                     .expect("scope slot must resolve to a committed module")
             };
-            scope.push(module);
+            scope.push_admitted(module);
         }
         scope
     }
@@ -366,14 +361,14 @@ pub(crate) struct LoadSession<
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
-    resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    ready_to_commit: BTreeMap<ModuleSlot, ReadyModule<Arch, Tls>>,
+    resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>,
+    ready_to_commit: BTreeMap<ModuleSlot, ReadyModule<Arch>>,
     lifecycle: Vec<ModuleSlot>,
 }
 
-pub(crate) struct PublishSession<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct PublishSession<Arch: RelocationArch> {
     guards: BTreeMap<ModuleSlot, u32>,
-    modules: BTreeMap<ModuleSlot, ReadyModule<Arch, Tls>>,
+    modules: BTreeMap<ModuleSlot, ReadyModule<Arch>>,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     pins: Vec<ModuleSlot>,
@@ -392,9 +387,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn from_resolve(
-        resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    ) -> Self {
+    pub(crate) fn from_resolve(resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>) -> Self {
         Self {
             resolve,
             ready_to_commit: BTreeMap::new(),
@@ -413,9 +406,9 @@ where
     pub(crate) fn build_retained_scopes(
         &self,
         root: ModuleSlot,
-        local: &ModuleScope<Arch, Tls>,
+        local: &ModuleScope<Arch>,
         modules: &[ModuleSlot],
-    ) -> Vec<ModuleScope<Arch, Tls>> {
+    ) -> Vec<ModuleScope<Arch>> {
         let group_order = self.resolve.group_order();
         assert_eq!(
             group_order.len(),
@@ -447,7 +440,7 @@ where
                         .get(&slot)
                         .copied()
                         .expect("module dependency must belong to the resolved load group");
-                    scope.push(local[index].clone());
+                    scope.push_admitted(local[index].clone());
                     let direct_deps = self
                         .resolve
                         .direct_deps(slot)
@@ -466,7 +459,7 @@ where
         entry_key: ModuleKey,
         loaded: LoadedCore<D, Arch, R, Tls>,
         direct_deps: Box<[ModuleSlot]>,
-        retained: ModuleScope<Arch, Tls>,
+        retained: ModuleScope<Arch>,
     ) {
         let module = loaded.into_module_handle();
         let pending = PendingModule {
@@ -485,7 +478,7 @@ where
         self.lifecycle.push(slot);
     }
 
-    pub(crate) fn mark_module_ready(&mut self, slot: ModuleSlot, retained: ModuleScope<Arch, Tls>) {
+    pub(crate) fn mark_module_ready(&mut self, slot: ModuleSlot, retained: ModuleScope<Arch>) {
         let module = self
             .resolve
             .modules
@@ -542,7 +535,7 @@ where
         }
     }
 
-    pub(crate) fn into_publish(self) -> PublishSession<Arch, Tls> {
+    pub(crate) fn into_publish(self) -> PublishSession<Arch> {
         let Self {
             resolve,
             ready_to_commit,
@@ -573,12 +566,11 @@ where
     }
 }
 
-impl<Arch, Tls> PublishSession<Arch, Tls>
+impl<Arch> PublishSession<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn initializers(&self) -> Box<[ModuleHandle<Arch, Tls>]> {
+    pub(crate) fn initializers(&self) -> Box<[ModuleHandle<Arch>]> {
         self.lifecycle
             .iter()
             .map(|id| {
@@ -594,7 +586,7 @@ where
 
     pub(crate) fn commit_into<Meta>(
         self,
-        committed: &mut CommittedStorage<Meta, Arch, Tls>,
+        committed: &mut CommittedStorage<Meta, Arch>,
     ) -> Result<CommitResult>
     where
         Meta: Default,

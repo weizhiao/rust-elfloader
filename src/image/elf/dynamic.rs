@@ -14,7 +14,7 @@ use crate::{
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
-    runtime::DomainId,
+    runtime::Domain,
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, OnceCell, arc_unsize},
     tls::{ImageTlsState, TlsRequest, TlsResolver},
@@ -401,20 +401,17 @@ where
             } else {
                 TlsRequest::Dynamic
             };
-            ImageTlsState::with_module(
-                self.tls_resolver.clone(),
-                self.tls_resolver.register(*info, request)?,
-                image,
-            )
+            let module = self.domain.tls_resolver().register(*info, request)?;
+            ImageTlsState::owned(module, image)
         } else {
-            ImageTlsState::without_module(self.tls_resolver.clone())
+            ImageTlsState::borrowed(None)
         };
         let plt = PltRelocInfo::new(dynamic.pltrel.clone(), symtab.clone());
-        let state = ModuleState::new(self.source_id, self.domain);
+        let state = ModuleState::new(self.source_id, self.domain.id());
         if dynamic.nodelete {
             state.pin_self();
         }
-        let inner = Arc::new(ElfModule {
+        let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
             executor: self.executor,
             state,
@@ -430,8 +427,10 @@ where
             })),
             lazy_lookup: OnceCell::new(),
             tls,
+            domain: self.domain,
             segments: self.segments,
-        });
+        };
+        let inner = Arc::new(inner);
         ElfModule::bind_runtime_owner(&inner);
 
         Ok(RawDynamic {
@@ -465,14 +464,13 @@ where
     type Arch = Arch;
     type Tls = Tls;
 
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.module.domain_id()
+    fn domain(&self) -> &Domain<Arch, Tls> {
+        self.module.domain()
     }
 
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Arch> + ?Sized,

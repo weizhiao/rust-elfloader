@@ -11,7 +11,7 @@ use crate::{
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
-    runtime::DomainId,
+    runtime::Domain,
     tls::TlsResolver,
 };
 use core::{fmt::Debug, ops::Deref};
@@ -57,14 +57,13 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     type Arch = Arch;
     type Tls = Tls;
 
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.inner.state().domain_id()
+    fn domain(&self) -> &Domain<Arch, Tls> {
+        self.inner.domain()
     }
 
     fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         Obs: RelocationObserver<Arch> + ?Sized,

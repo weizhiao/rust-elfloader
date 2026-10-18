@@ -1,12 +1,18 @@
 //! Root library lookup and the shared, explicit host-runtime boundary.
 use elf::{ElfBytes, abi, endian::AnyEndian, symbol::Symbol};
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     LinkContext, Loader,
+    arch::NativeArch,
     elf::ElfSymbolBind,
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
     input::ElfFile,
     linker::{GraphModule, LdCache, SearchConfig, SearchPathResolver},
-    runtime::DomainId,
+    relocation::RelocationArch,
+    tls::{
+        DefaultTlsResolver, TlsContext, TlsIndex, TlsInfo, TlsModule, TlsModuleId, TlsProvider,
+        TlsResolver,
+    },
 };
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
 use std::{
@@ -14,6 +20,8 @@ use std::{
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
+    ptr::NonNull,
+    sync::Arc,
 };
 
 // A fixed host boundary, independent of the selected workloads. Candidate
@@ -90,11 +98,22 @@ fn record_file(kind: &str, soname: &str, path: &Path) {
     );
 }
 
+struct HostModuleData {
+    _library: Arc<Library>,
+    tls: Option<TlsModule>,
+}
+
+impl Drop for HostModuleData {
+    fn drop(&mut self) {
+        if let Some(tls) = &self.tls {
+            DefaultTlsResolver::new().unregister(tls.mod_id());
+        }
+    }
+}
+
 struct HostLibrary {
     soname: String,
-    module: ModuleHandle,
-    // Synthetic symbols borrow native addresses; keep their library loaded.
-    _native_library: Library,
+    module: ModuleHandle<NativeArch>,
 }
 
 impl HostLibrary {
@@ -103,15 +122,14 @@ impl HostLibrary {
         // libloading has no borrowed library-handle accessor. Restore ownership
         // immediately so the raw handle remains valid while building the bridge.
         let handle = library.into_raw();
-        let library = unsafe { Library::from_raw(handle) };
+        let library = Arc::new(unsafe { Library::from_raw(handle) });
         let bytes = fs::read(path).unwrap();
         let elf = ElfBytes::<AnyEndian>::minimal_parse(&bytes).unwrap();
-        let module = unsafe { bridge_exports(soname, handle, &elf) };
+        let module = unsafe { bridge_exports(soname, handle, &elf, library.clone()) };
         record_file("host", soname, path);
         Self {
             soname: soname.to_owned(),
             module: module.into(),
-            _native_library: library,
         }
     }
 }
@@ -134,8 +152,10 @@ impl HostLibraries {
         Self { libraries }
     }
 
-    pub fn context(&self) -> LinkContext<()> {
-        let mut context = LinkContext::new(DomainId::PROCESS);
+    pub fn context(&self) -> LinkContext<(), NativeArch, DefaultTlsResolver> {
+        let mut context = LinkContext::new(
+            Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new()).unwrap(),
+        );
         let modules = self
             .libraries
             .iter()
@@ -152,13 +172,53 @@ impl HostLibraries {
 fn is_bridgeable_export(symbol: &Symbol) -> bool {
     let visible = matches!(symbol.st_vis(), abi::STV_DEFAULT | abi::STV_PROTECTED);
     let exported = matches!(symbol.st_bind(), abi::STB_GLOBAL | abi::STB_WEAK);
-    // TLS addresses are thread-relative and cannot use this absolute-address bridge.
     let supported_type = matches!(
         symbol.st_symtype(),
-        abi::STT_FUNC | abi::STT_GNU_IFUNC | abi::STT_OBJECT
+        abi::STT_FUNC | abi::STT_GNU_IFUNC | abi::STT_OBJECT | abi::STT_TLS
     );
     let version_marker = symbol.st_shndx == abi::SHN_ABS && symbol.st_value == 0;
     !symbol.is_undefined() && visible && exported && supported_type && !version_marker
+}
+
+type HostTlsFn = unsafe extern "C" fn(*const TlsIndex) -> *mut u8;
+
+struct HostTls {
+    handle: usize,
+    mod_id: TlsModuleId,
+    get_addr: HostTlsFn,
+    _library: Arc<Library>,
+}
+
+// The retained library pins host TLS metadata; glibc supplies each thread's block.
+unsafe impl TlsProvider for HostTls {
+    unsafe fn resolve(
+        &self,
+        _context: &TlsContext,
+        offset: usize,
+    ) -> elf_loader::Result<NonNull<u8>> {
+        let index = TlsIndex {
+            ti_module: self.mod_id,
+            ti_offset: offset.wrapping_sub(NativeArch::TLS_DTV_OFFSET),
+        };
+        NonNull::new(unsafe { (self.get_addr)(&index) }).ok_or_else(|| {
+            elf_loader::error::TlsError::InvalidModuleId {
+                mod_id: self.mod_id,
+            }
+            .into()
+        })
+    }
+
+    unsafe fn get(&self, _context: &TlsContext) -> Option<NonNull<u8>> {
+        let mut data: *mut u8 = std::ptr::null_mut();
+        let status = unsafe {
+            libc::dlinfo(
+                self.handle as *mut libc::c_void,
+                libc::RTLD_DI_TLS_DATA,
+                (&mut data as *mut *mut u8).cast(),
+            )
+        };
+        (status == 0).then(|| NonNull::new(data)).flatten()
+    }
 }
 
 struct ExportVersion<'a> {
@@ -172,10 +232,53 @@ unsafe fn bridge_exports(
     soname: &str,
     handle: *mut libc::c_void,
     elf: &ElfBytes<'_, AnyEndian>,
-) -> SyntheticModule {
+    library: Arc<Library>,
+) -> SyntheticModule<NativeArch, HostModuleData> {
     let (symbols, strings) = elf.dynamic_symbol_table().unwrap().unwrap();
     let versions = elf.symbol_version_table().unwrap();
-    let mut module = SyntheticModule::empty(soname.to_owned());
+    let mut module = SyntheticModule::empty(
+        soname.to_owned(),
+        Domain::new(AddressSpaceId::PROCESS, DefaultTlsResolver::new())
+            .unwrap()
+            .id(),
+    )
+    .with_user_data(HostModuleData {
+        _library: library.clone(),
+        tls: None,
+    });
+    if let Some(header) = elf
+        .segments()
+        .and_then(|headers| headers.iter().find(|header| header.p_type == abi::PT_TLS))
+    {
+        let mut id = 0usize;
+        assert_eq!(
+            unsafe {
+                libc::dlinfo(
+                    handle,
+                    libc::RTLD_DI_TLS_MODID,
+                    (&mut id as *mut usize).cast(),
+                )
+            },
+            0
+        );
+        assert_ne!(id, 0);
+        let provider = HostTls {
+            handle: handle as usize,
+            mod_id: TlsModuleId::new(id),
+            get_addr: *unsafe { library.get::<HostTlsFn>(b"__tls_get_addr") }.unwrap(),
+            _library: library,
+        };
+        let info = TlsInfo {
+            vaddr: header.p_vaddr as usize,
+            filesz: header.p_filesz as usize,
+            memsz: header.p_memsz as usize,
+            align: header.p_align as usize,
+        };
+        let tls =
+            unsafe { DefaultTlsResolver::new().register_provider(info, None, provider) }.unwrap();
+        module.user_data_mut().tls = Some(tls.clone());
+        module = module.with_tls(tls).unwrap();
+    }
     for (index, symbol) in symbols.iter().enumerate().skip(1) {
         if !is_bridgeable_export(&symbol) {
             continue;
@@ -189,26 +292,30 @@ unsafe fn bridge_exports(
                 name: definition.names.next().unwrap().unwrap(),
                 is_default: !definition.hidden,
             });
-        let address = unsafe {
-            match &version {
-                Some(version) => {
-                    let c_version = CString::new(version.name).unwrap();
-                    libc::dlvsym(handle, c_name.as_ptr(), c_version.as_ptr())
-                }
-                None => libc::dlsym(handle, c_name.as_ptr()),
-            }
-        };
-        assert!(
-            !address.is_null(),
-            "cannot bridge {soname}:{}",
-            c_name.to_string_lossy()
-        );
-
-        // Native lookup resolves IFUNCs; publish the resulting callable address.
-        let mut export = if symbol.st_symtype() == abi::STT_OBJECT {
-            SyntheticSymbol::object(name, address.cast(), symbol.st_size as usize)
+        let mut export = if symbol.st_symtype() == abi::STT_TLS {
+            SyntheticSymbol::tls(name, symbol.st_value as usize, symbol.st_size as usize)
         } else {
-            SyntheticSymbol::function(name, address.cast()).with_size(symbol.st_size as usize)
+            let address = unsafe {
+                match &version {
+                    Some(version) => {
+                        let c_version = CString::new(version.name).unwrap();
+                        libc::dlvsym(handle, c_name.as_ptr(), c_version.as_ptr())
+                    }
+                    None => libc::dlsym(handle, c_name.as_ptr()),
+                }
+            };
+            assert!(
+                !address.is_null(),
+                "cannot bridge {soname}:{}",
+                c_name.to_string_lossy()
+            );
+
+            // Native lookup resolves IFUNCs; publish the resulting callable address.
+            if symbol.st_symtype() == abi::STT_OBJECT {
+                SyntheticSymbol::object(name, address.cast(), symbol.st_size as usize)
+            } else {
+                SyntheticSymbol::function(name, address.cast()).with_size(symbol.st_size as usize)
+            }
         };
         if symbol.st_bind() == abi::STB_WEAK {
             export = export.with_bind(ElfSymbolBind::WEAK);

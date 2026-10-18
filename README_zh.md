@@ -145,12 +145,8 @@ fn main() -> Result<()> {
 
 说明：
 
-- TLS 重定位和 `DefaultTlsResolver` 始终可用；自定义 runtime 仍可提供自己的 resolver。
-- 本机模块使用 TLS 时需调用 `Loader::with_default_tls_resolver()`；`Loader::new()` 默认不配置 TLS runtime。
-- 自定义 `LazyBinder` 始终可用；`lazy-binding` 只额外提供 `NativeLazyBinder`。
-- `Relocator::new()` 在通过 `lazy_binder()` 配置 binder 前默认使用 eager binding。
-- 默认 feature 是 `full`，等价于 `lazy-binding` + `object` + `libc`。
-- `load_object()` 仍由 `object` feature 控制；默认构建已包含该 feature，`--no-default-features` 时需要显式开启。
+- TLS 无需 feature 开关，可使用 `DefaultTlsResolver` 或自定义 resolver。
+- `lazy-binding` 仅控制内置实现，自定义 `LazyBinder` 无需开启该 feature。
 
 ## 平台支持
 

@@ -1,86 +1,72 @@
-use super::{
-    defs::{ModuleTls, TlsImageSource, TlsIndex},
-    traits::TlsResolver,
-};
-use crate::{Result, TlsError, memory::MappedView, relocation::RelocationArch};
-use core::marker::PhantomData;
+use super::TlsModule;
+use crate::{Result, TlsError, memory::MappedView};
+use alloc::{boxed::Box, vec::Vec};
+use spin::Mutex;
 
-/// TLS runtime state attached to a loaded ELF image.
-///
-/// This stores resolver-provided TLS metadata independently of the built-in
-/// same-process TLS manager.
-pub(crate) struct ImageTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    resolver: Tls,
-    registration: Option<TlsRegistration>,
-    arch: PhantomData<fn() -> Arch>,
-}
-
-struct TlsRegistration {
-    module: ModuleTls,
+struct RegisteredTls {
+    module: TlsModule,
     image: &'static [u8],
+    owned: bool,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ImageTlsState<Arch, Tls> {
-    #[inline]
-    pub(crate) fn without_module(resolver: Tls) -> Self {
-        Self {
-            resolver,
-            registration: None,
-            arch: PhantomData,
-        }
-    }
+/// TLS metadata and descriptor resources. The containing image manages registration.
+pub(crate) struct ImageTlsState {
+    descriptors: Mutex<Vec<Box<dyn Send + Sync>>>,
+    registration: Option<RegisteredTls>,
+}
 
-    pub(crate) fn with_module(resolver: Tls, module: ModuleTls, image: MappedView<u8>) -> Self {
+impl ImageTlsState {
+    /// Borrows an existing registration; its caller retains ownership.
+    pub(crate) fn borrowed(registration: Option<(TlsModule, MappedView<u8>)>) -> Self {
         Self {
-            resolver,
-            registration: Some(TlsRegistration {
+            descriptors: Mutex::new(Vec::new()),
+            registration: registration.map(|(module, image)| RegisteredTls {
                 module,
                 image: image.as_slice(),
+                owned: false,
             }),
-            arch: PhantomData,
         }
     }
 
-    #[inline]
-    pub(crate) fn resolver(&self) -> &Tls {
-        &self.resolver
+    /// Records a registration owned by the containing image.
+    pub(crate) fn owned(module: TlsModule, image: MappedView<u8>) -> Self {
+        Self {
+            descriptors: Mutex::new(Vec::new()),
+            registration: Some(RegisteredTls {
+                module,
+                image: image.as_slice(),
+                owned: true,
+            }),
+        }
     }
 
-    #[inline]
-    pub(crate) fn module(&self) -> Option<ModuleTls> {
+    pub(crate) fn module(&self) -> Option<&TlsModule> {
+        self.registration.as_ref().map(|tls| &tls.module)
+    }
+
+    /// Returns the registration that the containing image must unregister on drop.
+    pub(crate) fn owned_module(&self) -> Option<&TlsModule> {
         self.registration
             .as_ref()
-            .map(|registration| registration.module)
+            .filter(|tls| tls.owned)
+            .map(|tls| &tls.module)
     }
 
-    pub(crate) fn with_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        let registration = self
-            .registration
+    pub(crate) fn image(&self) -> Result<&[u8]> {
+        self.registration
             .as_ref()
-            .ok_or(TlsError::TemplateUnavailable)?;
-        f(registration.image)
+            .map(|tls| tls.image)
+            .ok_or_else(|| TlsError::TemplateUnavailable.into())
     }
 
-    pub(crate) fn publish(&self, source: TlsImageSource) -> Result<()> {
-        let Some(registration) = &self.registration else {
-            return Ok(());
-        };
-        self.resolver.publish(source, registration.module.mod_id())
-    }
-
-    pub(crate) fn index(&self, offset: usize) -> Option<TlsIndex> {
-        let registration = self.registration.as_ref()?;
-        Some(TlsIndex {
-            ti_module: registration.module.mod_id(),
-            ti_offset: offset.wrapping_sub(Arch::TLS_DTV_OFFSET),
-        })
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Drop for ImageTlsState<Arch, Tls> {
-    fn drop(&mut self) {
-        if let Some(registration) = &self.registration {
-            self.resolver.unregister(registration.module.mod_id());
+    pub(crate) fn retain_descriptor(&self, state: Option<Box<dyn Send + Sync>>) {
+        if let Some(state) = state {
+            self.descriptors.lock().push(state);
         }
+    }
+
+    /// Releases descriptor arguments before their registration is removed.
+    pub(crate) fn clear_descriptors(&mut self) {
+        self.descriptors.get_mut().clear();
     }
 }

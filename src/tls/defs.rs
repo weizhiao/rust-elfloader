@@ -1,3 +1,6 @@
+use super::TlsModule;
+use alloc::boxed::Box;
+
 use crate::{
     Result, TlsError,
     elf::{ElfLayout, ElfPhdr, ElfProgramType},
@@ -75,17 +78,19 @@ impl TlsImageSource {
     }
 
     /// Borrows the TLS initialization image while the backing image is alive.
+    /// The backing image is released after the callback returns its result.
     #[inline]
-    pub fn with_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        let Some(provider) = self.provider.upgrade() else {
-            return Err(TlsError::TemplateUnavailable.into());
-        };
-        provider.with_tls_image(f)
+    pub fn with_image<R>(&self, f: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
+        let provider = self
+            .provider
+            .upgrade()
+            .ok_or(TlsError::TemplateUnavailable)?;
+        f(provider.tls_image()?)
     }
 }
 
 pub(crate) trait TlsImageProvider: Send + Sync {
-    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>;
+    fn tls_image(&self) -> Result<&[u8]>;
 }
 
 /// Two-word TLSDESC binding written into a loaded image.
@@ -177,49 +182,64 @@ impl core::fmt::Display for TlsTpOffset {
     }
 }
 
-/// TLS metadata associated with a runtime module.
+/// ABI metadata for a registered TLS module, independent of its storage owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ModuleTls {
-    /// The module has a static TLS block at a fixed thread-pointer offset.
-    Static {
-        /// Runtime TLS module identifier.
-        mod_id: TlsModuleId,
-        /// Offset of this module's static TLS block relative to the thread pointer.
-        tp_offset: TlsTpOffset,
-    },
-    /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
-    Dynamic {
-        /// Runtime TLS module identifier.
-        mod_id: TlsModuleId,
-    },
+pub struct TlsBinding {
+    mod_id: TlsModuleId,
+    tp_offset: Option<TlsTpOffset>,
 }
 
-impl ModuleTls {
-    /// Returns the registered TLS module ID.
-    #[inline]
+impl TlsBinding {
+    /// Creates metadata with an optional, stable thread-pointer offset.
+    pub const fn new(mod_id: TlsModuleId, tp_offset: Option<TlsTpOffset>) -> Self {
+        Self { mod_id, tp_offset }
+    }
+
+    /// Returns the ID in this runtime's TLS namespace.
     pub const fn mod_id(self) -> TlsModuleId {
-        match self {
-            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => mod_id,
+        self.mod_id
+    }
+
+    /// Returns the static thread-pointer offset, when supported.
+    pub const fn tp_offset(self) -> Option<TlsTpOffset> {
+        self.tp_offset
+    }
+}
+
+/// A descriptor and the state retained by the image containing that descriptor.
+pub struct TlsDescSetup {
+    binding: TlsDescBinding,
+    state: Option<Box<dyn Send + Sync>>,
+}
+
+impl TlsDescSetup {
+    /// Creates a descriptor that requires no retained state.
+    pub const fn new(binding: TlsDescBinding) -> Self {
+        Self {
+            binding,
+            state: None,
         }
     }
 
-    /// Returns the static TLS thread-pointer offset, when available.
-    #[inline]
-    pub const fn tp_offset(self) -> Option<TlsTpOffset> {
-        match self {
-            Self::Static { tp_offset, .. } => Some(tp_offset),
-            Self::Dynamic { .. } => None,
-        }
+    /// Keeps state alive until the image containing the descriptor is dropped.
+    pub fn with_state(mut self, state: Box<dyn Send + Sync>) -> Self {
+        self.state = Some(state);
+        self
+    }
+
+    pub(crate) fn into_parts(self) -> (TlsDescBinding, Option<Box<dyn Send + Sync>>) {
+        (self.binding, self.state)
     }
 }
 
 /// Request for a target-visible TLSDESC binding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum TlsDescRequest {
     /// A defined TLS symbol at `offset` within its module's TLS block.
     Defined {
-        /// Runtime TLS module metadata.
-        module: ModuleTls,
+        /// Non-owning registration metadata. The caller must keep the defining
+        /// module and runtime alive while the descriptor is in use.
+        module: TlsModule,
         /// Symbol offset including the relocation addend.
         offset: usize,
     },

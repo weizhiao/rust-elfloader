@@ -239,13 +239,14 @@ fn final_protection(class: MemoryClass) -> ProtFlags {
 mod tests {
     use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
+    use crate::arch::NativeArch;
     use crate::os::{AllocMmap, PageSize};
+    use crate::runtime::{AddressSpaceId, Domain};
     use crate::{
         image::{ScannedElf, SyntheticModule},
         input::ElfBinary,
         linker::{GraphModule, LinkContext, ModuleKey},
         loader::Loader,
-        runtime::DomainId,
     };
     use alloc::{collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
@@ -267,9 +268,15 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let root = context
-            .insert(GraphModule::new("root", SyntheticModule::empty("root")))
+            .insert(GraphModule::new(
+                "root",
+                SyntheticModule::empty(
+                    "root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                ),
+            ))
             .unwrap();
         let root_slot = context.committed.module_slot(root.id()).unwrap();
         entries.insert(

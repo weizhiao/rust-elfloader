@@ -1,236 +1,218 @@
-use super::{ModuleTls, TlsImageSource, TlsInfo, TlsModuleId, TlsTpOffset};
-use crate::{Result, TlsError};
-use alloc::vec::Vec;
+use super::{TlsBinding, TlsImageSource, TlsInfo, TlsModuleId, TlsProvider, TlsTpOffset};
+use crate::{
+    Result, TlsError,
+    sync::{Arc, arc_unsize},
+};
+use alloc::{collections::BTreeMap, vec::Vec};
+use core::{fmt, ptr::NonNull};
 
-/// Storage selected for one TLS module.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TlsStorage {
-    /// The module is allocated lazily through the dynamic thread vector.
-    Dynamic,
-    /// The module lives at a fixed offset from the thread pointer.
-    Static(TlsTpOffset),
+/// Immutable metadata assigned to a provider by its registry.
+#[derive(Clone, Copy, Debug)]
+pub struct TlsContext {
+    pub(crate) info: TlsInfo,
+    pub(crate) binding: TlsBinding,
 }
 
-impl TlsStorage {
-    #[inline]
-    fn module(self, mod_id: TlsModuleId) -> ModuleTls {
-        match self {
-            Self::Dynamic => ModuleTls::Dynamic { mod_id },
-            Self::Static(tp_offset) => ModuleTls::Static { mod_id, tp_offset },
-        }
+impl TlsContext {
+    /// Returns the registered TLS segment metadata.
+    pub const fn info(&self) -> TlsInfo {
+        self.info
+    }
+
+    /// Returns this registration's relocation metadata.
+    pub const fn binding(&self) -> TlsBinding {
+        self.binding
     }
 }
 
-/// Cloneable TLS module metadata used outside a registry lock.
-#[derive(Clone, Debug)]
-pub struct TlsModuleSnapshot {
-    /// TLS segment metadata.
-    pub info: TlsInfo,
-    /// Registered runtime TLS metadata.
-    pub tls: ModuleTls,
-    /// Relocated initialization image, when initialization has completed.
-    pub source: Option<TlsImageSource>,
+/// Shared ownership of a TLS provider, independent of its registry membership.
+///
+/// Construct this before taking a registry lock and pass it by reference when
+/// registering. The last owner must be dropped outside registry locks because
+/// provider destruction may call its runtime. This handle does not keep a
+/// registration alive; its owner must manage registration and unregistration.
+#[derive(Clone)]
+pub struct TlsOwner(pub(crate) Arc<dyn TlsProvider>);
+
+impl TlsOwner {
+    /// Retains a provider independently of its lookup entry.
+    pub fn new<P: TlsProvider>(provider: P) -> Self {
+        Self(arc_unsize!(Arc::new(provider) => dyn TlsProvider))
+    }
 }
 
-/// One module slot in a registry snapshot.
-#[derive(Clone, Debug)]
-pub struct TlsSlotSnapshot {
-    /// Generation in which this slot was last changed.
-    pub generation: usize,
-    /// Module metadata, or `None` when the slot has been unloaded.
-    pub module: Option<TlsModuleSnapshot>,
+impl fmt::Debug for TlsOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TlsOwner").finish_non_exhaustive()
+    }
 }
 
-/// Consistent snapshot of all registered TLS modules.
+/// A provider bound to the immutable metadata of one registration.
+///
+/// Clone an entry under the registry lock, then release the lock before calling
+/// its methods or dropping the last copy. An entry retains provider resources,
+/// but does not keep its module ID registered.
+#[derive(Clone, Debug)]
+pub struct TlsRegistryEntry {
+    context: TlsContext,
+    owner: TlsOwner,
+}
+
+impl TlsRegistryEntry {
+    /// Returns the TLS segment metadata.
+    pub const fn info(&self) -> TlsInfo {
+        self.context.info()
+    }
+
+    /// Returns the registration's relocation metadata.
+    pub const fn binding(&self) -> TlsBinding {
+        self.context.binding()
+    }
+
+    /// Publishes a relocated template according to the provider's policy.
+    /// Call at most once per registration, including across clones of this entry.
+    /// Repeated publication may panic.
+    pub fn publish(&self, source: TlsImageSource) -> Result<()> {
+        // SAFETY: Registry construction binds this context to this provider.
+        unsafe { self.owner.0.publish(&self.context, source) }
+    }
+
+    /// Resolves a logical offset in the current thread's block.
+    pub fn resolve(&self, offset: usize) -> Result<NonNull<u8>> {
+        // SAFETY: Registry construction binds this context to this provider.
+        unsafe { self.owner.0.resolve(&self.context, offset) }
+    }
+
+    /// Queries the current thread's block without allocating TLS.
+    pub fn get(&self) -> Option<NonNull<u8>> {
+        // SAFETY: Registry construction binds this context to this provider.
+        unsafe { self.owner.0.get(&self.context) }
+    }
+}
+
+/// Live module IDs used to discard stale per-thread blocks.
 #[derive(Clone, Debug)]
 pub struct TlsRegistrySnapshot {
-    /// Registry generation represented by this snapshot.
+    /// Registry membership generation.
     pub generation: usize,
-    /// Module slots indexed by [`TlsModuleId`].
-    pub slots: Vec<TlsSlotSnapshot>,
+    /// All live module IDs in ascending order, without retaining their owners.
+    pub modules: Vec<TlsModuleId>,
 }
 
-#[derive(Debug)]
-struct TlsModuleRecord<D> {
-    info: TlsInfo,
-    tls: ModuleTls,
-    source: Option<TlsImageSource>,
-    data: D,
-}
-
-impl<D> TlsModuleRecord<D> {
-    fn snapshot(&self) -> TlsModuleSnapshot {
-        TlsModuleSnapshot {
-            info: self.info,
-            tls: self.tls,
-            source: self.source.clone(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct TlsSlot<D> {
-    generation: usize,
-    module: Option<TlsModuleRecord<D>>,
-}
-
-/// Architecture-independent registry for TLS module metadata.
+/// Registry of TLS storage owners in one runtime's module-ID namespace.
 ///
-/// Resolver-specific state can be stored in `D`. Per-thread storage and target
-/// ABI details remain the responsibility of the resolver using this registry.
+/// IDs are never reused. Sparse storage keeps memory proportional to live modules
+/// rather than to the number of loads. Storage access and template publication
+/// happen through a bound entry cloned out of the registry.
 #[derive(Debug)]
-pub struct TlsRegistry<D = ()> {
-    slots: Vec<TlsSlot<D>>,
+pub struct TlsRegistry {
+    modules: BTreeMap<TlsModuleId, TlsRegistryEntry>,
+    next_id: usize,
     generation: usize,
 }
 
-impl<D> TlsRegistry<D> {
-    /// Creates an empty registry. Slot zero remains reserved for the TLS ABI.
+impl TlsRegistry {
+    /// Creates a registry; ID zero is reserved by the TLS ABI.
     pub const fn new() -> Self {
         Self {
-            slots: Vec::new(),
+            modules: BTreeMap::new(),
+            next_id: 1,
             generation: 0,
         }
     }
 
-    /// Returns the current registry generation.
-    #[inline]
-    pub fn generation(&self) -> usize {
+    /// Returns the registry membership generation.
+    pub const fn generation(&self) -> usize {
         self.generation
     }
 
-    /// Registers one module and returns its runtime TLS metadata.
-    pub fn register(&mut self, info: TlsInfo, storage: TlsStorage, data: D) -> Result<ModuleTls> {
+    /// Registers a provider in this runtime's module-ID namespace.
+    ///
+    /// The borrowed owner ensures that a failed registration cannot destroy the
+    /// provider while the caller holds a registry lock. No provider callback is
+    /// invoked here. Publish managed templates through the returned ID's entry.
+    ///
+    /// # Safety
+    /// `info` must describe this provider's TLS block. Any `tp_offset` must locate
+    /// that block at the same offset in every current and future calling thread.
+    /// The provider must support this registry's namespace and thread storage.
+    pub unsafe fn register(
+        &mut self,
+        info: TlsInfo,
+        tp_offset: Option<TlsTpOffset>,
+        owner: &TlsOwner,
+    ) -> Result<TlsBinding> {
         info.validate()?;
-        if self.slots.is_empty() {
-            self.slots.push(TlsSlot {
-                generation: 0,
-                module: None,
-            });
-        }
-        self.generation += 1;
-        let index = self
-            .slots
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_, slot)| slot.module.is_none())
-            .map(|(index, _)| index)
-            .unwrap_or(self.slots.len());
-        let module = storage.module(TlsModuleId::new(index));
-        let slot = TlsSlot {
-            generation: self.generation,
-            module: Some(TlsModuleRecord {
-                info,
-                tls: module,
-                source: None,
-                data,
-            }),
-        };
-        if index == self.slots.len() {
-            self.slots.push(slot);
-        } else {
-            self.slots[index] = slot;
-        }
-        Ok(module)
+        let next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(TlsError::ResolverUnsupported)?;
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(TlsError::ResolverUnsupported)?;
+        let binding = TlsBinding::new(TlsModuleId::new(self.next_id), tp_offset);
+        self.modules.insert(
+            binding.mod_id(),
+            TlsRegistryEntry {
+                context: TlsContext { info, binding },
+                owner: owner.clone(),
+            },
+        );
+        self.next_id = next_id;
+        self.generation = generation;
+        Ok(binding)
     }
 
-    /// Publishes the relocated initialization image for a registered module.
-    pub fn publish(&mut self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
-        let slot = self
-            .slots
-            .get_mut(mod_id.get())
-            .ok_or(TlsError::InvalidModuleId { mod_id })?;
-        let record = slot
-            .module
-            .as_mut()
-            .ok_or(TlsError::InvalidModuleId { mod_id })?;
-        if record.source.is_some() {
-            return Err(TlsError::AlreadyPublished { mod_id }.into());
-        }
-
-        self.generation += 1;
-        record.source = Some(source);
-        slot.generation = self.generation;
-        Ok(())
-    }
-
-    /// Unregisters a module and drops its resolver-specific state.
-    pub fn unregister(&mut self, mod_id: TlsModuleId) -> bool {
-        let Some(slot) = self.slots.get_mut(mod_id.get()) else {
-            return false;
-        };
-        if slot.module.is_none() {
-            return false;
-        }
-        self.generation += 1;
-        slot.generation = self.generation;
-        slot.module = None;
-        true
-    }
-
-    /// Returns a cloneable snapshot of one module.
-    pub fn module(&self, mod_id: TlsModuleId) -> Option<TlsModuleSnapshot> {
-        self.slots
-            .get(mod_id.get())?
-            .module
-            .as_ref()
-            .map(TlsModuleRecord::snapshot)
-    }
-
-    /// Returns the TLS segment metadata for one module.
-    pub fn info(&self, mod_id: TlsModuleId) -> Option<TlsInfo> {
-        self.slots
-            .get(mod_id.get())?
-            .module
-            .as_ref()
-            .map(|module| module.info)
-    }
-
-    /// Returns resolver-specific state for one module.
-    pub fn data(&self, mod_id: TlsModuleId) -> Option<&D> {
-        self.slots
-            .get(mod_id.get())?
-            .module
-            .as_ref()
-            .map(|module| &module.data)
-    }
-
-    /// Returns resolver-specific state for one module.
-    pub fn data_mut(&mut self, mod_id: TlsModuleId) -> Option<&mut D> {
-        self.slots
-            .get_mut(mod_id.get())?
-            .module
-            .as_mut()
-            .map(|module| &mut module.data)
-    }
-
-    /// Takes a consistent snapshot when the registry changed after `generation`.
-    pub fn snapshot_since(&self, generation: usize) -> Option<TlsRegistrySnapshot> {
-        if self.generation == generation {
+    /// Detaches a registration. Drop its returned owner after releasing locks.
+    pub fn unregister(&mut self, mod_id: TlsModuleId) -> Option<TlsOwner> {
+        if !self.modules.contains_key(&mod_id) {
             return None;
         }
-        Some(self.snapshot())
+        // Finish fallible work before detaching an owner: unwinding must not
+        // destroy a provider while the caller still holds the registry lock.
+        let generation = self
+            .generation
+            .checked_add(1)
+            .expect("TLS generation exhausted");
+        let entry = self.modules.remove(&mod_id)?;
+        self.generation = generation;
+        Some(entry.owner)
     }
 
-    /// Takes a consistent snapshot of the registry.
+    /// Returns a bound entry for use after releasing the registry lock.
+    pub fn lookup(&self, mod_id: TlsModuleId) -> Result<TlsRegistryEntry> {
+        self.modules
+            .get(&mod_id)
+            .cloned()
+            .ok_or_else(|| TlsError::InvalidModuleId { mod_id }.into())
+    }
+
+    /// Returns whether the module is still registered.
+    pub fn contains(&self, mod_id: TlsModuleId) -> bool {
+        self.modules.contains_key(&mod_id)
+    }
+
+    /// Returns segment metadata for a live module.
+    pub fn info(&self, mod_id: TlsModuleId) -> Option<TlsInfo> {
+        self.modules.get(&mod_id).map(TlsRegistryEntry::info)
+    }
+
+    /// Returns live IDs only when registry membership changed.
+    pub fn snapshot_since(&self, generation: usize) -> Option<TlsRegistrySnapshot> {
+        (self.generation != generation).then(|| self.snapshot())
+    }
+
+    /// Returns all live IDs without retaining storage owners or templates.
     pub fn snapshot(&self) -> TlsRegistrySnapshot {
         TlsRegistrySnapshot {
             generation: self.generation,
-            slots: self
-                .slots
-                .iter()
-                .map(|slot| TlsSlotSnapshot {
-                    generation: slot.generation,
-                    module: slot.module.as_ref().map(TlsModuleRecord::snapshot),
-                })
-                .collect(),
+            modules: self.modules.keys().copied().collect(),
         }
     }
 }
 
-impl<D> Default for TlsRegistry<D> {
-    #[inline]
+impl Default for TlsRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -241,14 +223,14 @@ mod tests {
     use super::*;
     use crate::{
         sync::{Arc, arc_unsize},
-        tls::TlsImageProvider,
+        tls::{TlsImageProvider, TlsImageSource, manager::ManagedTls},
     };
 
     struct TestImage;
 
     impl TlsImageProvider for TestImage {
-        fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-            f(&[0; 4])
+        fn tls_image(&self) -> Result<&[u8]> {
+            Ok(&[0; 4])
         }
     }
 
@@ -262,23 +244,24 @@ mod tests {
     }
 
     #[test]
-    fn unregister_changes_generation_and_reuses_slot() {
+    fn unregister_changes_generation_without_reusing_ids() {
         let mut registry = TlsRegistry::new();
-        let first = registry.register(info(), TlsStorage::Dynamic, ()).unwrap();
+        let first =
+            unsafe { registry.register(info(), None, &TlsOwner::new(ManagedTls::new())) }.unwrap();
         let first_id = first.mod_id();
         assert_eq!(first_id.get(), 1);
 
         let generation = registry.generation();
         assert!(registry.snapshot_since(generation).is_none());
-        assert!(registry.unregister(first_id));
+        assert!(registry.unregister(first_id).is_some());
         assert!(registry.generation() > generation);
-        assert!(registry.module(first_id).is_none());
+        assert!(!registry.contains(first_id));
 
         let offset = TlsTpOffset::new(-8);
-        let second = registry
-            .register(info(), TlsStorage::Static(offset), ())
-            .unwrap();
-        assert_eq!(second.mod_id(), first_id);
+        let second =
+            unsafe { registry.register(info(), Some(offset), &TlsOwner::new(ManagedTls::new())) }
+                .unwrap();
+        assert_ne!(second.mod_id(), first_id);
         assert_eq!(second.tp_offset(), Some(offset));
     }
 
@@ -286,20 +269,23 @@ mod tests {
     fn rejects_invalid_tls_info() {
         let mut registry = TlsRegistry::new();
         let invalid = TlsInfo { align: 3, ..info() };
-        assert!(registry.register(invalid, TlsStorage::Dynamic, ()).is_err());
+        assert!(
+            unsafe { registry.register(invalid, None, &TlsOwner::new(ManagedTls::new())) }.is_err()
+        );
         assert_eq!(registry.generation(), 0);
     }
 
     #[test]
+    #[should_panic(expected = "TLS template must be published only once")]
     fn rejects_repeated_publication() {
         let mut registry = TlsRegistry::new();
-        let module = registry.register(info(), TlsStorage::Dynamic, ()).unwrap();
+        let module =
+            unsafe { registry.register(info(), None, &TlsOwner::new(ManagedTls::new())) }.unwrap();
         let provider = arc_unsize!(Arc::new(TestImage) => dyn TlsImageProvider);
         let source = TlsImageSource::new(Arc::downgrade(&provider));
 
-        registry.publish(source.clone(), module.mod_id()).unwrap();
-        let generation = registry.generation();
-        assert!(registry.publish(source, module.mod_id()).is_err());
-        assert_eq!(registry.generation(), generation);
+        let owner = registry.lookup(module.mod_id()).unwrap();
+        owner.publish(source.clone()).unwrap();
+        let _ = owner.publish(source);
     }
 }

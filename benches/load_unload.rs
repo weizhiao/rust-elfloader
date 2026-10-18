@@ -1,6 +1,6 @@
 //! Linux/glibc end-to-end comparisons using unmodified real dependency graphs.
 use criterion::{Criterion, criterion_group, criterion_main};
-use elf_loader::{Linker, input::PathBuf};
+use elf_loader::{Linker, Loader, input::PathBuf};
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
 use std::hint::black_box;
 
@@ -44,7 +44,9 @@ fn bench_load_unload(c: &mut Criterion) {
     let hosts = HostLibraries::new(&cache);
     let mut group = c.benchmark_group("load_unload");
     for (soname, path) in roots {
-        let linker = Linker::new().resolver(cache.resolver());
+        let linker = Linker::new()
+            .loader(Loader::new())
+            .resolver(cache.resolver());
         group.bench_function(format!("{soname}/relink"), |b| {
             let mut context = hosts.context();
             b.iter(|| {

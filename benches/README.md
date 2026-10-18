@@ -39,8 +39,11 @@ Root lookup, host setup, context creation, and cache parsing happen outside timi
 Relink's dependency cache lookup and file loading happen inside it.
 
 Both implementations keep a fixed set of host runtimes loaded, defined by
-`HOST_RUNTIMES` in `support/libraries.rs`. Relink bridges their supported non-TLS
-exports, including symbol versions and resolved IFUNCs. Other dependencies load
+`HOST_RUNTIMES` in `support/libraries.rs`. Relink bridges their supported
+exports, including TLS, symbol versions and resolved IFUNCs. Host TLS is resolved
+by glibc through the default TLS runtime; loaded libraries can also define their
+own dynamic TLS. The bridge does not supply static host TP offsets, so host
+`TPOFF` imports are unsupported. Other dependencies load
 from ELF files. Relink reuses a host-only context and a system-cache snapshot;
 its resolver enables RPATH/RUNPATH but omits environment and default directories.
 
@@ -51,7 +54,8 @@ independent checks of unmapping and native dependency unloading.
 
 These are sequential, warm-page-cache measurements. glibc may choose different
 optimized dependency binaries and manages its own cache lifetime. Results do not
-cover cold startup, loading another libc, or arbitrary host TLS integration.
+cover cold startup or loading another libc. Regenerate baselines created before
+the default TLS runtime was enabled.
 
 ## Results and comparisons
 

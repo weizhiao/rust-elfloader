@@ -44,33 +44,26 @@ fn search_aliases(
     (path, soname)
 }
 
-pub(crate) struct ResolveContext<
-    'a,
-    Arch: RelocationArch = NativeArch,
-    P = (),
-    Tls: TlsResolver<Arch> = (),
-    Meta = (),
-> {
-    committed: &'a mut CommittedStorage<Meta, Arch, Tls>,
-    session: &'a mut ResolveSession<P, Arch, Tls>,
+pub(crate) struct ResolveContext<'a, Arch: RelocationArch = NativeArch, P = (), Meta = ()> {
+    committed: &'a mut CommittedStorage<Meta, Arch>,
+    session: &'a mut ResolveSession<P, Arch>,
     tokens: PathTokens,
 }
 
 pub(crate) type LoadResolveContext<'a, D, Arch = NativeArch, R = HostRegion, Tls = (), Meta = ()> =
-    ResolveContext<'a, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>;
+    ResolveContext<'a, Arch, RawDynamic<D, Arch, R, Tls>, Meta>;
 
-pub(crate) type ScanResolveContext<'a, Arch = NativeArch, Tls = (), Meta = ()> =
-    ResolveContext<'a, Arch, ScannedDynamic<Arch>, Tls, Meta>;
+pub(crate) type ScanResolveContext<'a, Arch = NativeArch, Meta = ()> =
+    ResolveContext<'a, Arch, ScannedDynamic<Arch>, Meta>;
 
-impl<'a, Arch, P, Tls, Meta> ResolveContext<'a, Arch, P, Tls, Meta>
+impl<'a, Arch, P, Meta> ResolveContext<'a, Arch, P, Meta>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
-        committed: &'a mut CommittedStorage<Meta, Arch, Tls>,
-        session: &'a mut ResolveSession<P, Arch, Tls>,
+        committed: &'a mut CommittedStorage<Meta, Arch>,
+        session: &'a mut ResolveSession<P, Arch>,
         tokens: PathTokens,
     ) -> Self {
         Self {
@@ -81,11 +74,10 @@ where
     }
 }
 
-impl<Arch, P, Tls, Meta> ResolveContext<'_, Arch, P, Tls, Meta>
+impl<Arch, P, Meta> ResolveContext<'_, Arch, P, Meta>
 where
     Arch: RelocationArch,
     P: DependencySource,
-    Tls: TlsResolver<Arch>,
 {
     fn known_module(&self, key: &[u8]) -> Option<ModuleSlot> {
         self.committed
@@ -125,7 +117,7 @@ where
     fn stage_module(
         &mut self,
         entry_key: ModuleKey,
-        module: ModuleHandle<Arch, Tls>,
+        module: ModuleHandle<Arch>,
         direct_deps: Box<[ModuleSlot]>,
     ) -> ModuleSlot {
         let (path, soname) = module
@@ -146,9 +138,9 @@ where
         slot
     }
 
-    fn stage_module_deps<'cfg, D, Obs, F, M, Exec>(
+    fn stage_module_deps<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec>(
         &mut self,
-        deps: Vec<ResolvedDependency<'cfg, Arch, Tls>>,
+        deps: Vec<ResolvedDependency<'cfg, Arch>>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         mut stage: F,
     ) -> Result<Box<[ModuleSlot]>>
@@ -159,7 +151,7 @@ where
         F: FnMut(
             &mut Self,
             ModuleKey,
-            ResolvedKey<'cfg, Arch, Tls>,
+            ResolvedKey<'cfg, Arch>,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
     {
@@ -216,9 +208,9 @@ where
         root: Resolver::Root,
         caller: Option<ModuleSlot>,
         resolver: &Resolver,
-    ) -> Result<ResolvedKey<'cfg, Arch, Tls>>
+    ) -> Result<ResolvedKey<'cfg, Arch>>
     where
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
     {
         let search = caller
             .and_then(|slot| self.search(slot))
@@ -238,7 +230,7 @@ where
         resolver: &Resolver,
     ) -> Result<Option<ModuleSlot>>
     where
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
     {
         let resolved = self.resolve_root_input(root, caller, resolver)?;
         let (resolved, _) = resolved.into_parts();
@@ -249,7 +241,7 @@ where
         Ok(self.module_for_source(source))
     }
 
-    fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Resolver>(
+    fn direct_deps_for<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec, Resolver>(
         &mut self,
         slot: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -258,15 +250,14 @@ where
     ) -> Result<&[ModuleSlot]>
     where
         D: Send + Sync + 'static,
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ModuleKey,
-            ResolvedKey<'cfg, Arch, Tls>,
+            ResolvedKey<'cfg, Arch>,
             ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
@@ -315,7 +306,7 @@ where
             .expect("resolved module must retain its direct dependencies"))
     }
 
-    fn resolve_dependency_graph_with<'cfg, D, Obs, F, M, Exec, Resolver>(
+    fn resolve_dependency_graph_with<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Exec, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -324,15 +315,14 @@ where
     ) -> Result<()>
     where
         D: Send + Sync + 'static,
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ModuleKey,
-            ResolvedKey<'cfg, Arch, Tls>,
+            ResolvedKey<'cfg, Arch>,
             ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
@@ -364,7 +354,7 @@ where
 }
 
 impl<D: Send + Sync + 'static, Arch, R, Tls, Meta>
-    ResolveContext<'_, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>
+    ResolveContext<'_, Arch, RawDynamic<D, Arch, R, Tls>, Meta>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -380,7 +370,7 @@ where
     ) -> Result<ModuleSlot>
     where
         D: Default,
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
@@ -394,7 +384,7 @@ where
     pub(crate) fn stage<'cfg, Obs, M, Exec>(
         &mut self,
         entry_key: ModuleKey,
-        resolved: ResolvedKey<'cfg, Arch, Tls>,
+        resolved: ResolvedKey<'cfg, Arch>,
         parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<ModuleSlot>
@@ -447,7 +437,7 @@ where
         resolver: &Resolver,
     ) -> Result<()>
     where
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         D: Default,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
@@ -463,12 +453,11 @@ where
     }
 }
 
-impl<Arch, Tls, Meta> ResolveContext<'_, Arch, ScannedDynamic<Arch>, Tls, Meta>
+impl<Arch, Meta> ResolveContext<'_, Arch, ScannedDynamic<Arch>, Meta>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn resolve_root<D, Obs, M, Exec, Resolver>(
+    pub(crate) fn resolve_root<Tls: TlsResolver<Arch>, D, Obs, M, Exec, Resolver>(
         &mut self,
         root: Resolver::Root,
         request_key: ModuleKey,
@@ -478,7 +467,7 @@ where
     ) -> Result<ModuleSlot>
     where
         D: Default + Send + Sync + 'static,
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
@@ -489,17 +478,16 @@ where
         Ok(root)
     }
 
-    pub(crate) fn stage<D, Obs, M, Exec>(
+    pub(crate) fn stage<Tls: TlsResolver<Arch>, D, Obs, M, Exec>(
         &mut self,
         entry_key: ModuleKey,
-        resolved: ResolvedKey<'static, Arch, Tls>,
+        resolved: ResolvedKey<'static, Arch>,
         parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<ModuleSlot>
     where
         D: Default + Send + Sync + 'static,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
@@ -527,7 +515,7 @@ where
                     } else {
                         let direct_deps =
                             self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                                ctx.stage::<D, Obs, M, Exec>(key, dep, parent, loader)
+                                ctx.stage::<Tls, D, Obs, M, Exec>(key, dep, parent, loader)
                             })?;
                         self.stage_module(entry_key, module, direct_deps)
                     }
@@ -540,7 +528,7 @@ where
         Ok(slot)
     }
 
-    fn resolve_graph<D, Obs, M, Exec, Resolver>(
+    fn resolve_graph<Tls: TlsResolver<Arch>, D, Obs, M, Exec, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -548,9 +536,8 @@ where
     ) -> Result<()>
     where
         D: Default + Send + Sync + 'static,
-        Resolver: KeyResolver<Arch, Tls>,
+        Resolver: KeyResolver<Arch>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {

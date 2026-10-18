@@ -37,6 +37,7 @@ fn resolves_external_symbols() {
                 .expect("failed to load a.o"),
         )
         .modules([&b])
+        .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate a.o");
 

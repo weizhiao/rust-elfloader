@@ -59,7 +59,7 @@ where
 {
     pub(crate) fn relocate_impl<Obs, Binder>(
         mut self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<LoadedObject<D, Arch, R, Tls>>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -75,11 +75,6 @@ where
             observer,
             ..
         } = args;
-        let domain = self.core.domain_id();
-        scope.check_domain(domain)?;
-        if let Some(global) = &global {
-            domain.ensure(global.domain_id())?;
-        }
         // Stabilize global lookup order and retain providers until dependency
         // bindings have been installed on the relocated module.
         let global_snapshot = global.as_ref().map(GlobalScope::modules);
@@ -206,7 +201,7 @@ where
         core: &ElfCore<D, Arch, R, Tls>,
         sections: &ObjectSections<Arch::Layout>,
         symtab: &mut ObjectSymbolTable<Arch::Layout>,
-        resolver: &SymbolResolver<'_, Arch, Tls>,
+        resolver: &SymbolResolver<'_, Arch>,
         bindings: &mut BindingDeps,
         observer: &mut Obs,
     ) -> Result<()>

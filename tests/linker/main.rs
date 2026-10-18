@@ -3,6 +3,7 @@
 mod fixture;
 #[path = "../fixture_build/mod.rs"]
 mod fixture_build;
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     Error, GraphModule, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
@@ -18,7 +19,6 @@ use elf_loader::{
         DynamicRelocatedEvent, HandleResult, LinkerObserver, LinkerRelocationEvent, LoadObserver,
         RelocationEvent, RelocationObserver,
     },
-    runtime::DomainId,
     tls::TlsResolver,
 };
 #[cfg(target_arch = "x86_64")]
@@ -195,7 +195,10 @@ impl KeyResolver for SyntheticDependencyResolver {
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, b"dep");
                 Ok(ResolvedKey::module(
-                    SyntheticModule::empty("dep"),
+                    SyntheticModule::empty(
+                        "dep",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
                     Vec::new(),
                 ))
             }
@@ -218,6 +221,7 @@ impl KeyResolver for SyntheticRootResolver {
             ResolveInput::Root { .. } => Ok(ResolvedKey::module(
                 SyntheticModule::new(
                     "synthetic-root",
+                    Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
                     [SyntheticSymbol::function(
                         "synthetic_value",
                         synthetic_value as *const (),
@@ -245,14 +249,23 @@ impl KeyResolver for ResolvedGraphResolver {
     ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
             ResolveInput::Root { root } => {
-                let dependency = ResolvedKey::module(SyntheticModule::empty("dep"), Vec::new());
+                let dependency = ResolvedKey::module(
+                    SyntheticModule::empty(
+                        "dep",
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
+                    Vec::new(),
+                );
                 let dependency = if self.pin_dependency {
                     dependency.pinned()
                 } else {
                     dependency
                 };
                 Ok(ResolvedKey::module(
-                    SyntheticModule::empty(*root),
+                    SyntheticModule::empty(
+                        *root,
+                        Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+                    ),
                     [ResolvedDependency::new("dep", dependency)],
                 ))
             }

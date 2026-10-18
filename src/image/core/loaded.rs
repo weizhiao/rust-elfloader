@@ -1,8 +1,9 @@
 use super::{ElfCore, Symbol};
+use crate::runtime::Domain;
 use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
+    elf::{ElfDyn, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
         GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
         SymbolLookup, module::lookup_symbol,
@@ -12,11 +13,10 @@ use crate::{
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
     sync::Arc,
-    tls::{ImageTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
+    tls::{ImageTlsState, TlsModule, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ops::Deref};
-use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with a retained relocation lookup scope.
 ///
@@ -30,7 +30,7 @@ pub struct LoadedCore<
     Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
-    scope: LocalScope<Arch, Tls>,
+    scope: LocalScope<Arch>,
 }
 
 impl<
@@ -66,7 +66,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(module: LoadedCore<D, Arch, R, Tls>) -> Self {
@@ -79,7 +79,7 @@ impl<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-> From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+> From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch>
 {
     #[inline]
     fn from(module: &LoadedCore<D, Arch, R, Tls>) -> Self {
@@ -110,7 +110,7 @@ impl<
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
-        let domain = core.domain_id();
+        let domain = core.domain().id();
         LoadedCore {
             core,
             scope: LocalScope::empty(domain),
@@ -119,7 +119,7 @@ impl<
 
     /// Returns the relocation lookup scope retained by this module.
     #[inline]
-    pub const fn scope(&self) -> &LocalScope<Arch, Tls> {
+    pub const fn scope(&self) -> &LocalScope<Arch> {
         &self.scope
     }
 
@@ -251,19 +251,16 @@ impl<
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_scope(
-        core: ElfCore<D, Arch, R, Tls>,
-        scope: LocalScope<Arch, Tls>,
-    ) -> Self {
+    pub unsafe fn from_core_scope(core: ElfCore<D, Arch, R, Tls>, scope: LocalScope<Arch>) -> Self {
         core.set_lazy_lookup(&scope, None, None, LookupOrder::GlobalFirst);
         Self { core, scope }
     }
 
     pub(crate) unsafe fn from_relocated(
         core: ElfCore<D, Arch, R, Tls>,
-        scope: LocalScope<Arch, Tls>,
-        global: Option<&GlobalScope<Arch, Tls>>,
-        symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+        scope: LocalScope<Arch>,
+        global: Option<&GlobalScope<Arch>>,
+        symbols: Option<Arc<SymbolRegistry<Arch>>>,
         order: LookupOrder,
     ) -> Self {
         core.set_lazy_lookup(&scope, global, symbols.as_ref(), order);
@@ -271,7 +268,7 @@ impl<
     }
 
     #[inline]
-    pub(crate) fn into_module_handle(self) -> ModuleHandle<Arch, Tls> {
+    pub(crate) fn into_module_handle(self) -> ModuleHandle<Arch> {
         self.core.into_module_handle()
     }
 }
@@ -292,7 +289,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
 {
     fn read_dynamic_view(
         segments: &ElfSegments,
-        base: VmAddr,
         phdr: &ElfPhdr<Arch::Layout>,
     ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
         let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
@@ -303,7 +299,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             return Ok(view);
         }
 
-        let addr = base + phdr.p_vaddr();
+        let addr = segments.base() + phdr.p_vaddr();
         let byte_len = phdr.p_filesz();
         let region =
             unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len) };
@@ -316,11 +312,18 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         Ok(view)
     }
 
-    /// Creates a new [`LoadedCore`] from raw parts without validation.
+    /// Creates a new [`LoadedCore`] from an existing loaded ELF mapping.
     ///
     /// # Safety
     /// The caller must ensure that the provided metadata, segments, and TLS values
-    /// describe a valid loaded ELF image.
+    /// describe a valid loaded ELF image. A supplied TLS registration must refer
+    /// to its existing, initialized storage and belong to `domain`.
+    /// This constructor borrows that registration and never unregisters it, even
+    /// on failure. The caller must keep the ELF mapping, TLS registration, storage,
+    /// and runtime valid while any derived view or code can still use them.
+    /// The `PT_TLS` initialization bytes must remain readable within `segments`
+    /// for the lifetime of the image. This constructor retains a template view
+    /// without publishing it or copying it into thread storage.
     ///
     /// # Arguments
     /// * `path` - Loader source path or diagnostic name
@@ -329,7 +332,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     ///   identity for other sources, or `ModuleSourceId::fresh()` for a new anonymous source.
     /// * `phdrs` - The program headers
     /// * `segments` - The mapped ELF segments and their module-relative ranges
-    /// * `tls_tp_offset` - TLS thread pointer offset
+    /// * `domain` - Fixed address space and TLS runtime of the existing image
+    /// * `tls` - Borrowed registration metadata for the existing TLS block, if any
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
@@ -340,13 +344,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         source_id: ModuleSourceId,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         segments: ElfSegments,
-        tls_resolver: Tls,
-        tls_tp_offset: Option<TlsTpOffset>,
+        domain: Domain<Arch, Tls>,
+        tls: Option<TlsModule>,
         user_data: D,
     ) -> Result<Self> {
         let base = segments.base();
         let mut dynamic = None;
-        let mut dynamic_addr = None;
         let mut eh_frame_hdr = None;
         let mut tls_phdr = None;
         let phdrs = phdrs.into();
@@ -354,8 +357,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         for phdr in &phdrs {
             match phdr.program_type() {
                 ElfProgramType::DYNAMIC => {
-                    dynamic_addr = Some(base + phdr.p_vaddr());
-                    dynamic = Some(Self::read_dynamic_view(&segments, base, phdr)?);
+                    dynamic = Some((
+                        base + phdr.p_vaddr(),
+                        Self::read_dynamic_view(&segments, phdr)?,
+                    ));
                 }
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
@@ -372,62 +377,44 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             }
         }
 
-        let tls = if let Some(phdr) = tls_phdr {
-            let template = segments
-                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-                .ok_or(ParsePhdrError::malformed("PT_TLS image is malformed"))?;
-            let info = TlsInfo::new(phdr);
-
-            let mut static_tls = tls_tp_offset.is_some();
-            if !static_tls && let Some(dynamic_entries) = dynamic.as_ref() {
-                for dynamic in dynamic_entries.as_slice() {
-                    let tag = dynamic.tag();
-                    if tag == ElfDynamicTag::NULL {
-                        break;
-                    }
-                    if tag == ElfDynamicTag::FLAGS && dynamic.value() & DF_STATIC_TLS as usize != 0
-                    {
-                        static_tls = true;
-                        break;
-                    }
-                }
+        let tls = match (tls_phdr, tls) {
+            (Some(phdr), Some(registration)) => {
+                registration.check_domain(domain.id())?;
+                let image = if phdr.p_filesz() == 0 {
+                    MappedView::empty()
+                } else {
+                    segments
+                        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .ok_or(ParsePhdrError::malformed(
+                            "PT_TLS is not directly readable from mapped segments",
+                        ))?
+                };
+                Some((registration, image))
             }
-
-            let request = if let Some(offset) = tls_tp_offset {
-                TlsRequest::Static(Some(offset))
-            } else if static_tls {
-                TlsRequest::Static(None)
-            } else {
-                TlsRequest::Dynamic
-            };
-            ImageTlsState::with_module(
-                tls_resolver.clone(),
-                tls_resolver.register(info, request)?,
-                template,
-            )
-        } else {
-            ImageTlsState::without_module(tls_resolver)
+            (None, None) => None,
+            _ => return Err(crate::TlsError::ModuleMismatch.into()),
         };
+        let tls = ImageTlsState::borrowed(tls);
+        let (dynamic_addr, dynamic) = dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
         let core = unsafe {
             ElfCore::from_raw(
                 path.into(),
                 source_id,
-                base,
-                dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?,
-                dynamic_addr.ok_or(ParsePhdrError::MissingDynamicSection)?,
+                dynamic,
+                dynamic_addr,
                 phdrs,
                 eh_frame_hdr,
                 segments,
                 tls,
+                domain,
                 user_data,
             )
         }?;
-        core.publish_tls()?;
         Ok(unsafe { Self::from_core(core) })
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for LoadedCore<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch> for LoadedCore<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -460,7 +447,7 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
+    fn tls(&self) -> Option<&TlsModule> {
         self.core.tls()
     }
 

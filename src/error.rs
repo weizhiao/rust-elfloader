@@ -1085,11 +1085,6 @@ pub enum TlsError {
         /// Module ID that could not be found.
         mod_id: TlsModuleId,
     },
-    /// The TLS initialization image was already published for this module.
-    AlreadyPublished {
-        /// Module ID whose initialization image was already published.
-        mod_id: TlsModuleId,
-    },
     /// The TLS segment metadata is invalid.
     InvalidInfo,
     /// The supplied module metadata does not match the registered module.
@@ -1105,9 +1100,6 @@ impl Display for TlsError {
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
             Self::InvalidModuleId { mod_id } => {
                 write!(f, "TLS module ID {mod_id} is not registered")
-            }
-            Self::AlreadyPublished { mod_id } => {
-                write!(f, "TLS module ID {mod_id} is already published")
             }
             Self::InvalidInfo => f.write_str("TLS segment metadata is invalid"),
             Self::ModuleMismatch => {
@@ -1153,17 +1145,21 @@ impl Display for ParseLdCacheError {
     }
 }
 
+/// Details of incompatible runtime domains.
+#[derive(Debug)]
+pub struct DomainMismatchError {
+    /// Runtime domain already selected for the operation.
+    pub expected: DomainId,
+    /// Runtime domain supplied by the incompatible module or loader.
+    pub actual: DomainId,
+}
+
 /// Error types used throughout the `elf_loader` library.
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
 pub enum Error {
     /// Modules from incompatible runtime domains were combined.
-    DomainMismatch {
-        /// Runtime domain already selected for the operation.
-        expected: DomainId,
-        /// Runtime domain supplied by the incompatible module or loader.
-        actual: DomainId,
-    },
+    DomainMismatch(Box<DomainMismatchError>),
 
     /// An error occurred while opening, reading, or writing ELF files.
     Io(IoError),
@@ -1312,9 +1308,10 @@ impl From<TlsError> for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DomainMismatch { expected, actual } => write!(
+            Self::DomainMismatch(err) => write!(
                 f,
-                "runtime domain {actual} cannot be linked into runtime domain {expected}"
+                "runtime domain {} cannot be linked into runtime domain {}",
+                err.actual, err.expected
             ),
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Mmap(err) => write!(f, "Memory mapping error: {err}"),

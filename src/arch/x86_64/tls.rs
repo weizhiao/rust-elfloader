@@ -41,7 +41,7 @@ pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
         movdqu [rsp + 96], xmm6
         movdqu [rsp + 112], xmm7
 
-        mov rsi, [rax + 8]   // Get TlsDescDynamicArg pointer
+        mov rsi, [rax + 8]   // Get dynamic descriptor arguments
         mov rdx, [rsi]       // Get tls_get_addr pointer
         lea rdi, [rsi + 8]   // Get pointer to TlsIndex (first arg of tls_get_addr)
         call rdx             // Call tls_get_addr

@@ -67,7 +67,7 @@ impl LoadResult {
     pub fn release<Meta, Arch, Tls>(
         self,
         context: &mut LinkContext<Meta, Arch, Tls>,
-    ) -> Result<UnloadGroup<Meta, Arch, Tls>>
+    ) -> Result<UnloadGroup<Meta, Arch>>
     where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
@@ -120,26 +120,20 @@ impl LoadResult {
 ///     Ok(())
 /// }
 /// ```
-pub struct Linker<
-    Arch: RelocationArch = NativeArch,
-    L = Loader<(), (), Arch>,
-    R = (),
-    RelocBinder = (),
-    Tls: TlsResolver<Arch> = (),
-> {
+pub struct Linker<Arch: RelocationArch = NativeArch, L = Loader<(), Arch>, R = (), RelocBinder = ()>
+{
     pub(super) loader: L,
     pub(super) resolver: R,
     pub(super) relocator: Relocator<RelocBinder>,
-    marker: PhantomData<(Arch, Tls)>,
+    marker: PhantomData<Arch>,
 }
 
-impl<Arch, L, R, RelocBinder, Tls> Clone for Linker<Arch, L, R, RelocBinder, Tls>
+impl<Arch, L, R, RelocBinder> Clone for Linker<Arch, L, R, RelocBinder>
 where
     Arch: RelocationArch,
     L: Clone,
     R: Clone,
     Relocator<RelocBinder>: Clone,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -177,7 +171,7 @@ impl Linker {
     /// `NewArch`.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn for_arch<NewArch>(self) -> Linker<NewArch, Loader<(), (), NewArch>, (), ()>
+    pub const fn for_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>
     where
         NewArch: RelocationArch,
     {
@@ -197,10 +191,9 @@ impl Default for Linker {
     }
 }
 
-impl<L, R, RelocBinder, Arch, Tls> Linker<Arch, L, R, RelocBinder, Tls>
+impl<L, R, RelocBinder, Arch> Linker<Arch, L, R, RelocBinder>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     const fn into_fields(self) -> LinkerFields<L, R, RelocBinder> {
@@ -221,7 +214,7 @@ where
     }
 
     /// Sets the key resolver used to resolve root keys and dependencies.
-    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder, Tls>
+    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder>
     where
         R: Copy,
     {
@@ -243,7 +236,7 @@ where
     pub const fn relocator<NewRelocBinder>(
         self,
         relocator: Relocator<NewRelocBinder>,
-    ) -> Linker<Arch, L, R, NewRelocBinder, Tls>
+    ) -> Linker<Arch, L, R, NewRelocBinder>
     where
         Relocator<RelocBinder>: Copy,
     {
@@ -265,7 +258,7 @@ where
     pub fn map_relocator<NewRelocBinder>(
         self,
         configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
-    ) -> Linker<Arch, L, R, NewRelocBinder, Tls> {
+    ) -> Linker<Arch, L, R, NewRelocBinder> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -276,7 +269,9 @@ where
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, Arch, L, R, RelocBinder, Tls, ()> {
+    pub fn run<'pipe, Tls: TlsResolver<Arch>>(
+        &self,
+    ) -> LinkerRun<'_, 'pipe, Arch, L, R, RelocBinder, Tls, ()> {
         LinkerRun {
             linker: self,
             pipeline: LinkPipeline::new(),
@@ -288,28 +283,23 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Tls, Arch, M, Exec, R>
-    Linker<Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
+impl<D: Send + Sync + 'static, Arch, M, Exec, R, RelocBinder>
+    Linker<Arch, Loader<D, Arch, M, Exec>, R, RelocBinder>
 where
     D: Send + Sync + 'static,
-    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
 {
     /// Sets the loader template used to load root modules and dependencies.
-    ///
-    /// This must run before configuring the relocator because changing the
-    /// loader can also change the TLS resolver type.
     #[allow(clippy::type_complexity)]
-    pub const fn loader<NewD, NewTls, NewM, NewExec>(
+    pub const fn loader<NewD, NewM, NewExec>(
         self,
-        loader: Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
+        loader: Loader<NewD, Arch, NewM, NewExec>,
+    ) -> Linker<Arch, Loader<NewD, Arch, NewM, NewExec>, R, RelocBinder>
     where
-        Loader<D, Tls, Arch, M, Exec>: Copy,
+        Loader<D, Arch, M, Exec>: Copy,
         NewD: Send + Sync + 'static,
-        NewTls: TlsResolver<Arch>,
         NewM: Mmap,
         NewExec: CodeExecutor<Arch> + Clone,
     {
@@ -328,19 +318,13 @@ where
     }
 
     /// Reconfigures the underlying loader.
-    ///
-    /// This must run before configuring the relocator because changing the
-    /// loader can also change the TLS resolver type.
     #[allow(clippy::type_complexity)]
-    pub fn map_loader<NewD, NewTls, NewM, NewExec>(
+    pub fn map_loader<NewD, NewM, NewExec>(
         self,
-        configure: impl FnOnce(
-            Loader<D, Tls, Arch, M, Exec>,
-        ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
+        configure: impl FnOnce(Loader<D, Arch, M, Exec>) -> Loader<NewD, Arch, NewM, NewExec>,
+    ) -> Linker<Arch, Loader<NewD, Arch, NewM, NewExec>, R, RelocBinder>
     where
         NewD: Send + Sync + 'static,
-        NewTls: TlsResolver<Arch>,
         NewM: Mmap,
         NewExec: CodeExecutor<Arch> + Clone,
     {

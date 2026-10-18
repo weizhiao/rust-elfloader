@@ -11,7 +11,6 @@ use crate::{
     os::path_is_dir,
     relocation::RelocationArch,
     sync::{Arc, arc_unsize},
-    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
@@ -460,10 +459,9 @@ impl SearchPathResolver {
     }
 }
 
-impl<Arch, Tls> KeyResolver<Arch, Tls> for SearchPathResolver
+impl<Arch> KeyResolver<Arch> for SearchPathResolver
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     type Root = PathBuf;
 
@@ -475,7 +473,7 @@ where
     fn resolve<'cfg>(
         &self,
         req: ResolveRequest<'_, Self::Root>,
-    ) -> Result<ResolvedKey<'cfg, Arch, Tls>> {
+    ) -> Result<ResolvedKey<'cfg, Arch>> {
         let requested = match req.input() {
             ResolveInput::Root { root } => root.as_path(),
             ResolveInput::Dependency { needed } => {

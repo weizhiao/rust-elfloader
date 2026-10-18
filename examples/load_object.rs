@@ -1,6 +1,7 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
+use elf_loader::runtime::{AddressSpaceId, Domain};
 use elf_loader::{
     Loader, Relocator, Result,
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
@@ -15,6 +16,7 @@ fn host_symbols() -> SyntheticModule {
 
     SyntheticModule::new(
         "__host",
+        Domain::<elf_loader::arch::NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
         [SyntheticSymbol::function("print", print as *const ())],
     )
 }
@@ -26,14 +28,14 @@ fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
     let base = Relocator::new()
         .run(LOADER.load_object(fixtures.base_object_str())?)
-        .modules([host_symbols()])
+        .modules([host_symbols()])?
         .relocate()?;
     let middle = Relocator::new()
         .run(LOADER.load_dylib(fixtures.middle_str())?)
         .modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
-        ])
+        ])?
         .relocate()?;
     let leaf = Relocator::new()
         .run(LOADER.load_object(fixtures.leaf_object_str())?)
@@ -41,7 +43,7 @@ fn main() -> Result<()> {
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
             ModuleHandle::from(&middle),
-        ])
+        ])?
         .relocate()?;
     let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
     assert!(f() == 1);

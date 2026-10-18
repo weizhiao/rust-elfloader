@@ -1,70 +1,50 @@
 use crate::{
-    Error, Result, TlsError,
-    arch::{
-        NativeArch, get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static,
-        tlsdesc_resolver_undefweak,
-    },
+    Result, TlsError,
+    arch::{NativeArch, get_thread_pointer},
     memory::VmAddr,
     os::{current_thread_id, get_thread_local_ptr, register_thread_destructor},
     relocation::RelocationArch,
-    sync::{AtomicUsize, Ordering},
+    sync::{AtomicUsize, OnceCell, Ordering},
     tls::{
-        ModuleTls, ThreadDtv, TlsDescBinding, TlsDescRequest, TlsImageSource, TlsIndex, TlsInfo,
-        TlsModuleId, TlsRegistry, TlsRequest, TlsResolver, TlsStorage,
+        ThreadDtv, TlsContext, TlsImageSource, TlsIndex, TlsInfo, TlsModule, TlsModuleId, TlsOwner,
+        TlsProvider, TlsRegistry, TlsRequest, TlsResolver, TlsTpOffset,
     },
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-use core::ffi::c_void;
+use alloc::{boxed::Box, collections::BTreeMap};
+use core::{ffi::c_void, ptr::NonNull};
 use spin::{Mutex, RwLock};
-
-/// Dynamic TLSDESC resolver argument used by the native resolver stub.
-#[repr(C)]
-#[derive(Debug)]
-struct TlsDescDynamicArg {
-    tls_get_addr: usize,
-    ti: TlsIndex,
-}
-
-#[derive(Debug, Default)]
-struct ModuleData {
-    #[allow(clippy::vec_box)]
-    tls_desc_args: Vec<Box<TlsDescDynamicArg>>,
-}
 
 /// Global registry for all loaded modules' TLS metadata.
 /// This allows any thread to look up how to initialize TLS for a specific module ID.
-static MODULE_REGISTRY: RwLock<TlsRegistry<ModuleData>> = RwLock::new(TlsRegistry::new());
+static MODULE_REGISTRY: RwLock<TlsRegistry> = RwLock::new(TlsRegistry::new());
 
 #[inline]
-fn with_registry<T>(f: impl FnOnce(&TlsRegistry<ModuleData>) -> T) -> T {
+fn with_registry<T>(f: impl FnOnce(&TlsRegistry) -> T) -> T {
     let registry = MODULE_REGISTRY.read();
     f(&registry)
 }
 
 #[inline]
-fn with_registry_mut<T>(f: impl FnOnce(&mut TlsRegistry<ModuleData>) -> T) -> T {
+fn with_registry_mut<T>(f: impl FnOnce(&mut TlsRegistry) -> T) -> T {
     let mut registry = MODULE_REGISTRY.write();
     let result = f(&mut registry);
     GLOBAL_GENERATION.store(registry.generation(), Ordering::Release);
     result
 }
 
-/// Global generation counter. Incremented whenever a new module is loaded.
+/// Global generation counter. Changes when registry membership changes.
 /// DTVs use this to detect if they are stale and need updating.
 static GLOBAL_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
-fn sync_dtv(dtv: &mut ThreadDtv) -> Result<()> {
+fn sync_dtv(dtv: &mut ThreadDtv) {
     let generation = GLOBAL_GENERATION.load(Ordering::Acquire);
     if dtv.generation() == generation {
-        return Ok(());
+        return;
     }
     let Some(snapshot) = with_registry(|registry| registry.snapshot_since(dtv.generation())) else {
-        return Ok(());
+        return;
     };
-    let tp = unsafe { get_thread_pointer() };
-    dtv.sync(&snapshot, |offset, _| {
-        Ok(unsafe { tp.offset(offset.get()) } as usize)
-    })
+    dtv.sync(&snapshot);
 }
 
 // -----------------------------------------------------------------------------
@@ -84,32 +64,31 @@ unsafe extern "C" fn dtv_destructor(_ptr: *mut c_void) {
     cleanup_current_thread_tls();
 }
 
-/// Get access to the current thread's DTV, creating it if it doesn't exist.
-fn with_current_dtv<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut ThreadDtv) -> R,
-{
-    // Fast path: try to get the DTV from thread-local storage without locking the global map.
-    unsafe {
-        let ptr = get_thread_local_ptr();
-        if !ptr.is_null() {
-            return f(&mut *(ptr as *mut ThreadDtv));
+/// Accesses the current thread's DTV, optionally creating it on a cache miss.
+/// A non-creating lookup does not register a destructor or allocate thread state.
+fn with_current_dtv<R>(create: bool, f: impl FnOnce(&mut ThreadDtv) -> R) -> Option<R> {
+    let cached = unsafe { get_thread_local_ptr() }.cast::<ThreadDtv>();
+    let ptr = if cached.is_null() {
+        let tid = current_thread_id();
+        let mut map = THREAD_DTVS.lock();
+        let dtv = if create {
+            map.entry(tid).or_insert_with(|| Box::new(ThreadDtv::new()))
+        } else {
+            map.get_mut(&tid)?
+        };
+        let ptr = &mut **dtv as *mut ThreadDtv;
+        drop(map);
+        if create {
+            // Also caches the stable pointer on backends with a native TLS slot.
+            unsafe { register_thread_destructor(dtv_destructor, ptr.cast()) };
         }
-    }
-
-    let tid = current_thread_id();
-    let mut map = THREAD_DTVS.lock();
-
-    let dtv = map.entry(tid).or_insert_with(|| Box::new(ThreadDtv::new()));
-    let dtv_ptr = &mut **dtv as *mut ThreadDtv;
-
-    // Register destructor to cleanup on thread exit and also cache the pointer in TLS.
-    // The pointer to the boxed content is stable.
-    unsafe {
-        register_thread_destructor(dtv_destructor, dtv_ptr as *mut _);
-    }
-
-    f(dtv)
+        ptr
+    } else {
+        cached
+    };
+    // The box remains stable after releasing the map lock. Only this thread
+    // accesses it; callers must end this borrow before image/provider callbacks.
+    Some(unsafe { f(&mut *ptr) })
 }
 
 // -----------------------------------------------------------------------------
@@ -141,33 +120,39 @@ impl DefaultTlsResolver {
         with_registry(|registry| registry.info(mod_id))
     }
 
-    /// Get the raw pointer to the TLS data for the current thread and a specific module.
+    /// Registers a custom provider in the default runtime's namespace.
+    /// The caller owns the registration and must unregister it after its last use;
+    /// dropping the returned metadata does not release the provider.
     ///
-    /// This will automatically synchronize the thread's TLS state and allocate the
-    /// TLS block if it hasn't been initialized yet.
+    /// # Safety
+    /// `info` must describe the provider's TLS block. If supplied, `tp_offset`
+    /// must identify that block in every current and future thread. A pointer
+    /// observed in one thread alone is not proof of static placement. The
+    /// provider must support this runtime's namespace and thread storage.
+    pub unsafe fn register_provider<P: TlsProvider>(
+        &self,
+        info: TlsInfo,
+        tp_offset: Option<TlsTpOffset>,
+        provider: P,
+    ) -> Result<TlsModule> {
+        let entry = self.bind_tls_get_addr()?;
+        let owner = TlsOwner::new(provider);
+        let module =
+            with_registry_mut(|registry| unsafe { registry.register(info, tp_offset, &owner) })?;
+        Ok(unsafe { TlsModule::new(module, entry) })
+    }
+
+    /// Resolves the current thread's block, allocating managed or host TLS if needed.
+    /// The raw pointer must not be used from another thread or after module/thread
+    /// teardown. No reference or aliasing guarantee is implied.
     pub fn get_ptr(mod_id: TlsModuleId) -> Option<*mut u8> {
-        with_current_dtv(|dtv| {
-            sync_dtv(dtv).ok()?;
-            dtv.resolve(mod_id).ok().map(|address| address as *mut u8)
-        })
+        resolve(mod_id, 0).ok().map(NonNull::as_ptr)
     }
 
-    /// Get the TLS data as a slice for the current thread and a specific module.
-    ///
-    /// This will automatically synchronize the thread's TLS state and allocate the
-    /// TLS block if it hasn't been initialized yet.
-    pub fn get_tls_data(mod_id: TlsModuleId) -> Option<&'static [u8]> {
-        let memsz = Self::get_info(mod_id)?.memsz;
-        Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts(ptr, memsz) })
-    }
-
-    /// Get the mutable TLS data as a slice for the current thread and a specific module.
-    ///
-    /// This will automatically synchronize the thread's TLS state and allocate the
-    /// TLS block if it hasn't been initialized yet.
-    pub fn get_tls_data_mut(mod_id: TlsModuleId) -> Option<&'static mut [u8]> {
-        let memsz = Self::get_info(mod_id)?.memsz;
-        Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts_mut(ptr, memsz) })
+    /// Queries an existing block without allocating TLS or creating a DTV.
+    pub fn get_ptr_if_allocated(mod_id: TlsModuleId) -> Option<*mut u8> {
+        let entry = with_registry(|registry| registry.lookup(mod_id)).ok()?;
+        entry.get().map(NonNull::as_ptr)
     }
 }
 
@@ -181,96 +166,133 @@ impl Default for DefaultTlsResolver {
 impl TlsResolver<NativeArch> for DefaultTlsResolver {
     const OVERRIDE_TLS_GET_ADDR: bool = true;
 
-    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<ModuleTls> {
-        let storage = match request {
-            TlsRequest::Dynamic => TlsStorage::Dynamic,
-            TlsRequest::Static(Some(offset)) => TlsStorage::Static(offset),
+    fn register(&self, info: TlsInfo, request: TlsRequest) -> Result<TlsModule> {
+        let tp_offset = match request {
+            TlsRequest::Dynamic => None,
+            TlsRequest::Static(Some(offset)) => Some(offset),
             TlsRequest::Static(None) => return Err(TlsError::ResolverUnsupported.into()),
         };
-        with_registry_mut(|registry| registry.register(info, storage, ModuleData::default()))
+        // SAFETY: ManagedTls uses this runtime's thread cache and placement.
+        unsafe { self.register_provider(info, tp_offset, ManagedTls::new()) }
     }
 
     fn publish(&self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
-        with_registry_mut(|registry| registry.publish(source, mod_id))
+        let entry = with_registry(|registry| registry.lookup(mod_id))?;
+        entry.publish(source)
     }
 
     fn unregister(&self, mod_id: TlsModuleId) {
-        with_registry_mut(|registry| registry.unregister(mod_id));
+        let owner = with_registry_mut(|registry| registry.unregister(mod_id));
+        // A provider's destructor can call the host loader. Never drop it under a lock.
+        drop(owner);
     }
 
-    #[inline]
     fn bind_tls_get_addr(&self) -> Result<VmAddr> {
         Ok(VmAddr::from_ptr(tls_get_addr as *const ()))
     }
+}
 
-    #[inline]
-    fn bind_tlsdesc(&self, request: TlsDescRequest) -> Result<TlsDescBinding> {
-        match request {
-            TlsDescRequest::Defined {
-                module: ModuleTls::Static { tp_offset, .. },
-                offset,
-            } => Ok(TlsDescBinding::new(
-                VmAddr::from_ptr(tlsdesc_resolver_static as *const ()),
-                VmAddr::new(offset)
-                    .wrapping_add_signed(tp_offset.get())
-                    .get(),
-            )),
-            TlsDescRequest::Defined {
-                module: ModuleTls::Dynamic { mod_id },
-                offset,
-            } => {
-                let ti = TlsIndex {
-                    ti_module: mod_id,
-                    ti_offset: offset.wrapping_sub(NativeArch::TLS_DTV_OFFSET),
-                };
-                let arg = Box::new(TlsDescDynamicArg {
-                    tls_get_addr: self.bind_tls_get_addr()?.get(),
-                    ti,
-                });
-                let arg_ptr = VmAddr::from_ptr(arg.as_ref());
-                with_registry_mut(|registry| {
-                    let data = registry
-                        .data_mut(mod_id)
-                        .ok_or(TlsError::InvalidModuleId { mod_id })?;
-                    data.tls_desc_args.push(arg);
-                    Ok::<_, Error>(())
-                })?;
+fn resolve(mod_id: TlsModuleId, offset: usize) -> Result<NonNull<u8>> {
+    let entry = with_registry(|registry| registry.lookup(mod_id))?;
+    entry.resolve(offset)
+}
 
-                Ok(TlsDescBinding::new(
-                    VmAddr::from_ptr(tlsdesc_resolver_dynamic as *const ()),
-                    arg_ptr.get(),
-                ))
-            }
-            TlsDescRequest::UndefinedWeak { addend } => Ok(TlsDescBinding::new(
-                VmAddr::from_ptr(tlsdesc_resolver_undefweak as *const ()),
-                addend,
-            )),
+fn static_address(offset: TlsTpOffset) -> Option<NonNull<u8>> {
+    let tp = unsafe { get_thread_pointer() };
+    NonNull::new(tp.wrapping_offset(offset.get()))
+}
+
+/// Managed storage tied to the default runtime's registry and thread cache.
+/// Custom registries must use a provider tied to their own thread state.
+pub(super) struct ManagedTls {
+    image: OnceCell<TlsImageSource>,
+}
+
+impl ManagedTls {
+    pub(super) const fn new() -> Self {
+        Self {
+            image: OnceCell::new(),
         }
     }
 }
 
-// This is exposed to loaded code as a C ABI callback; callers must pass a
-// valid `TlsIndex` pointer.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-extern "C" fn tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
-    let ti = unsafe { &*ti };
+unsafe impl TlsProvider for ManagedTls {
+    unsafe fn publish(&self, _context: &TlsContext, source: TlsImageSource) -> Result<()> {
+        assert!(
+            self.image.set(source).is_ok(),
+            "TLS template must be published only once",
+        );
+        Ok(())
+    }
 
-    with_current_dtv(|dtv| {
-        match sync_dtv(dtv).and_then(|()| dtv.resolve(ti.ti_module)) {
-            Ok(base) => {
-                // Return address: Base of block + ABI TLS index offset.
-                unsafe {
-                    (base as *mut u8).add(ti.ti_offset.wrapping_add(NativeArch::TLS_DTV_OFFSET))
-                }
-            }
-            Err(error) => {
-                panic!(
-                    "__tls_get_addr: failed to resolve TLS module {}: {error}",
-                    ti.ti_module,
-                );
-            }
+    unsafe fn resolve(&self, context: &TlsContext, offset: usize) -> Result<NonNull<u8>> {
+        let source = self.image.get().ok_or(TlsError::TemplateUnavailable)?;
+        let binding = context.binding();
+        let base = if let Some(tp_offset) = binding.tp_offset() {
+            static_address(tp_offset).ok_or(TlsError::InvalidInfo)?
+        } else if let Some(base) = get_dynamic(binding.mod_id()) {
+            base
+        } else {
+            // Keep the image alive outside the DTV borrow. Its final release
+            // may run module finalizers that query TLS again.
+            source.with_image(|image| {
+                with_current_dtv(true, |dtv| {
+                    sync_dtv(dtv);
+                    if !with_registry(|registry| registry.contains(binding.mod_id())) {
+                        return Err(TlsError::InvalidModuleId {
+                            mod_id: binding.mod_id(),
+                        }
+                        .into());
+                    }
+                    dtv.get_or_init(binding.mod_id(), context.info(), image)
+                })
+                .expect("creating the current thread's DTV always returns a DTV")
+            })?
+        };
+        NonNull::new(base.as_ptr().wrapping_add(offset)).ok_or_else(|| TlsError::InvalidInfo.into())
+    }
+
+    unsafe fn get(&self, context: &TlsContext) -> Option<NonNull<u8>> {
+        self.image.get()?;
+        let binding = context.binding();
+        if let Some(tp_offset) = binding.tp_offset() {
+            static_address(tp_offset)
+        } else {
+            get_dynamic(binding.mod_id())
         }
+    }
+}
+
+fn get_dynamic(mod_id: TlsModuleId) -> Option<NonNull<u8>> {
+    with_current_dtv(false, |dtv| {
+        sync_dtv(dtv);
+        dtv.get(mod_id)
     })
+    .flatten()
+}
+
+// Each entry uses the ABI of loaded ELF code, including on Windows.
+#[cfg(all(windows, target_arch = "x86_64"))]
+extern "sysv64" fn tls_get_addr(index: *const TlsIndex) -> *mut u8 {
+    resolve_index(unsafe { &*index })
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+extern "C" fn tls_get_addr(index: *const TlsIndex) -> *mut u8 {
+    resolve_index(unsafe { &*index })
+}
+
+fn resolve_index(ti: &TlsIndex) -> *mut u8 {
+    match resolve(
+        ti.ti_module,
+        ti.ti_offset.wrapping_add(NativeArch::TLS_DTV_OFFSET),
+    ) {
+        Ok(address) => address.as_ptr(),
+        Err(error) => panic!(
+            "__tls_get_addr: failed to resolve TLS module {}: {error}",
+            ti.ti_module
+        ),
+    }
 }
 
 /// Optional: Manually cleanup TLS for the current thread.

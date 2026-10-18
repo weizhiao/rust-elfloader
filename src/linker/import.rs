@@ -17,11 +17,11 @@ use alloc::{
     vec::Vec,
 };
 
-struct PreparedModule<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+struct PreparedModule<Meta, Arch: RelocationArch> {
     key: ModuleKey,
     existing: Option<ModuleSlot>,
     instance: ModuleInstanceId,
-    module: ModuleHandle<Arch, Tls>,
+    module: ModuleHandle<Arch>,
     deps: Box<[ModuleInstanceId]>,
     meta: Meta,
 }
@@ -32,35 +32,33 @@ struct PreparedModule<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
 /// or names. This preserves bindings across unload/reload cycles and remains
 /// unambiguous when several modules share a key. Use [`LinkContext::add_alias`]
 /// separately for additional names.
-pub struct GraphModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub struct GraphModule<Meta = (), Arch: RelocationArch = NativeArch> {
     key: ModuleKey,
-    module: ModuleHandle<Arch, Tls>,
+    module: ModuleHandle<Arch>,
     deps: Box<[ModuleInstanceId]>,
     meta: Meta,
 }
 
-impl<Arch, Tls> GraphModule<(), Arch, Tls>
+impl<Arch> GraphModule<(), Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     /// Creates a graph node without context-specific metadata.
     #[inline]
-    pub fn new(key: impl Into<ModuleKey>, module: impl Into<ModuleHandle<Arch, Tls>>) -> Self {
+    pub fn new(key: impl Into<ModuleKey>, module: impl Into<ModuleHandle<Arch>>) -> Self {
         Self::with_meta(key, module, ())
     }
 }
 
-impl<Meta, Arch, Tls> GraphModule<Meta, Arch, Tls>
+impl<Meta, Arch> GraphModule<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     /// Creates a graph node with context-specific metadata.
     #[inline]
     pub fn with_meta(
         key: impl Into<ModuleKey>,
-        module: impl Into<ModuleHandle<Arch, Tls>>,
+        module: impl Into<ModuleHandle<Arch>>,
         meta: Meta,
     ) -> Self {
         Self {
@@ -100,6 +98,7 @@ where
         .committed
         .module(slot)
         .expect("import traversal must only contain committed modules");
+    target.domain_id().ensure(module.handle().domain_id())?;
     let key = module.entry_key();
 
     if let Some(target_slot) = target
@@ -280,7 +279,7 @@ where
     ///
     /// This is the single-node form of [`insert_batch`](Self::insert_batch).
     #[inline]
-    pub fn insert(&mut self, module: GraphModule<Meta, Arch, Tls>) -> Result<ModuleLease> {
+    pub fn insert(&mut self, module: GraphModule<Meta, Arch>) -> Result<ModuleLease> {
         Ok(self
             .insert_batch([module])?
             .into_vec()
@@ -299,7 +298,7 @@ where
     /// source is rejected.
     pub fn insert_batch(
         &mut self,
-        modules: impl IntoIterator<Item = GraphModule<Meta, Arch, Tls>>,
+        modules: impl IntoIterator<Item = GraphModule<Meta, Arch>>,
     ) -> Result<Box<[ModuleLease]>> {
         let modules = modules.into_iter().collect::<Vec<_>>();
         for node in &modules {
@@ -422,7 +421,7 @@ where
         for (node, deps) in planned.into_iter().zip(resolved) {
             let slot = slots[&node.instance];
             if node.existing.is_none() {
-                let retained = ModuleScope::new(node.module.domain_id());
+                let retained = ModuleScope::new(self.domain.id());
                 self.committed.insert(
                     slot,
                     StoredEntry::new(node.key.clone(), node.module, deps, retained, 1, node.meta),
@@ -548,16 +547,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::{GraphModule, LinkContext};
+    use crate::runtime::{AddressSpaceId, Domain};
     use crate::{
         Error, LinkContextError, LinkerError,
         arch::NativeArch,
         image::{ModuleHandle, SyntheticModule},
-        runtime::DomainId,
     };
     use alloc::vec::Vec;
 
     fn module(name: &str) -> ModuleHandle<NativeArch> {
-        ModuleHandle::new(SyntheticModule::empty(name))
+        ModuleHandle::new(SyntheticModule::empty(
+            name,
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        ))
     }
 
     #[test]
@@ -566,7 +568,7 @@ mod tests {
         let second = module("second");
         let first_instance = first.state().instance_id();
         let second_instance = second.state().instance_id();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
 
         let leases = context
             .insert_batch([
@@ -596,7 +598,7 @@ mod tests {
 
     #[test]
     fn duplicate_keys_keep_order() {
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let leases = context
             .insert_batch([
                 GraphModule::new("shared", module("first")),
@@ -617,7 +619,7 @@ mod tests {
     fn uses_committed_dependency() {
         let dependency = module("dependency");
         let dependency_instance = dependency.state().instance_id();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let dependency = context
             .insert(GraphModule::new("dependency", dependency))
             .unwrap();
@@ -642,7 +644,7 @@ mod tests {
     #[test]
     fn missing_dependency_does_not_publish() {
         let missing = module("missing").state().instance_id();
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let error = match context
             .insert_batch([GraphModule::new("root", module("root")).dependencies([missing])])
         {
@@ -664,7 +666,7 @@ mod tests {
     #[test]
     fn reuses_exact_instance() {
         let module = module("shared");
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(Domain::without_tls(AddressSpaceId::PROCESS));
         let first = context
             .insert(GraphModule::new("first", module.clone()))
             .unwrap();

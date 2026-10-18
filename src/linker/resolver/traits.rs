@@ -1,11 +1,10 @@
 use super::{super::ModuleKey, ResolveRequest};
 use crate::{
     Result, arch::NativeArch, image::ModuleHandle, input::ElfReader, relocation::RelocationArch,
-    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 
-pub(crate) enum ResolvedKind<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) enum ResolvedKind<'cfg, Arch: RelocationArch = NativeArch> {
     /// Provides an ELF reader for the requested key.
     Load(Box<dyn ElfReader + 'cfg>),
     /// Provides a module candidate and its dependencies.
@@ -15,15 +14,15 @@ pub(crate) enum ResolvedKind<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsRe
     /// published and initialized with the transaction.
     Module {
         /// Module exposed for symbol lookup.
-        module: ModuleHandle<Arch, Tls>,
+        module: ModuleHandle<Arch>,
         /// Dependencies resolved as part of this graph fragment.
-        deps: Vec<ResolvedDependency<'cfg, Arch, Tls>>,
+        deps: Vec<ResolvedDependency<'cfg, Arch>>,
     },
 }
 
 /// A key-resolution result chosen by caller policy.
-pub struct ResolvedKey<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    kind: ResolvedKind<'cfg, Arch, Tls>,
+pub struct ResolvedKey<'cfg, Arch: RelocationArch = NativeArch> {
+    kind: ResolvedKind<'cfg, Arch>,
     pinned: bool,
 }
 
@@ -31,16 +30,15 @@ pub struct ResolvedKey<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsResolver
 ///
 /// The key belongs to the dependency edge, while [`ResolvedKey`] describes the
 /// module selected for it.
-pub struct ResolvedDependency<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
-{
+pub struct ResolvedDependency<'cfg, Arch: RelocationArch = NativeArch> {
     pub(crate) key: ModuleKey,
-    pub(crate) resolved: ResolvedKey<'cfg, Arch, Tls>,
+    pub(crate) resolved: ResolvedKey<'cfg, Arch>,
 }
 
-impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedDependency<'cfg, Arch, Tls> {
+impl<'cfg, Arch: RelocationArch> ResolvedDependency<'cfg, Arch> {
     /// Creates a named dependency from a resolver result.
     #[inline]
-    pub fn new(key: impl Into<ModuleKey>, resolved: ResolvedKey<'cfg, Arch, Tls>) -> Self {
+    pub fn new(key: impl Into<ModuleKey>, resolved: ResolvedKey<'cfg, Arch>) -> Self {
         Self {
             key: key.into(),
             resolved,
@@ -48,7 +46,7 @@ impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedDependency<'cfg
     }
 }
 
-impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, Arch, Tls> {
+impl<'cfg, Arch: RelocationArch> ResolvedKey<'cfg, Arch> {
     /// Creates a result that loads a new module from the provided reader.
     #[inline]
     pub fn load(reader: impl ElfReader + 'cfg) -> Self {
@@ -66,8 +64,8 @@ impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, Arch,
     /// Creates a result backed by a module not yet committed to this context.
     #[inline]
     pub fn module(
-        module: impl Into<ModuleHandle<Arch, Tls>>,
-        deps: impl Into<Vec<ResolvedDependency<'cfg, Arch, Tls>>>,
+        module: impl Into<ModuleHandle<Arch>>,
+        deps: impl Into<Vec<ResolvedDependency<'cfg, Arch>>>,
     ) -> Self {
         Self {
             kind: ResolvedKind::Module {
@@ -89,13 +87,13 @@ impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, Arch,
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ResolvedKind<'cfg, Arch, Tls>, bool) {
+    pub(crate) fn into_parts(self) -> (ResolvedKind<'cfg, Arch>, bool) {
         (self.kind, self.pinned)
     }
 }
 
 /// Key-resolution policy used by [`super::super::Linker`].
-pub trait KeyResolver<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub trait KeyResolver<Arch: RelocationArch = NativeArch> {
     /// Root input owned by one linker load operation.
     ///
     /// It may carry non-cloneable resources such as an already-open file.
@@ -105,8 +103,6 @@ pub trait KeyResolver<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> 
     fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8];
 
     /// Resolves a root input or one `DT_NEEDED` dependency.
-    fn resolve<'cfg>(
-        &self,
-        req: ResolveRequest<'_, Self::Root>,
-    ) -> Result<ResolvedKey<'cfg, Arch, Tls>>;
+    fn resolve<'cfg>(&self, req: ResolveRequest<'_, Self::Root>)
+    -> Result<ResolvedKey<'cfg, Arch>>;
 }

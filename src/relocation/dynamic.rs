@@ -36,7 +36,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     pub(crate) fn relocate_impl<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Obs, Binder>,
     ) -> Result<LoadedCore<D, Arch, R, Tls>>
     where
         D: Send + Sync + 'static,
@@ -57,11 +57,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             observer,
             ..
         } = args;
-        let domain = self.domain_id();
-        scope.check_domain(domain)?;
-        if let Some(global) = &global {
-            domain.ensure(global.domain_id())?;
-        }
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name().escape_ascii());

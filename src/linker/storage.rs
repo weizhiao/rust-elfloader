@@ -8,7 +8,6 @@ use crate::{
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{Arc, AtomicUsize, Ordering},
-    tls::TlsResolver,
 };
 use alloc::{
     boxed::Box,
@@ -217,18 +216,16 @@ impl ModuleLease {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::linker) struct CommittedModule<'a, Meta, Arch, Tls>
+pub(in crate::linker) struct CommittedModule<'a, Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
-    entry: &'a StoredEntry<Meta, Arch, Tls>,
+    entry: &'a StoredEntry<Meta, Arch>,
 }
 
-impl<'a, Meta, Arch, Tls> CommittedModule<'a, Meta, Arch, Tls>
+impl<'a, Meta, Arch> CommittedModule<'a, Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(in crate::linker) const fn entry_key(&self) -> &'a ModuleKey {
@@ -236,7 +233,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn handle(&self) -> &'a ModuleHandle<Arch, Tls> {
+    pub(crate) fn handle(&self) -> &'a ModuleHandle<Arch> {
         &self.entry.module
     }
 
@@ -246,12 +243,12 @@ where
     }
 
     #[inline]
-    pub(crate) const fn retained(&self) -> &'a ModuleScope<Arch, Tls> {
+    pub(crate) const fn retained(&self) -> &'a ModuleScope<Arch> {
         &self.entry.retained
     }
 
     #[inline]
-    pub(super) const fn load_group(&self) -> Option<&'a ModuleScope<Arch, Tls>> {
+    pub(super) const fn load_group(&self) -> Option<&'a ModuleScope<Arch>> {
         self.entry.load_group.as_ref()
     }
 
@@ -266,21 +263,19 @@ where
     }
 }
 
-pub(in crate::linker) struct CommittedModuleMut<'a, Meta, Arch, Tls>
+pub(in crate::linker) struct CommittedModuleMut<'a, Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
-    entry: &'a mut StoredEntry<Meta, Arch, Tls>,
+    entry: &'a mut StoredEntry<Meta, Arch>,
 }
 
-impl<'a, Meta, Arch, Tls> CommittedModuleMut<'a, Meta, Arch, Tls>
+impl<'a, Meta, Arch> CommittedModuleMut<'a, Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(super) fn cache_load_group(&mut self, scope: ModuleScope<Arch, Tls>) {
+    pub(super) fn cache_load_group(&mut self, scope: ModuleScope<Arch>) {
         debug_assert!(self.entry.load_group.is_none());
         self.entry.load_group = Some(scope);
     }
@@ -328,25 +323,20 @@ where
     }
 }
 
-pub(crate) struct CommittedStorage<
-    Meta = (),
-    Arch: RelocationArch = NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub(crate) struct CommittedStorage<Meta = (), Arch: RelocationArch = NativeArch> {
     context: ContextId,
     domain: DomainId,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
-    entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
+    entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch>>,
     lifecycle: Vec<ModuleSlot>,
     free_slots: Vec<ModuleSlot>,
     pub(super) addresses: Arc<AddressIndex>,
 }
 
-impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
+impl<Meta, Arch> CommittedStorage<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(context: ContextId, domain: DomainId) -> Self {
@@ -420,7 +410,7 @@ where
     pub(in crate::linker) fn module(
         &self,
         slot: ModuleSlot,
-    ) -> Option<CommittedModule<'_, Meta, Arch, Tls>> {
+    ) -> Option<CommittedModule<'_, Meta, Arch>> {
         let cell = self.entries.get(slot)?;
         let entry = cell.entry.as_ref()?;
         Some(CommittedModule { entry })
@@ -430,7 +420,7 @@ where
     pub(crate) fn module_mut(
         &mut self,
         slot: ModuleSlot,
-    ) -> Option<CommittedModuleMut<'_, Meta, Arch, Tls>> {
+    ) -> Option<CommittedModuleMut<'_, Meta, Arch>> {
         match self.entries.get_mut(slot) {
             Some(ModuleCell {
                 entry: Some(entry), ..
@@ -565,7 +555,7 @@ where
         })
     }
 
-    pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch, Tls>) {
+    pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch>) {
         let source = entry.module.source_id();
         assert!(
             !self.sources.contains_key(&source),
@@ -582,7 +572,7 @@ where
     pub(crate) fn remove(
         &mut self,
         slot: ModuleSlot,
-    ) -> (ModuleHandle<Arch, Tls>, ModuleScope<Arch, Tls>, Meta) {
+    ) -> (ModuleHandle<Arch>, ModuleScope<Arch>, Meta) {
         let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell
@@ -627,14 +617,14 @@ where
     }
 }
 
-struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch> {
     // Incremented on publication and removal to guard transactional references
     // and make ids stale as soon as a module is unloaded.
     generation: u32,
-    entry: Option<StoredEntry<Meta, Arch, Tls>>,
+    entry: Option<StoredEntry<Meta, Arch>>,
 }
 
-impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, Tls> {
+impl<Meta, Arch: RelocationArch> ModuleCell<Meta, Arch> {
     #[inline]
     fn advance_generation(&mut self) {
         self.generation = self
@@ -644,36 +634,31 @@ impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, 
     }
 }
 
-pub(in crate::linker) struct StoredEntry<
-    Meta = (),
-    Arch: RelocationArch = NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub(in crate::linker) struct StoredEntry<Meta = (), Arch: RelocationArch = NativeArch> {
     entry_key: ModuleKey,
     aliases: Vec<ModuleKey>,
-    module: ModuleHandle<Arch, Tls>,
+    module: ModuleHandle<Arch>,
     direct_deps: Box<[ModuleSlot]>,
     // Keeps only this module's dependency closure alive for deferred lookup and
     // finalization; the wider relocation group is owned by its root entry.
-    retained: ModuleScope<Arch, Tls>,
+    retained: ModuleScope<Arch>,
     // Direct dependency edges are immutable for one committed incarnation.
-    load_group: Option<ModuleScope<Arch, Tls>>,
+    load_group: Option<ModuleScope<Arch>>,
     roots: usize,
     pins: usize,
     meta: Meta,
 }
 
-impl<Meta, Arch, Tls> StoredEntry<Meta, Arch, Tls>
+impl<Meta, Arch> StoredEntry<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(in crate::linker) fn new(
         entry_key: ModuleKey,
-        module: ModuleHandle<Arch, Tls>,
+        module: ModuleHandle<Arch>,
         direct_deps: Box<[ModuleSlot]>,
-        retained: ModuleScope<Arch, Tls>,
+        retained: ModuleScope<Arch>,
         roots: usize,
         meta: Meta,
     ) -> Self {
@@ -691,10 +676,9 @@ where
     }
 }
 
-impl<Meta, Arch, Tls> Drop for CommittedStorage<Meta, Arch, Tls>
+impl<Meta, Arch> Drop for CommittedStorage<Meta, Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     fn drop(&mut self) {
         // ModuleHandle performs the release. Taking entries here only preserves

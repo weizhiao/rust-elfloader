@@ -24,7 +24,7 @@ pub struct RelocationEvent<
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     rel: &'a ElfRelType<Arch>,
-    resolver: &'a SymbolResolver<'a, Arch, Tls>,
+    resolver: &'a SymbolResolver<'a, Arch>,
     bindings: &'a mut BindingDeps,
     symbols: SymbolTableView<'a, Arch::Layout, H>,
 }
@@ -37,7 +37,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R, Tls>,
         rel: &'a ElfRelType<Arch>,
-        resolver: &'a SymbolResolver<'a, Arch, Tls>,
+        resolver: &'a SymbolResolver<'a, Arch>,
         bindings: &'a mut BindingDeps,
         symbols: SymbolTableView<'a, Arch::Layout, H>,
     ) -> Self {
@@ -67,7 +67,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     /// [`bind_symdef`](Self::bind_symdef) also searches the linker-global scope
     /// active for this relocation.
     #[inline]
-    pub fn scope(&self) -> &LocalScope<Arch, Tls> {
+    pub fn scope(&self) -> &LocalScope<Arch> {
         self.resolver.scope()
     }
 
@@ -92,7 +92,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
 
     /// Finds a symbol definition and records its provider as a runtime dependency.
     #[inline]
-    pub fn bind_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch, Tls>> {
+    pub fn bind_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch>> {
         let definition = self.resolver.find(&self.symbol(r_sym));
         if let Some(definition) = &definition {
             self.bindings.record(definition.effect());

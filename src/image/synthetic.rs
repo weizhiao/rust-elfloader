@@ -7,9 +7,9 @@ use crate::{
     input::ModuleSourceId,
     memory::{ImageMemory, VmAddr, VmOffset},
     relocation::RelocationArch,
-    runtime::DomainId,
+    runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     sync::{Arc, arc_unsize},
-    tls::{ModuleTls, TlsResolver},
+    tls::TlsModule,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::ptr::NonNull;
@@ -274,7 +274,8 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = (), R = ()> {
     state: ModuleState,
     name: String,
     memory: Arc<dyn ImageMemory>,
-    tls: Option<ModuleTls>,
+    tls: Option<TlsModule>,
+    executor: Arc<dyn CodeExecutor<Arch>>,
     resolve_hook: R,
     user_data: D,
     names: Vec<Arc<[u8]>>,
@@ -319,7 +320,8 @@ impl<Arch: RelocationArch, D: Clone, R: Clone> Clone for SyntheticModule<Arch, D
             state: ModuleState::new(ModuleSourceId::fresh(), self.state.domain_id()),
             name: self.name.clone(),
             memory: self.memory.clone(),
-            tls: self.tls,
+            tls: self.tls.clone(),
+            executor: self.executor.clone(),
             resolve_hook: self.resolve_hook.clone(),
             user_data: self.user_data.clone(),
             names: self.names.clone(),
@@ -330,27 +332,28 @@ impl<Arch: RelocationArch, D: Clone, R: Clone> Clone for SyntheticModule<Arch, D
 }
 
 impl<Arch: RelocationArch> SyntheticModule<Arch> {
-    /// Creates a module from an ordered list of synthetic symbols.
-    pub fn new<I>(name: impl Into<String>, symbols: I) -> Self
+    /// Creates a module from an ordered list of synthetic symbols in `domain`.
+    pub fn new<I>(name: impl Into<String>, domain: DomainId, symbols: I) -> Self
     where
         I: IntoIterator<Item = SyntheticSymbol>,
     {
-        let mut module = Self::empty(name);
+        let mut module = Self::empty(name, domain);
         for symbol in symbols {
             let _ = module.insert(symbol);
         }
         module
     }
 
-    /// Creates an empty synthetic module.
-    pub fn empty(name: impl Into<String>) -> Self {
+    /// Creates an empty synthetic module bound to an immutable runtime domain.
+    pub fn empty(name: impl Into<String>, domain: DomainId) -> Self {
         Self {
-            state: ModuleState::new(ModuleSourceId::fresh(), DomainId::PROCESS),
+            state: ModuleState::new(ModuleSourceId::fresh(), domain),
             name: name.into(),
             memory: arc_unsize!(
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
             ),
             tls: None,
+            executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             resolve_hook: (),
             user_data: (),
             names: Vec::new(),
@@ -369,6 +372,7 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
             name: self.name,
             memory: self.memory,
             tls: self.tls,
+            executor: self.executor,
             resolve_hook: self.resolve_hook,
             user_data,
             names: self.names,
@@ -402,10 +406,21 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
         self
     }
 
-    /// Sets TLS metadata exposed by this synthetic module.
+    /// Attaches non-owning TLS metadata for relocation and current-thread lookup.
+    /// The registration and runtime must outlive every use of this module and its
+    /// exported TLS symbols. Keep their owner in user data or manage it externally;
+    /// dropping this metadata does not unregister the module. Returns an error
+    /// if the registration belongs to a different TLS runtime than this domain.
     #[inline]
-    pub fn with_tls(mut self, tls: ModuleTls) -> Self {
+    pub fn with_tls(mut self, tls: TlsModule) -> Result<Self> {
+        tls.check_domain(self.state.domain_id())?;
         self.tls = Some(tls);
+        Ok(self)
+    }
+
+    /// Selects the executor used for TLS address lookup in this module's runtime.
+    pub fn with_executor<E: CodeExecutor<Arch>>(mut self, executor: E) -> Self {
+        self.executor = arc_unsize!(Arc::new(executor) => dyn CodeExecutor<Arch>);
         self
     }
 
@@ -423,19 +438,13 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
             name: self.name,
             memory: self.memory,
             tls: self.tls,
+            executor: self.executor,
             resolve_hook: hook,
             user_data: self.user_data,
             names: self.names,
             symbols: self.symbols,
             index: self.index,
         }
-    }
-
-    /// Binds this synthetic module to one runtime domain.
-    #[inline]
-    pub fn with_domain(mut self, domain: DomainId) -> Self {
-        self.state.set_domain(domain);
-        self
     }
 
     /// Inserts one symbol, returning the definition it replaced.
@@ -540,12 +549,11 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
     }
 }
 
-impl<Arch, D, R, Tls> From<SyntheticModule<Arch, D, R>> for ModuleHandle<Arch, Tls>
+impl<Arch, D, R> From<SyntheticModule<Arch, D, R>> for ModuleHandle<Arch>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
     R: ResolveHook<Arch> + 'static,
-    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn from(module: SyntheticModule<Arch, D, R>) -> Self {
@@ -553,12 +561,11 @@ where
     }
 }
 
-impl<Arch, D, R, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D, R>
+impl<Arch, D, R> Module<Arch> for SyntheticModule<Arch, D, R>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
     R: ResolveHook<Arch> + 'static,
-    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &[u8] {
@@ -578,9 +585,15 @@ where
     fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
         match symbol.symbol_type() {
             ElfSymbolType::TLS => {
-                return Err(custom_error(
-                    "synthetic module cannot resolve TLS symbol addresses",
-                ));
+                return self
+                    .tls
+                    .as_ref()
+                    .ok_or(crate::TlsError::TemplateUnavailable)?
+                    .resolve(
+                        self.executor.as_ref(),
+                        CodeContext::new(self.name.as_bytes(), self.memory.as_ref()),
+                        symbol.st_value(),
+                    );
             }
             ElfSymbolType::GNU_IFUNC => {
                 return Err(custom_error(
@@ -600,8 +613,8 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
-        self.tls
+    fn tls(&self) -> Option<&TlsModule> {
+        self.tls.as_ref()
     }
 
     #[inline]
@@ -649,12 +662,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{AddressSpaceId, Domain};
+    use crate::tls::TlsResolver;
     use crate::{
         elf::ElfSymbolVisibility,
         image::ModuleScope,
         memory::{MappedRegion, VmOffset},
         segment::ElfSegments,
-        tls::{TlsModuleId, TlsTpOffset},
+        tls::TlsTpOffset,
     };
     use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -662,18 +677,21 @@ mod tests {
     fn synthetic_module_resolves_absolute_symbols_from_scope() {
         let module = SyntheticModule::<NativeArch>::new(
             "__bridge",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function(
                 "host_double",
                 0x1234usize as *const (),
             )],
         );
         assert_eq!(
-            <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::memory(&module).base(),
+            <SyntheticModule<NativeArch> as Module<NativeArch>>::memory(&module).base(),
             VmAddr::null()
         );
 
-        let mut scope = ModuleScope::<NativeArch>::new(DomainId::PROCESS);
-        scope.extend([module]);
+        let mut scope = ModuleScope::<NativeArch>::new(
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
+        scope.extend([module]).unwrap();
         let mut lookup = SymbolLookup::new("host_double");
 
         let module = scope
@@ -703,6 +721,7 @@ mod tests {
         let hook_observed = Arc::clone(&observed);
         let module = SyntheticModule::<NativeArch>::new(
             "__hook",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("entry", 0x1234usize as *const ())],
         )
         .with_resolve_hook(move |symbol: &ElfSymbol<_>, address| {
@@ -713,17 +732,18 @@ mod tests {
         let mut lookup = SymbolLookup::new("entry");
         let symbol = module.lookup(&mut lookup).unwrap();
 
-        let address = Module::<NativeArch, ()>::resolve_symbol(&module, symbol).unwrap();
+        let address = Module::<NativeArch>::resolve_symbol(&module, symbol).unwrap();
         assert_eq!(address, VmAddr::new(0x1234));
         assert_eq!(observed.load(Ordering::Relaxed), 0x1234);
 
         let failing = SyntheticModule::<NativeArch>::new(
             "__failing_hook",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("entry", 0x1234usize as *const ())],
         )
         .with_resolve_hook(|_: &ElfSymbol<_>, _| Err(crate::custom_error("hook failed")));
         let symbol = failing.lookup(&mut lookup).unwrap();
-        assert!(Module::<NativeArch, ()>::resolve_symbol(&failing, symbol).is_err());
+        assert!(Module::<NativeArch>::resolve_symbol(&failing, symbol).is_err());
     }
 
     #[cfg(feature = "version")]
@@ -731,6 +751,7 @@ mod tests {
     fn synthetic_module_uses_one_default_symbol() {
         let mut module = SyntheticModule::<NativeArch>::new(
             "__versions",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::function("entry", 0x1000usize as *const ())],
         );
         assert!(
@@ -795,6 +816,7 @@ mod tests {
     fn synthetic_symbol_can_use_non_absolute_section() {
         let module = SyntheticModule::<NativeArch>::new(
             "__tls",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
             [SyntheticSymbol::from_fields(
                 "tls_slot",
                 0x20,
@@ -806,8 +828,10 @@ mod tests {
                 None,
             )],
         );
-        let mut scope = ModuleScope::<NativeArch>::new(DomainId::PROCESS);
-        scope.extend([module]);
+        let mut scope = ModuleScope::<NativeArch>::new(
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        );
+        scope.extend([module]).unwrap();
         let mut lookup = SymbolLookup::new("tls_slot");
 
         let module = scope
@@ -835,17 +859,30 @@ mod tests {
             tag: usize,
         }
 
-        let tls = ModuleTls::Static {
-            mod_id: TlsModuleId::new(7),
-            tp_offset: TlsTpOffset::new(-0x80),
-        };
-        let mut module = SyntheticModule::<NativeArch>::empty("__tls")
-            .with_tls(tls)
-            .with_user_data(SyntheticData { tag: 7 });
+        let tls = crate::tls::DefaultTlsResolver::new()
+            .register(
+                crate::tls::TlsInfo::default(),
+                crate::tls::TlsRequest::Static(Some(TlsTpOffset::new(-0x80))),
+            )
+            .unwrap();
+        let binding = tls.binding();
+        let mut module = SyntheticModule::<NativeArch>::empty(
+            "__tls",
+            Domain::new(
+                AddressSpaceId::PROCESS,
+                crate::tls::DefaultTlsResolver::new(),
+            )
+            .unwrap()
+            .id(),
+        )
+        .with_tls(tls)
+        .unwrap()
+        .with_user_data(SyntheticData { tag: 7 });
 
         assert_eq!(
-            <SyntheticModule<NativeArch, SyntheticData> as Module<NativeArch, ()>>::tls(&module),
-            Some(tls)
+            <SyntheticModule<NativeArch, SyntheticData> as Module<NativeArch>>::tls(&module)
+                .map(TlsModule::binding),
+            Some(binding)
         );
         assert_eq!(module.user_data().tag, 7);
         module.user_data_mut().tag = 11;
@@ -860,8 +897,12 @@ mod tests {
         };
         let base = VmAddr::from_ptr(bytes.as_ptr());
         let memory = ElfSegments::new(region, base, VmOffset::new(0));
-        let module = SyntheticModule::<NativeArch>::empty("__data").with_memory(memory);
-        let memory = <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::memory(&module);
+        let module = SyntheticModule::<NativeArch>::empty(
+            "__data",
+            Domain::<NativeArch>::without_tls(AddressSpaceId::PROCESS).id(),
+        )
+        .with_memory(memory);
+        let memory = <SyntheticModule<NativeArch> as Module<NativeArch>>::memory(&module);
         let mut out = [0u8; 2];
 
         memory
