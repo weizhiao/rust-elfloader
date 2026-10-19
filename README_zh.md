@@ -134,7 +134,7 @@ fn main() -> Result<()> {
 
 | Feature | 默认 | 作用 |
 | --- | --- | --- |
-| `libc` | 是 | 在 Linux 和 Android 上使用 libc 后端 |
+| `libc` | 是 | 在 Linux/Android 上使用 libc 后端；在 Linux/glibc 上提供 `host::open` |
 | `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
 | `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `LoaderRun::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
@@ -146,6 +146,7 @@ fn main() -> Result<()> {
 说明：
 
 - TLS 无需 feature 开关，可使用 `DefaultTlsResolver` 或自定义 resolver。
+- `host::open` 将宿主库导出显式导入使用 `DefaultTlsResolver` 的进程域。模块持有原生库句柄，不会自动导入任何库。通过程序头读取动态符号和版本元数据，不要求保留节头表；暂不导入静态 TLS 偏移。
 - `lazy-binding` 仅控制内置实现，自定义 `LazyBinder` 无需开启该 feature。
 
 ## 平台支持

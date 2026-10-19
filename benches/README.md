@@ -39,8 +39,9 @@ Root lookup, host setup, context creation, and cache parsing happen outside timi
 Relink's dependency cache lookup and file loading happen inside it.
 
 Both implementations keep a fixed set of host runtimes loaded, defined by
-`HOST_RUNTIMES` in `support/libraries.rs`. Relink bridges their supported
-exports, including TLS, symbol versions and resolved IFUNCs. Host TLS is resolved
+`HOST_RUNTIMES` in `support/libraries.rs`. Relink uses the public
+`host::open` adapter to import their supported exports, including TLS,
+symbol versions and resolved IFUNCs. Host TLS is resolved
 by glibc through the default TLS runtime; loaded libraries can also define their
 own dynamic TLS. The bridge does not supply static host TP offsets, so host
 `TPOFF` imports are unsupported. Other dependencies load

@@ -18,19 +18,22 @@ use core::mem::size_of;
 /// metadata about the hash table structure and layout.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ElfGnuHeader {
+pub(crate) struct ElfGnuHeader {
     /// Number of bucket entries in the hash table
-    nbucket: u32,
+    pub(crate) nbucket: u32,
 
     /// Symbol bias - index of the first symbol in the hash table
-    symbias: u32,
+    pub(crate) symbias: u32,
 
     /// Number of bloom filter entries
-    nbloom: u32,
+    pub(crate) nbloom: u32,
 
     /// Shift count used in bloom filter operations
-    nshift: u32,
+    pub(crate) nshift: u32,
 }
+
+// SAFETY: four native-endian u32 fields without padding.
+unsafe impl crate::ByteRepr for ElfGnuHeader {}
 
 impl ElfGnuHeader {
     #[inline]

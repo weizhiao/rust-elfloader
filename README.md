@@ -123,7 +123,7 @@ host-runtime bridge, system-cache snapshot, validation and CI artifacts.
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `libc` | Yes | Use the libc backend on Linux and Android |
+| `libc` | Yes | Use the libc backend on Linux/Android; enable `host::open` on Linux/glibc |
 | `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
 | `object` | Yes | Enable relocatable object (`ET_REL`) loading and `LoaderRun::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
@@ -135,6 +135,7 @@ host-runtime bridge, system-cache snapshot, validation and CI artifacts.
 Notes:
 
 - TLS requires no feature flag; use `DefaultTlsResolver` or a custom resolver.
+- `host::open` explicitly imports native library exports into a process domain using `DefaultTlsResolver`. The module retains the native handle; no libraries are imported automatically. It reads dynamic symbol/version metadata through program headers, without requiring section headers, and does not import static TLS offsets.
 - `lazy-binding` only enables the built-in implementation; custom `LazyBinder` implementations do not require this feature.
 
 ## Platform Support

@@ -19,7 +19,7 @@ mod raw;
 mod rel;
 mod shdr;
 mod symbol;
-#[cfg(feature = "version")]
+#[cfg_attr(not(feature = "version"), allow(dead_code))]
 pub(crate) mod version;
 pub mod write;
 
@@ -38,6 +38,8 @@ pub(crate) use symbol::SymbolInfo;
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::{ElfClass, ElfFileType, ElfHeader, ElfMachine, ElfTarget};
+#[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+pub(crate) use hash::ElfGnuHeader;
 pub use hash::HashTable;
 pub use layout::{Elf32Layout, Elf64Layout, ElfDataEncoding, ElfLayout, NativeElfLayout};
 pub use lifecycle::Lifecycle;

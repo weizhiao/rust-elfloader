@@ -1158,6 +1158,10 @@ pub struct DomainMismatchError {
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
 pub enum Error {
+    /// An error occurred while importing a native host library.
+    #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+    Host(Box<crate::host::HostError>),
+
     /// Modules from incompatible runtime domains were combined.
     DomainMismatch(Box<DomainMismatchError>),
 
@@ -1313,6 +1317,8 @@ impl Display for Error {
                 "runtime domain {} cannot be linked into runtime domain {}",
                 err.actual, err.expected
             ),
+            #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+            Self::Host(err) => write!(f, "Host library error: {err}"),
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Mmap(err) => write!(f, "Memory mapping error: {err}"),
             Self::Relocation(err) => write!(f, "Relocation error: {err}"),
@@ -1334,6 +1340,8 @@ impl core::error::Error for Error {
     #[inline]
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
+            #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+            Self::Host(error) => Some(error.as_ref()),
             Self::Custom(error) => core::error::Error::source(error),
             _ => None,
         }

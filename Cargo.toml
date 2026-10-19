@@ -148,7 +148,7 @@ path = "examples/support/build_fixtures.rs"
 default = ["full"]
 std = []
 
-# A feature that enables the libc backend for Linux and Android.
+# Enables the libc backend and, on Linux/glibc, native host-library imports.
 libc = ["dep:libc"]
 # A feature that enables all features.
 full = ["lazy-binding", "object", "libc"]

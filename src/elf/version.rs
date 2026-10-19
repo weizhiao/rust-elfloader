@@ -1,6 +1,8 @@
+#[cfg(feature = "version")]
+use crate::elf::{ElfLayout, SymbolTableView};
 use crate::{
     ByteRepr, ParseDynamicError, Result,
-    elf::{ElfDynamicTag, ElfLayout, ElfStringTable, SymbolTableView, hash::sysv_hash},
+    elf::{ElfDynamicTag, ElfStringTable, hash::sysv_hash},
     memory::{ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
@@ -13,28 +15,28 @@ const VER_FLG_BASE: u16 = 0x1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct VerDef {
-    vd_version: u16,
-    vd_flags: u16,
-    vd_ndx: u16,
-    vd_cnt: u16,
-    vd_hash: u32,
-    vd_aux: u32,
-    vd_next: u32,
+pub(crate) struct VerDef {
+    pub(crate) vd_version: u16,
+    pub(crate) vd_flags: u16,
+    pub(crate) vd_ndx: u16,
+    pub(crate) vd_cnt: u16,
+    pub(crate) vd_hash: u32,
+    pub(crate) vd_aux: u32,
+    pub(crate) vd_next: u32,
 }
 
 impl VerDef {
     #[inline]
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         (self.vd_ndx & abi::VER_NDX_VERSION) as usize
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct VerDefAux {
-    vda_name: u32,
-    vda_next: u32,
+pub(crate) struct VerDefAux {
+    pub(crate) vda_name: u32,
+    pub(crate) vda_next: u32,
 }
 
 #[repr(C)]
@@ -325,6 +327,7 @@ impl<'a> SymbolVersion<'a> {
     }
 }
 
+#[cfg(feature = "version")]
 impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
     pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'symtab>> {
         let gnu_version = self.version?;
@@ -362,7 +365,7 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "version"))]
 mod tests {
     use super::*;
     use crate::{
