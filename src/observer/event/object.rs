@@ -114,15 +114,10 @@ where
     }
 }
 
-/// Relocated-object event emitted after relocation and before memory protection
-/// and initialization.
+/// An object after relocation, before memory protection and initialization.
 ///
-/// The event exposes relocated section headers, object memory, and the object
-/// symbol table.
-/// Observers may install any [`SymbolExports`] implementation, including a
-/// backend derived from custom metadata such as kernel export tables. If no
-/// exports are installed, the object loader builds the default exports after
-/// observers return.
+/// Exposes section headers, memory, and symbols. Observers can install custom
+/// [`SymbolExports`]; otherwise the loader builds the default exports.
 pub struct ObjectRelocatedEvent<
     'event,
     D: Send + Sync + 'static,

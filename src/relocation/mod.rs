@@ -1,16 +1,8 @@
-//! Relocation configuration, symbol scopes, and binding policy.
+//! Relocation, symbol lookup, and binding policy.
 //!
-//! Raw images returned by [`crate::Loader`] become executable through the relocation
-//! pipeline. In practice, most users configure that pipeline with [`Relocator`],
-//! pass the raw image to [`Relocator::run`], then call `relocate()`.
-//!
-//! This module exposes the main customization points used during relocation:
-//!
-//! - [`crate::image::SyntheticModule`] for providing external symbol addresses
-//! - [`crate::observer::RelocationObserver`] for relocation, lifecycle, and
-//!   runtime binding hooks
-//! - [`RelocationEvent`] for inspecting the current relocation and search scope
-//! - binding policy and lazy-fixup support configured through `Relocator`
+//! Pass a raw image to [`Relocator::run`], configure its scopes, then call `relocate()`.
+//! Supply host symbols through [`crate::image::SyntheticModule`] and customize
+//! relocation through [`crate::observer::RelocationObserver`].
 
 mod defs;
 mod dynamic;

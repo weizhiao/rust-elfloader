@@ -10,15 +10,11 @@ use core::{
     hash::{Hash, Hasher},
 };
 
-/// A validated, NUL-terminated symbol name with shared ownership.
+/// A shared, NUL-terminated symbol name; UTF-8 is not required.
 ///
-/// Cloning retains the same string allocation. Byte views and lookups exclude
-/// the terminating NUL; C views include it. Names need not be UTF-8.
-///
-/// C strings convert infallibly with `From`. Plain strings and byte buffers
-/// use `TryFrom`, which rejects interior NUL bytes and appends the terminator.
-/// Pass bytes without an existing terminator to `TryFrom`; use `CStr` for
-/// an already terminated name.
+/// Use `From` for C strings or `TryFrom` for unterminated strings and bytes.
+/// `TryFrom` rejects interior NULs and adds the terminator. Byte views exclude
+/// the terminator; C-string views include it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SymbolName(Arc<CStr>);
 

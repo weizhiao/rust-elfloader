@@ -95,11 +95,8 @@ fn with_current_dtv<R>(create: bool, f: impl FnOnce(&mut ThreadDtv) -> R) -> Opt
 // Public APIs
 // -----------------------------------------------------------------------------
 
-/// A same-process TLS resolver implementation.
-///
-/// This resolver manages TLS modules and per-thread TLS data using the global
-/// registry and per-thread DTVs, and exposes native host runtime entry points to
-/// loaded code when the target architecture is executable in the current process.
+/// TLS resolver for code running in the current process.
+/// Clones share the global registry; each thread has its own TLS blocks.
 #[derive(Clone, Copy, Debug)]
 pub struct DefaultTlsResolver;
 

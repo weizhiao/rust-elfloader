@@ -3,39 +3,11 @@ use crate::memory::{MappedRegion, RegionAccess, VmAddr};
 use crate::{Result, input::FileBacking};
 use alloc::sync::Arc;
 
-/// A trait for low-level memory mapping operations.
+/// Creates and manages memory mappings for loaded images.
 ///
-/// Loading first creates an owning address space with [`Mmap::create_space`].
-/// Later calls fill parts of that space with file-backed pages, writable copy
-/// targets, or anonymous zero pages. Only the space owns the final lifetime;
-/// per-segment mapping methods do not return temporary regions.
-///
-/// # Safety
-/// Mapping and memory-control methods are unsafe because they manipulate the
-/// process's virtual address space. Capability queries do not modify memory.
-/// Improper use can cause memory corruption, crashes, or security vulnerabilities.
-/// Implementors must ensure thread-safety and proper error handling.
-///
-/// # Example
-/// ```rust,ignore
-/// struct MyMmap {
-///     // Put loader/task/address-space context here.
-/// }
-///
-/// impl Mmap for MyMmap {
-///     unsafe fn create_space(
-///         &self,
-///         addr: Option<VmAddr>,
-///         len: usize,
-///         prot: ProtFlags,
-///         populate_later: bool,
-///     ) -> Result<MappedRegion> {
-///         todo!()
-///     }
-///
-///     // Implement other required methods...
-/// }
-/// ```
+/// [`Self::create_space`] returns the owner of a mapping. File and zero-page
+/// operations fill subranges without taking ownership. Implementations must
+/// support concurrent calls and report mapping failures.
 pub trait Mmap: Send + Sync + 'static {
     /// Region type created by this mapping backend.
     type Region: RegionAccess;
@@ -50,41 +22,26 @@ pub trait Mmap: Send + Sync + 'static {
         PageSize::Base
     }
 
-    /// Selects a file range for direct mapping before creating the image space.
+    /// Selects direct mapping (`Some`) or reading and copying (`None`, the default).
     ///
-    /// Returns `Some(backing)` when this backend accepts the range, `None` to
-    /// use reading and copying, or an error when the description is invalid.
-    /// An accepted range must describe the same bytes as the supplied range.
-    /// This query does not map memory or transfer ownership of the file handle.
-    /// Acceptance does not guarantee that later mapping operations will succeed;
-    /// their errors are propagated without falling back to copying.
-    /// Backends use copying by default.
+    /// An accepted range must contain the same bytes as the input. This query does
+    /// not map memory or take ownership of the file handle. Invalid descriptions
+    /// return errors; later mapping failures do not fall back to copying.
     #[inline]
     fn file_backing(&self, _backing: FileBacking) -> Result<Option<FileBacking>> {
         Ok(None)
     }
 
-    /// Creates the owning virtual address space for a loaded image or arena.
+    /// Creates an owned address range of `len` bytes, preferring `addr` if supplied.
     ///
-    /// With `populate_later = false`, the entire returned range must be
-    /// initialized to zero with the requested initial protection. This includes
-    /// backends using an allocator or caller-owned storage. Callers populating
-    /// the space through writes must request writable protection.
-    ///
-    /// With `populate_later = true`, the backend may only reserve address space;
-    /// callers must populate it through file or zero mappings before access.
-    /// No initial contents are required in that case.
-    ///
-    /// # Arguments
-    /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
-    /// * `len` - Size of the space in bytes.
-    /// * `prot` - Initial protection for committed spaces.
-    /// * `populate_later` - Whether file/zero pages will later replace subranges.
+    /// If `populate_later` is false, zero the entire range and apply `prot`, including
+    /// for allocator-backed or caller-owned storage. Callers writing into it must
+    /// request writable protection. Otherwise, reservation alone is sufficient;
+    /// populate file or zero pages before accessing them.
     ///
     /// # Safety
-    /// Manipulates address space. `addr` must be page-aligned if specified.
-    /// For backends using caller-owned storage, the selected range must be
-    /// valid and exclusively available for initialization and loading.
+    /// `addr` must be page-aligned. Caller-owned storage must remain valid and be
+    /// exclusively available for initialization and loading.
     unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
@@ -93,32 +50,20 @@ pub trait Mmap: Send + Sync + 'static {
         populate_later: bool,
     ) -> Result<MappedRegion<Self::Region>>;
 
-    /// Creates a non-owning region view for an address range that is already mapped.
-    ///
-    /// This is used for startup images that were mapped before the loader took
-    /// control. The returned region must not unmap the range on drop, but it
-    /// should still support operations such as [`RegionAccess::mprotect`] when
-    /// the backend can apply them.
-    /// Creating an alias must preserve the existing contents.
+    /// Borrows an existing mapping without changing its contents or unmapping it on drop.
+    /// The view should support protection changes when the backend allows them.
     ///
     /// # Safety
-    /// `addr..addr + len` must describe a valid mapped range for the returned
-    /// region's lifetime.
+    /// `addr..addr + len` must remain mapped for the returned region's lifetime.
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>>;
 
-    /// Maps file-backed pages into an already-created space.
-    ///
-    /// Success means the requested file contents are mapped. Unsupported
-    /// backends must return an error rather than silently succeeding.
-    ///
-    /// The mapped range is owned by the surrounding space created with
-    /// [`Mmap::create_space`]. The backend must prepare the target subrange,
-    /// including splitting address reservations when the platform requires it.
+    /// Maps file contents into a subrange owned by [`Self::create_space`].
+    /// The backend must prepare the subrange, splitting reservations if needed.
+    /// Unsupported operations must return an error.
     ///
     /// # Safety
-    /// `addr..addr + len` must be inside a region previously created by this
-    /// mapper. `fd` and `offset` must describe a valid readable file range for
-    /// the requested mapping.
+    /// `addr..addr + len` must be within a region created by this mapper.
+    /// `fd` and `offset` must identify a valid readable file range of `len` bytes.
     unsafe fn map_file_at(
         &self,
         addr: VmAddr,
@@ -146,60 +91,28 @@ pub trait Mmap: Send + Sync + 'static {
         flags: MapFlags,
     ) -> Result<()>;
 
-    /// Unmaps a memory region, releasing the associated resources.
-    ///
-    /// Removes a memory space created by [`Mmap::create_space`].
-    /// After unmapping, accessing the memory region will cause a segmentation fault.
-    ///
-    /// # Arguments
-    /// * `addr` - Pointer to the start of the region to unmap (must be page-aligned).
-    /// * `len` - Size of the region in bytes.
+    /// Releases a mapping created by [`Self::create_space`].
     ///
     /// # Safety
-    /// Ensure `addr` and `len` match the original mapping. Do not access the region after unmapping.
+    /// `addr` must be page-aligned, and `addr` and `len` must match the original
+    /// mapping. No code may access the region after it is unmapped.
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()>;
 
-    /// Give advice about the use of memory.
-    ///
-    /// The activity performed is highly dependent on the "advice" being applied.
-    /// See the madvise(2) man page (<https://man7.org/linux/man-pages/man2/madvise.2.html>)
-    /// for more details.
-    ///
-    /// # Arguments
-    /// * `addr` - Pointer to the start of a memory region to operate on (must be page-aligned).
-    /// * `len` - Size of span of memory we're influencing (doesn't have to be the full segment).
-    /// * `behavior` - The specific "advice" being applied.
-    ///
-    /// # Returns
-    /// `Ok(())` on success, or an error if the operation fails.
-    ///
-    /// Older kernel versions may not support newer behavior/advice values.
-    /// Unknown behavior values will return EINVAL.
+    /// Applies memory-usage advice to a mapped range.
+    /// Unsupported advice may return an error.
     ///
     /// # Safety
-    /// Highly dependent on the advice being applied. Some advice values do
-    /// nothing except for updating bookkeeping inside the kernel. Others (like
-    /// MADV_REMOVE) effectively free the memory. Caller is responsible for
-    /// taking appropriate action given the advice applied.
+    /// `addr` must be page-aligned. The caller must account for the effects of
+    /// `behavior`, including advice that discards or frees memory contents.
     unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()>;
 
-    /// Changes the protection of a memory region.
-    ///
-    /// Modifies the access permissions (read, write, execute) for an existing memory mapping.
-    /// Commonly used for RELRO (RELocation Read-Only) protection in ELF loading, where
-    /// sections are made read-only after relocations are applied.
-    ///
-    /// # Arguments
-    /// * `addr` - Pointer to the start of the region (must be page-aligned).
-    /// * `len` - Size of the region in bytes (rounded up to page boundary).
-    /// * `prot` - New protection flags to apply.
-    ///
-    /// # Returns
-    /// `Ok(())` on success, or an error if the operation fails.
+    /// Changes access permissions for `len` bytes, rounded up to a page boundary.
+    /// Used, for example, to make RELRO memory read-only after relocation.
     ///
     /// # Safety
-    /// Changing permissions can affect running code. Ensure no code is executing in the region
-    /// when removing execute permissions. `addr` must be page-aligned.
+    /// `addr` must be page-aligned and identify a valid mapping. Ensure all users
+    /// of the range permit the change; no code may execute there when execute
+    /// permission is removed.
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()>;
 }
 

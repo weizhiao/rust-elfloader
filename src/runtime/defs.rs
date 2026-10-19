@@ -91,13 +91,10 @@ impl fmt::Display for DomainId {
     }
 }
 
-/// A fixed runtime domain shared by loader runs, link contexts, and loaded images.
-/// Module scopes retain only its [`DomainId`] for compatibility checks.
+/// An address space, executor, and optional TLS resolver used to load and run code.
 ///
-/// The resolver, executor and compatibility identity are established together and
-/// cannot be replaced independently. Independently constructed domains with the same address
-/// space and TLS entry are compatible, as required by [`TlsResolver`]'s namespace
-/// contract. Clone this value to reuse its runtime without querying the entry again.
+/// Clone a domain to reuse its configuration. Domains with the same address space
+/// and TLS entry have equal [`DomainId`] values and can share modules.
 pub struct Domain<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     id: DomainId,
     tls: Tls,
@@ -134,12 +131,10 @@ impl<Arch: RelocationArch> Domain<Arch, ()> {
         }
     }
 
-    /// Enables TLS in this domain, consuming the TLS-disabled configuration.
+    /// Enables TLS, returning a domain with the resolver's runtime identity.
     ///
-    /// The resolver must target this domain's address space and agree with its
-    /// executor on the meaning of module addresses. Entry lookup failures are
-    /// propagated, never interpreted as disabling TLS. Existing domain clones
-    /// keep their original identity and configuration.
+    /// The resolver must target this address space and agree with the executor.
+    /// Entry lookup errors are returned; existing domain clones remain unchanged.
     pub fn with_tls<Tls: TlsResolver<Arch>>(self, tls: Tls) -> Result<Domain<Arch, Tls>> {
         let entry = tls.bind_tls_get_addr()?;
         Ok(Domain {

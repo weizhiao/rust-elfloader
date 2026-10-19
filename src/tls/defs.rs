@@ -55,10 +55,8 @@ impl TlsInfo {
     }
 }
 
-/// Immutable initialization bytes copied after TLS relocations have completed.
-///
-/// The snapshot contains only `filesz` bytes. Sharing it never retains the ELF
-/// image, executes its finalizers, or requires a loader callback.
+/// Shared TLS initialization bytes copied after relocation.
+/// Contains only `filesz` bytes and does not retain the ELF image.
 #[derive(Clone, Debug)]
 pub struct TlsTemplate(Arc<[u8]>);
 

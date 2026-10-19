@@ -1,15 +1,9 @@
 use super::BindingMode;
 
-/// Reusable configuration for relocating one raw image at a time.
+/// Reusable relocation settings, including lazy binding and initialization policy.
 ///
-/// A `Relocator` stores the stable relocation policy, including the lazy PLT
-/// binder and image initialization mode. Attach a raw image with [`Relocator::run`] to create a
-/// [`RelocatorRun`](crate::RelocatorRun); the run then owns per-image state such
-/// as the raw object, observer, and symbol scope.
-///
-/// Use `Relocator` directly when the caller already knows which modules should
-/// be visible. Use [`Linker`](crate::Linker) when dependencies should be
-/// discovered from `DT_NEEDED` entries before relocation.
+/// Pass a raw image to [`Self::run`], then configure its symbol scopes and observers.
+/// Use [`crate::Linker`] when `DT_NEEDED` dependencies should be loaded automatically.
 ///
 /// # Example
 ///

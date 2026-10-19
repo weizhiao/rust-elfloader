@@ -94,13 +94,8 @@ where
     Arch: RelocationArch,
     M: Mmap,
 {
-    /// Reads the ELF header.
-    ///
-    /// The header target is required to equal `Arch::TARGET`. To
-    /// load an ELF whose target architecture differs from the host, switch
-    /// the loader's target architecture with
-    /// [`Loader::for_arch`](super::Loader::for_arch) before calling
-    /// `load_*`; the gate will then accept ELFs targeting `NewArch::TARGET`.
+    /// Reads and validates the ELF header against the loader's target architecture.
+    /// Use [`Loader::for_arch`] to select a different target.
     pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
         read_ehdr::<Arch>(object)
     }
@@ -172,11 +167,8 @@ where
     Arch: RelocationArch,
     M: Mmap,
 {
-    /// Loads an ELF input and chooses the appropriate raw image type automatically.
-    ///
-    /// This is the most flexible entry point when the caller does not already know
-    /// whether the input is a shared object, executable, or relocatable object.
-    /// `ET_DYN` inputs are classified by inspecting the program headers.
+    /// Loads an ELF image, detecting whether it is a shared object, executable, or object file.
+    /// `ET_DYN` images are classified using their program headers.
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
         D: Send + Sync + 'static,
@@ -223,23 +215,9 @@ where
         }
     }
 
-    /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
-    ///
-    /// The returned value is mapped but not yet relocated. Pass it to
-    /// [`crate::Relocator::run`] to resolve symbols and produce a
-    /// ready-to-use loaded image.
-    ///
-    /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
-    /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
-    ///
-    /// To load ELF files targeting a different CPU architecture than the host,
-    /// switch the loader's target architecture with
-    /// [`Loader::for_arch::<NewArch>()`](super::Loader::for_arch) before
-    /// calling this method. The `e_machine` gate then validates against
-    /// `NewArch::MACHINE`, and the returned [`RawDylib`] carries the chosen
-    /// `Arch`, so [`crate::Relocator::run`] uses the matching relocation
-    /// numbering and skips host-side runtime hooks (IFUNC, TLSDESC, lazy
-    /// binding, init arrays).
+    /// Maps a shared object (`ET_DYN`) from a path, bytes, or another [`IntoElfReader`] input.
+    /// Pass the raw image to [`crate::Relocator::run`] to relocate it.
+    /// Select non-native targets with [`Loader::for_arch`] before creating this run.
     ///
     /// # Examples
     /// ```no_run
@@ -264,13 +242,8 @@ where
         Ok(dylib)
     }
 
-    /// Loads any dynamic ELF image into memory and returns a raw dynamic image.
-    ///
-    /// Unlike [`LoaderRun::load_dylib`], this accepts both `ET_DYN` shared objects
-    /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
-    /// value is mapped but not yet relocated. Pass it to
-    /// [`crate::Relocator::run`] to resolve symbols and produce a
-    /// ready-to-use loaded image.
+    /// Maps an `ET_DYN` or `ET_EXEC` image containing a `PT_DYNAMIC` segment.
+    /// Pass the raw image to [`crate::Relocator::run`] to relocate it.
     pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
@@ -345,11 +318,8 @@ where
         Ok(image)
     }
 
-    /// Maps a previously scanned dynamic image without rereading its ELF header
-    /// or program headers.
-    ///
-    /// The scanned object's reader is reused for segment loading. User data is
-    /// initialized through the loader's dynamic initializer, like ordinary dynamic loads.
+    /// Maps a scanned dynamic image using its saved metadata and reader.
+    /// User data is initialized as for ordinary dynamic loads.
     pub fn load_scanned_dynamic(
         &mut self,
         scanned: ScannedDynamic<Arch>,
@@ -384,28 +354,16 @@ where
         Ok(image)
     }
 
-    /// Creates a raw dynamic image from an ELF object that is already mapped.
+    /// Wraps an already mapped dynamic image for relocation, such as a kernel-loaded executable.
+    ///
+    /// `load_bias` translates ELF virtual addresses to runtime addresses; it is
+    /// usually zero for fixed `ET_EXEC` images. `entry` is the runtime entry address
+    /// (such as `AT_ENTRY`).
     ///
     /// # Safety
-    ///
-    /// `load_bias` and `phdrs` must describe a live mapped image that remains
-    /// valid for the returned module's lifetime.
-    ///
-    /// This is intended for dynamic-linker startup, where the kernel has already
-    /// mapped the main executable before transferring control to the interpreter.
-    /// The returned object is not relocated yet and can be passed through the
-    /// normal relocation pipeline.
-    ///
-    /// `load_bias` is the ELF load bias used to translate `p_vaddr` values into
-    /// runtime addresses. For PIE/`ET_DYN` images this is the randomized base
-    /// address; for fixed `ET_EXEC` images it is typically zero. `entry` must be
-    /// the runtime entry address, such as `AT_ENTRY`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that every `PT_LOAD` range described by `phdrs`
-    /// is mapped at `load_bias + p_vaddr`, remains mapped for the returned
-    /// object's lifetime, and is writable wherever relocation will write.
+    /// `phdrs` must describe a valid image. Every `PT_LOAD` range must be mapped at
+    /// `load_bias + p_vaddr`, remain valid for the returned image's lifetime, and
+    /// be writable wherever relocation will write.
     pub unsafe fn load_mapped_dynamic(
         &mut self,
         path: impl Into<PathBuf>,

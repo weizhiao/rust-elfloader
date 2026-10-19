@@ -19,13 +19,9 @@ use crate::{
     tls::TlsResolver,
 };
 
-/// Architecture-specific dynamic relocation numbering.
-///
-/// This trait describes the relocation type numbers for one ELF target
-/// architecture without changing the in-memory relocation entry representation.
-/// Most users get the native implementation automatically through
-/// [`crate::Loader`]; cross-architecture callers select a target architecture
-/// with [`crate::Loader::for_arch`].
+/// Defines ELF relocation numbers for a target architecture.
+/// The loader selects the native architecture by default; use
+/// [`crate::Loader::for_arch`] for other targets.
 pub trait RelocationArch: 'static {
     /// Runtime tag for this target architecture.
     const KIND: ArchKind;
@@ -307,16 +303,8 @@ pub struct RelocateArgs<'a, Arch: RelocationArch, Obs: ?Sized, Binder: ?Sized> {
     pub(crate) observer: &'a mut Obs,
 }
 
-/// A trait for raw image types that can undergo relocation.
-///
-/// In normal use, callers do not invoke this trait directly. Instead, they load a raw
-/// image with [`crate::Loader`] and pass it to [`Relocator::run`].
-///
-/// The target architecture is selected by the implementor through the `Arch`
-/// associated type, so [`Relocator::relocate`] can dispatch automatically
-/// without callers having to specify a turbofish.
-///
-/// [`Relocator::relocate`]: crate::Relocator::relocate
+/// A raw image that supports relocation for its associated architecture.
+/// Normally used through [`Relocator::run`], rather than called directly.
 pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object.
     type Output;

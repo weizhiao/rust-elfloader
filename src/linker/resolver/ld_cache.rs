@@ -24,21 +24,14 @@ struct CacheEntry {
     path: PathBuf,
 }
 
-/// An immutable, shareable snapshot of a glibc `ld.so.cache` file.
+/// A shared snapshot of a glibc `ld.so.cache` file.
 ///
-/// Supports the legacy, version 1.1, and combined compatibility formats. Names
-/// and paths are byte strings. Cache entries for generic ELF/glibc libraries
-/// are indexed by SONAME, retaining the file's order among equal names.
+/// Supports legacy, version 1.1, and combined formats, preserving raw name/path
+/// bytes and preference order within each SONAME. Hardware-specific entries are
+/// excluded; this does not implement glibc's full search policy.
 ///
-/// This is a cache source, not a complete glibc search policy. Hardware-specific
-/// entries (legacy HWCAP and `glibc-hwcaps`) are excluded: ELF machine/class checks
-/// alone cannot establish that their instructions are safe for the host CPU.
-/// Generic entries remain available. Environment variables, default directories,
-/// `DF_1_NODEFLIB`, and glibc tunables are not interpreted here.
-///
-/// Parsing and file I/O happen only when constructing the snapshot; clones share
-/// its index. Replacing the file does not refresh an existing snapshot. Callers
-/// choose when to reload it and where to insert it in their resolver's search order.
+/// Clones share the parsed index. Rebuild the snapshot to see file changes.
+/// Validate candidate files before loading them.
 #[derive(Clone)]
 pub struct LdCache {
     entries: Arc<[CacheEntry]>,

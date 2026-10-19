@@ -129,12 +129,9 @@ impl fmt::Debug for CandidateRequest<'_> {
     }
 }
 
-/// Explicit inputs for [`SearchPathResolver::with_config`].
-///
-/// No environment variables, cache files, or host directory lists are read by
-/// this configuration. Its default has no environment path, cache or default
-/// directories. Supply the target system's inputs, including any distribution
-/// specific ABI directories, in their intended preference order.
+/// Search inputs for [`SearchPathResolver::with_config`].
+/// Defaults to empty. Supply environment paths, cache contents, and target
+/// library directories explicitly; no host settings are read automatically.
 #[derive(Clone, Debug, Default)]
 pub struct SearchConfig {
     library_path: Option<(PathBuf, PathBuf)>,
@@ -183,26 +180,14 @@ impl SearchConfig {
     }
 }
 
-/// Path-based dependency resolver for [`Linker`](crate::Linker).
+/// Finds dependencies using configured paths and [`LdCache`] snapshots.
 ///
-/// Opens ordinary files by default; [`Self::with_opener`] supports custom input
-/// sources while retaining search order and ELF architecture validation.
+/// Names containing directory separators are tried directly; other names use
+/// the configured search order. No environment paths, caches, or system directories
+/// are read automatically. [`Self::with_opener`] supports custom input sources.
 ///
-/// `SearchPathResolver` is an opt-in convenience resolver for callers whose
-/// linker keys can be viewed as loader paths and constructed from resolved
-/// paths. Root requests and dependencies with directory separators are tried
-/// directly. Plain-name searches walk the configured sources in insertion
-/// order.
-///
-/// This resolver intentionally does not model the host dynamic linker's global
-/// policy: it does not read `LD_LIBRARY_PATH`, system cache files, or default
-/// system library directories automatically. Callers can add an explicit
-/// [`LdCache`] snapshot or directory providers in their chosen search order.
-///
-/// Module-owned `DT_RPATH` and `DT_RUNPATH` entries have their dynamic string
-/// tokens expanded by the loader and are shared between modules. Absolute
-/// directories found not to exist are remembered and skipped by later lookups;
-/// relative directories and final lookup results are not cached.
+/// Module RPATH/RUNPATH tokens are expanded by the loader. Missing absolute
+/// directories are cached; relative directories and lookup results are not.
 #[derive(Clone, Default)]
 pub struct SearchPathResolver {
     entries: Vec<SearchPathEntry>,
@@ -228,15 +213,12 @@ impl SearchPathResolver {
         }
     }
 
-    /// Creates a resolver with glibc-style search ordering from explicit inputs.
+    /// Searches inherited RPATH, supplied library paths, direct RUNPATH, cache,
+    /// then default directories. Direct-loader RUNPATH suppresses inherited RPATH;
+    /// names containing separators are opened directly.
     ///
-    /// Searches inherited RPATH (unless the direct loader has RUNPATH), the
-    /// supplied environment path, direct RUNPATH, the cache, then default dirs.
-    /// Names containing a directory separator are still opened directly.
-    ///
-    /// This composes the existing providers; it does not reproduce glibc's
-    /// process namespace, main-executable RPATH fallback, hardware-capability
-    /// selection, `DF_1_NODEFLIB`, auditing, or secure-execution policy.
+    /// This ordering does not implement glibc's process namespace, executable RPATH
+    /// fallback, hardware capabilities, `DF_1_NODEFLIB`, auditing, or secure-execution policy.
     pub fn with_config(config: SearchConfig) -> Self {
         let mut resolver = Self::new();
         resolver.push_rpath();
@@ -253,16 +235,11 @@ impl SearchPathResolver {
         resolver
     }
 
-    /// Replaces the candidate opener while retaining the configured search order.
+    /// Uses a custom opener for every candidate, preserving search order and ELF validation.
+    /// Disables filesystem fallback and directory-existence caching.
     ///
-    /// Container/virtual paths can be interpreted by the opener without changing
-    /// path generation or ELF validation. The callback handles all candidates,
-    /// including ordinary files; no filesystem fallback is applied. Native
-    /// directory existence checks and their cache are disabled for this resolver.
-    ///
-    /// Return [`crate::error::IoError::OpenFailed`] for unavailable candidates that should allow
-    /// a search to continue. Other errors stop lookup. Direct-path errors are
-    /// always returned to the caller.
+    /// Return [`crate::error::IoError::OpenFailed`] to skip an unavailable candidate.
+    /// Other errors stop the search. Direct-path errors are always returned.
     pub fn with_opener<F>(mut self, opener: F) -> Self
     where
         F: Fn(&Path) -> Result<Box<dyn ElfReader>> + Send + Sync + 'static,

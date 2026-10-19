@@ -75,20 +75,14 @@ impl LoadResult {
     }
 }
 
-/// Reusable front-end for dependency discovery, loading, and relocation.
+/// Loads and relocates an ELF image and its `DT_NEEDED` dependencies.
 ///
-/// `Linker` combines a [`Loader`](crate::Loader), dependency resolver, and
-/// [`Relocator`](crate::Relocator).
-/// It is the high-level path for loading a root image plus its `DT_NEEDED`
-/// dependency graph into a [`LinkContext`](crate::LinkContext).
+/// Combines a [`Loader`](crate::Loader), dependency resolver, and
+/// [`Relocator`](crate::Relocator). Loaded modules belong to the supplied
+/// [`LinkContext`](crate::LinkContext), so the linker can be reused across contexts.
 ///
-/// The linker is configuration; committed modules live in the context passed to
-/// [`LinkerRun::load`](super::LinkerRun::load). This lets the same linker value
-/// be reused with independent contexts while keeping each context's module ids
-/// and dependency graph isolated.
-/// Eager relocations use the complete load-group scope. Deferred PLT lookup is
-/// deliberately narrower: it searches the requesting module's retained
-/// dependency closure together with the context-global scope.
+/// Immediate relocation searches the full load group. Lazy PLT lookup searches
+/// the requesting module's dependency closure and the context's global scope.
 ///
 /// # Example
 ///

@@ -14,12 +14,8 @@ use crate::{
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-/// One synthetic symbol exported by a [`SyntheticModule`].
-///
-/// Synthetic symbols are useful for host callbacks, native bridge wrappers,
-/// and virtual replacement libraries where a symbol should resolve to a known
-/// runtime address without loading another ELF image.
-/// Names share validated C strings: use a C string literal or a [`SymbolName`].
+/// A symbol exported by a [`SyntheticModule`], such as a host callback or variable.
+/// Use a C string literal or [`SymbolName`] for its name.
 #[derive(Clone, Debug)]
 pub struct SyntheticSymbol {
     name: SymbolName,
@@ -111,11 +107,8 @@ impl SyntheticSymbol {
         )
     }
 
-    /// Creates a synthetic symbol with explicit ELF symbol fields.
-    ///
-    /// The synthetic module fills `st_name` when the symbol is inserted, so the
-    /// caller controls every field except the internal name-table slot. Pass
-    /// [`SymbolVersion`] to attach GNU symbol-version metadata.
+    /// Creates a symbol with explicit ELF fields and optional GNU version metadata.
+    /// The module assigns `st_name` when the symbol is inserted.
     #[inline]
     pub fn from_fields(
         name: impl Into<SymbolName>,
@@ -266,11 +259,8 @@ impl ImageMemory for UnmappedImageMemory {
     }
 }
 
-/// A [`Module`] backed by a synthetic table of absolute symbols.
-///
-/// The module owns stable synthetic ELF symbols, so it can be retained in a
-/// [`ModuleScope`](crate::image::ModuleScope) without borrowing callback-owned
-/// symbol metadata.
+/// A module of caller-provided symbols, usable in a [`ModuleScope`](crate::ModuleScope).
+/// Owns its symbol metadata without loading an ELF image.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = (), R = ()> {
     state: ModuleState,
     name: String,

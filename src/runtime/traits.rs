@@ -55,11 +55,8 @@ impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
     }
 }
 
-/// Executes runtime code addresses for a mapped image.
-///
-/// Native hosts can call through host pointers. Remote process, guest,
-/// kernel-module, or bare-metal environments can provide their own executor
-/// that interprets VM addresses in their runtime.
+/// Executes code in the target runtime.
+/// Implement this for remote, guest, or other non-native execution environments.
 pub trait CodeExecutor<Arch: RelocationArch = NativeArch>: Send + Sync + 'static {
     /// Executes an initialization or finalization function.
     fn call_lifecycle(&self, ctx: CodeContext<'_, Arch>, function: VmAddr) -> Result<()>;

@@ -158,16 +158,8 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
     }
 }
 
-/// A mapped but unrelocated dynamic ELF image.
-///
-/// This is the common raw representation for ELF images with a `PT_DYNAMIC`
-/// segment, including shared objects and dynamically linked executables.
-/// It dereferences to [`ElfCore`]; methods on the core and its [`ElfModule`]
-/// allocation are therefore available without cloning the handle.
-///
-/// The optional `Arch` type parameter selects the target architecture used
-/// during [`crate::Relocator::run`]. By default it is
-/// [`crate::arch::NativeArch`].
+/// A mapped `ET_DYN` or `ET_EXEC` image with dynamic metadata.
+/// Pass it to [`crate::Relocator::run`] to resolve symbols and apply relocations.
 pub struct RawDynamic<
     D,
     Arch = NativeArch,

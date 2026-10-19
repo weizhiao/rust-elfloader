@@ -1,12 +1,7 @@
-//! Explicit linking and dependency-resolution primitives.
+//! Loads ELF dependency graphs into a [`LinkContext`].
 //!
-//! This module provides building blocks for callers that want to resolve
-//! `DT_NEEDED` edges without hard-coding a process-global loader policy.
-//! `elf_loader` stays responsible for mapping and local relocation, while
-//! callers decide how dependencies are discovered and how search scopes are
-//! assembled. Use [`SearchPathResolver`] for the common filesystem-backed case,
-//! or implement [`KeyResolver`] when dependencies come from custom registries,
-//! memory blobs, package stores, or host-specific search rules.
+//! Use [`SearchPathResolver`] for filesystem search, or implement [`KeyResolver`]
+//! for custom dependency sources and policies.
 
 mod address;
 mod context;

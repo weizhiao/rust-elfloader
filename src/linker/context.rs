@@ -14,23 +14,14 @@ use crate::{
 };
 use alloc::{collections::VecDeque, vec::Vec};
 
-/// Local repository of committed modules and their dependency graph.
+/// A symbol namespace containing loaded modules and their dependencies.
 ///
-/// `LinkContext` is the mutable state paired with [`Linker`](crate::Linker).
-/// It owns module ids, loaded module handles, aliases, and direct dependency
-/// edges produced by successful linker loads. Its fixed domain supplies the TLS
-/// resolver to loader runs; reusable loader configuration cannot replace it.
-/// Existing modules must have the same complete domain identity.
+/// Used with [`crate::Linker`]. All modules must match the context's fixed domain.
+/// Contexts can share a domain while keeping independent module IDs, dependency
+/// graphs, and GNU unique symbol definitions.
 ///
-/// Each context is one symbol namespace. Multiple contexts may target the same
-/// runtime domain while retaining independent module graphs and GNU unique
-/// symbol definitions. Module ids are branded with the namespace's context
-/// identity so ids from different contexts cannot be mixed accidentally.
-///
-/// `Meta` stores state specific to one context entry. It is created independently
-/// when a shared module is imported into another context and is detached with the
-/// entry during unloading. State that must follow the underlying module allocation
-/// belongs in the concrete module type instead.
+/// `Meta` belongs to each context entry and is created separately on import.
+/// Store data that must follow the shared module in the module itself.
 pub struct LinkContext<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     pub(super) domain: Domain<Arch, Tls>,
     pub(super) global: GlobalScope<Arch>,
@@ -326,13 +317,8 @@ where
         Ok(())
     }
 
-    /// Appends existing modules themselves to global lookup order.
-    ///
-    /// Unlike [`promote_global`](Self::promote_global), this method does not
-    /// traverse dependency edges. It is intended for importing an existing
-    /// namespace whose complete lookup order is already known, such as the
-    /// initial process link map. Module lifetime remains controlled by leases,
-    /// pins, and dependency reachability.
+    /// Appends modules to global lookup order without traversing their dependencies.
+    /// Leases, pins, and dependency reachability still control module lifetime.
     pub fn extend_global(&mut self, modules: &[ModuleId]) -> Result<()> {
         for &id in modules {
             self.committed.module_slot(id)?;

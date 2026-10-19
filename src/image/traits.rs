@@ -56,12 +56,10 @@ where
     }
 }
 
-/// A runtime module that can satisfy symbol lookups during relocation.
+/// A loaded or synthetic module that supplies symbols for relocation.
 ///
-/// Implementations may be backed by a loaded ELF image, a synthetic/virtual DSO,
-/// or any other module that can expose ELF-like symbol definitions.
-/// The concrete implementation retains its TLS runtime. Lookup interfaces erase
-/// the resolver type; scopes check compatibility using the domain in [`Self::state`].
+/// Implementations retain their TLS runtime and expose their domain through
+/// [`Self::state`], which scopes use to check compatibility.
 pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &[u8];
@@ -92,11 +90,8 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
         None
     }
 
-    /// Returns the canonical identity, domain, and lifecycle state for this module.
-    ///
-    /// Wrappers around the same module must return the same stable state
-    /// address. Relink uses it to coordinate initialization and finalization
-    /// across wrappers around the same underlying module.
+    /// Returns this module's identity, domain, and lifecycle state.
+    /// All wrappers of the same module must return the same stable state address.
     fn state(&self) -> &ModuleState;
 
     /// Performs this module's initialization hook.

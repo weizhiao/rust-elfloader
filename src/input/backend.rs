@@ -144,14 +144,11 @@ impl ElfFile {
         Self::from_raw(path, inner)
     }
 
-    /// Restricts this file view to a checked region and gives it a loader path.
+    /// Restricts the current view to `offset..offset + len` and assigns its path and identity.
     ///
-    /// `offset` is relative to the current view. The caller supplies the region's
-    /// identity: reuse it when opening the same source, and use distinct IDs for
-    /// different regions or files. The path is descriptive and does not affect
-    /// source identity. [`ModuleSourceId::fresh`] can be used when reuse is unwanted.
-    ///
-    /// Unaligned views remain readable but use copying instead of direct mapping.
+    /// Reuse `source_id` for the same source region; use distinct IDs for different
+    /// regions or [`ModuleSourceId::fresh`] to prevent reuse. The path is descriptive.
+    /// Unaligned views use copying instead of direct mapping.
     pub fn into_range(
         mut self,
         path: impl Into<PathBuf>,

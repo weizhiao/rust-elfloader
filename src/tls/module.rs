@@ -8,14 +8,10 @@ use crate::{
 use alloc::boxed::Box;
 use core::fmt;
 
-/// Non-owning metadata for a TLS registration and its runtime ABI entry.
+/// TLS registration metadata and its runtime entry address.
 ///
-/// Cloning or dropping this value does not retain or unregister the module.
-/// A [`TlsRegistration`] owns the registry entry and runtime resources. Its
-/// lifetime must cover every use of this metadata. Imported providers retain
-/// their original storage; managed providers retain immutable template bytes.
-/// The containing image and its executor determine the target architecture;
-/// this metadata does not encode it.
+/// The owning [`TlsRegistration`] must outlive every use of this metadata.
+/// Cloning or dropping a `TlsModule` does not retain or unregister it.
 #[derive(Clone)]
 pub struct TlsModule {
     binding: TlsBinding,
@@ -29,15 +25,12 @@ impl fmt::Debug for TlsModule {
 }
 
 impl TlsModule {
-    /// Creates metadata for a newly registered module. Intended for runtime implementations.
+    /// Creates registration metadata for a custom runtime.
     ///
     /// # Safety
-    /// `binding` must describe a live registration in the runtime identified by
-    /// `entry`, with correct ABI metadata. The runtime and ABI entry must remain
-    /// fixed and alive while this metadata is in use.
-    /// The runtime must transfer its cleanup responsibility into a
-    /// [`TlsRegistration`]. Constructing or cloning this metadata does not
-    /// transfer or share that responsibility.
+    /// `binding` must describe a live registration with valid ABI metadata for
+    /// `entry`. Keep the runtime and entry fixed and alive for every use, and
+    /// transfer cleanup responsibility to a [`TlsRegistration`].
     pub const unsafe fn new(binding: TlsBinding, entry: VmAddr) -> Self {
         Self { binding, entry }
     }
@@ -84,11 +77,10 @@ impl TlsModule {
     }
 }
 
-/// Unique owner of a TLS registry entry.
+/// Owns a TLS registration and unregisters it on drop.
 ///
-/// Loaded and synthetic images retain this value until their finalizers and TLS
-/// descriptor resources have been released. The cleanup closure also keeps the
-/// resolver alive. Cloning [`TlsModule`] does not extend this ownership.
+/// Keep it alive through module finalization and TLS descriptor cleanup.
+/// Cloning [`TlsModule`] does not extend the registration's lifetime.
 pub struct TlsRegistration {
     module: TlsModule,
     release: Option<Box<dyn FnOnce() + Send + Sync>>,

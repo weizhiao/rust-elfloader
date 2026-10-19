@@ -12,25 +12,13 @@ use crate::{
 use crate::{object::SectionGroups, sync::Arc};
 use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
-/// Reusable configuration for reading and mapping ELF images.
+/// Reusable ELF loading configuration: architecture, memory mapper, and user-data type.
 ///
-/// `Loader` maps ELF objects from files or memory and produces raw image types such as
-/// [`crate::image::RawElf`], [`crate::image::RawDynamic`], [`crate::image::RawDylib`],
-/// and [`crate::image::RawExec`].
-/// Those raw images can then be relocated with [`crate::Relocator`].
+/// Bind a [`Domain`] with [`Loader::run`] to load files or memory. The resulting
+/// raw images require relocation with [`crate::Relocator`]. Use [`crate::Linker`]
+/// to load their `DT_NEEDED` dependencies automatically.
 ///
-/// A loader contains only stable configuration: target architecture, mapping
-/// backend and user-data type. The runtime domain, scratch state
-/// and observers live in [`LoaderRun`], so a configured loader can be reused
-/// across many inputs.
-///
-/// Start with [`Loader::new`], call configuration methods such as
-/// [`for_arch`](Self::for_arch), then select the runtime with [`Loader::run`].
-/// Native loaders also provide `load_*` convenience methods. Attach per-run observers with
-/// [`LoaderRun::with_observer`]. Use
-/// [`Relocator`](crate::Relocator) for explicit symbol scopes and final
-/// relocation, or [`Linker`](crate::Linker) when `DT_NEEDED` dependencies should
-/// be resolved automatically.
+/// Observers and temporary loading state belong to [`LoaderRun`].
 ///
 /// # Examples
 ///
@@ -131,14 +119,8 @@ where
 }
 
 impl Loader<(), NativeArch, DefaultMmap> {
-    /// Creates a new [`Loader`] with the default mmap backend, no observer, no
-    /// custom user data, no TLS resolver, and the host target architecture
-    /// ([`NativeArch`]).
-    ///
-    /// To target a different ELF architecture (e.g. load an x86-64 shared
-    /// object on a RISC-V host), switch the target architecture with
-    /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
-    /// then validates against `NewArch::MACHINE` automatically.
+    /// Creates a loader for [`NativeArch`] with the default memory mapper and `()` user data.
+    /// Use [`Self::for_arch`] to select another architecture.
     #[inline]
     pub const fn new() -> Self {
         Self {
@@ -230,13 +212,9 @@ where
         Ok(page_size)
     }
 
-    /// Consumes the current loader and returns a new one with the specified
-    /// dynamic-image user data type.
-    ///
-    /// Dynamic images are created with `NewD::default()`. To fill or adjust
-    /// that data after dynamic metadata has been parsed, implement
-    /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load)
-    /// on the configured load observer.
+    /// Sets the user-data type for dynamic images, initialized with `NewD::default()`.
+    /// Populate it after parsing through
+    /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load).
     pub const fn with_data<NewD>(self) -> Loader<NewD, Arch, M>
     where
         NewD: Default + Send + Sync + 'static,
@@ -261,12 +239,7 @@ where
     }
 }
 
-/// Cross-architecture builder step.
-///
-/// Switching the target architecture is only meaningful while the loader has
-/// not yet been bound to a user-data type. The builder therefore exposes
-/// [`Loader::for_arch`] only on loaders whose `D` is still `()`. Callers should
-/// pick the target architecture first and attach the user-data type afterwards:
+/// Select the target architecture before setting the user-data type.
 ///
 /// ```no_run
 /// use elf_loader::Loader;
@@ -290,30 +263,10 @@ where
         self.into_fields().with_mapper(mapper)
     }
 
-    /// Consumes the current loader and returns a new one whose target
-    /// architecture is `NewArch` instead of the previous `Arch`.
+    /// Selects the architecture used to validate ELF headers and apply relocations.
     ///
-    /// This is the primary entry point for cross-architecture loading. Picking
-    /// a non-host architecture (e.g.
-    /// [`X86_64Arch`](crate::arch::x86_64::X86_64Arch)) makes
-    /// every subsequent `load_*` call validate the ELF `e_machine` against
-    /// `NewArch::MACHINE` instead of the host's, and stamps the resulting
-    /// raw images with `NewArch` so [`Relocator::run`](crate::Relocator::run)
-    /// and [`RelocatorRun::relocate`](crate::RelocatorRun::relocate) use the
-    /// matching relocation numbering.
-    ///
-    /// Select a matching runtime executor through [`Domain`] and [`Loader::run`]
-    /// before loading a non-native image. The executor handles its IFUNC,
-    /// TLSDESC and lifecycle calls.
-    ///
-    /// # Builder ordering
-    ///
-    /// `for_arch` is only available before
-    /// [`with_data`](Loader::with_data) has been called; instead, switch `Arch`
-    /// first and then attach the user-data type once the target architecture is
-    /// fixed.
-    ///
-    /// [`RelocatorRun::relocate`]: crate::RelocatorRun::relocate
+    /// Call this before [`Self::with_data`]. For non-native execution, provide a
+    /// matching executor through [`Domain`] when calling [`Loader::run`].
     pub const fn for_arch<NewArch>(self) -> Loader<(), NewArch, M>
     where
         NewArch: RelocationArch,

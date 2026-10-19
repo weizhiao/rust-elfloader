@@ -25,12 +25,11 @@ impl TlsContext {
     }
 }
 
-/// Shared ownership of a TLS provider, independent of its registry membership.
+/// Keeps a TLS provider alive independently of its registry entry.
 ///
-/// Construct this before taking a registry lock and pass it by reference when
-/// registering. The last owner must be dropped outside registry locks because
-/// provider destruction may call its runtime. This handle does not keep a
-/// registration alive; its owner must manage registration and unregistration.
+/// Create this before taking the registry lock, and drop the last owner outside
+/// that lock: provider destruction may call back into the runtime. This handle
+/// does not keep the module ID registered.
 #[derive(Clone)]
 pub struct TlsOwner(pub(crate) Arc<dyn TlsProvider>);
 
@@ -102,11 +101,8 @@ pub struct TlsRegistrySnapshot {
     pub modules: Vec<TlsModuleId>,
 }
 
-/// Registry of TLS storage owners in one runtime's module-ID namespace.
-///
-/// IDs are never reused. Sparse storage keeps memory proportional to live modules
-/// rather than to the number of loads. Storage access and template publication
-/// happen through a bound entry cloned out of the registry.
+/// Stores TLS providers under IDs that are never reused.
+/// Clone an entry and release the registry lock before accessing its storage.
 #[derive(Debug)]
 pub struct TlsRegistry {
     modules: BTreeMap<TlsModuleId, TlsRegistryEntry>,

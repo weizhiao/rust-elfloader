@@ -16,15 +16,8 @@ use crate::{
 };
 use core::{fmt::Debug, ops::Deref};
 
-/// A mapped but unrelocated shared object.
-///
-/// Values of this type are returned by [`crate::LoaderRun::load_dylib`]. They expose
-/// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
-/// relocation. The wrapper dereferences to [`RawDynamic`], which owns the common
-/// implementation for dynamic ELF images.
-///
-/// The optional `Arch` type parameter selects the target architecture used by
-/// [`crate::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
+/// A shared object mapped by [`crate::LoaderRun::load_dylib`].
+/// Pass it to [`crate::Relocator::run`] before using its symbols.
 pub struct RawDylib<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
 where
     D: Send + Sync + 'static,

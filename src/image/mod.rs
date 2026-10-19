@@ -1,13 +1,7 @@
-//! Public image types returned by the loader and relocation pipeline.
+//! Raw and relocated ELF images, synthetic modules, and symbol scopes.
 //!
-//! `Loader` produces raw image types such as [`RawElf`], [`RawDynamic`], [`RawDylib`],
-//! and [`RawExec`].
-//! Those raw values are mapped into memory but not yet relocated.
-//!
-//! After passing a raw image to [`crate::Relocator::run`] and calling
-//! `relocate()`, you get loaded image types such as [`LoadedElf`], [`LoadedExec`],
-//! and [`LoadedCore`], which expose symbol lookup, metadata, and dependency
-//! retention.
+//! [`crate::LoaderRun`] returns mapped raw images such as [`RawDylib`] and [`RawExec`].
+//! Relocate them with [`crate::Relocator::run`] to obtain loaded images with symbol lookup.
 
 mod core;
 mod elf;

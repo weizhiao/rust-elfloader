@@ -8,13 +8,9 @@ pub trait SupportLazy {}
 
 impl SupportLazy for () {}
 
-/// Supplies lazy PLT runtime entries for a mapped image.
-///
-/// Implement this trait when the default same-process lazy binder is not the
-/// right execution model, for example when the loaded image runs in a remote VM
-/// or on a different architecture. The binder receives a [`LazyRuntime`] handle
-/// for the mapped image and returns the target-visible values and retained state
-/// needed by the architecture's lazy-binding placement.
+/// Configures lazy PLT binding for a mapped image.
+/// Implement this for custom runtimes. Given a [`LazyRuntime`], return the target
+/// entry addresses and state needed to resolve symbols on first use.
 ///
 /// # Example
 ///

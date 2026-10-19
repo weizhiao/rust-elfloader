@@ -9,14 +9,12 @@ use alloc::boxed::Box;
 
 use super::{ModuleSourceId, Path};
 
-/// A borrowed file range backing an ELF reader, with offsets relative to the file.
-/// The descriptor must remain valid while the reader is borrowed. This range
-/// must describe exactly the same bytes as `read(0..len)`. Creating the descriptor
-/// does not duplicate the handle or transfer ownership.
+/// A borrowed file range containing the same bytes as the ELF reader.
+/// The handle must remain valid while the reader is borrowed; it is not duplicated.
 ///
-/// `len` bounds ELF data, not the page-rounded mapping. Mapping a boundary page
-/// may expose bytes outside this range. Readers requiring byte-level isolation
-/// must return `None` from [`ElfReader::file_backing`] and use copying instead.
+/// `len` bounds ELF data, not page-rounded mappings. Boundary pages may expose
+/// adjacent bytes. Readers needing byte-level isolation must return `None` from
+/// [`ElfReader::file_backing`] and use copying.
 #[derive(Clone, Copy, Debug)]
 pub struct FileBacking {
     /// Borrowed platform file descriptor/handle.
@@ -37,10 +35,7 @@ impl FileBacking {
     }
 }
 
-/// A trait for reading ELF data from various sources.
-///
-/// `ElfReader` abstracts the underlying storage (memory, file system, etc.)
-/// providing a unified interface for the loader to access ELF headers and segments.
+/// Reads ELF bytes and metadata from files, memory, or custom storage.
 pub trait ElfReader {
     /// Returns the loader source path or caller-provided source identifier.
     fn path(&self) -> &Path;
@@ -51,19 +46,13 @@ pub trait ElfReader {
     /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()>;
 
-    /// Returns the stable identity of the underlying source.
-    ///
-    /// Implementations must derive this from the opened source rather than
-    /// resolving the path separately. File regions, memory and remote readers
-    /// can provide a stable opaque ID, or use [`ModuleSourceId::fresh`] when
-    /// independently opened readers should represent different sources.
+    /// Returns an identity derived from the opened source, not a separate path lookup.
+    /// Use a stable opaque ID for custom sources, or [`ModuleSourceId::fresh`] when
+    /// each independently opened reader should represent a different source.
     fn source_id(&self) -> ModuleSourceId;
 
-    /// Borrows bytes directly from the ELF object when the backend can provide
-    /// a stable in-memory view.
-    ///
-    /// Backends that cannot expose borrowed bytes return `Ok(None)`. Callers
-    /// should fall back to [`ElfReader::read`] in that case.
+    /// Borrows bytes when a stable in-memory view is available.
+    /// Return `Ok(None)` to make callers fall back to [`Self::read`].
     fn borrow_bytes(&self, _offset: usize, _len: usize) -> Result<Option<&[u8]>> {
         Ok(None)
     }

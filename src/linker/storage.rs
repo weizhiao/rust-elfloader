@@ -184,18 +184,11 @@ impl Display for ModuleId {
     }
 }
 
-/// One direct acquisition of a committed module.
+/// A module acquisition returned by loading, insertion, or explicit acquisition.
 ///
-/// A lease is created by [`LinkContext::insert`](super::LinkContext::insert),
-/// [`LinkContext::insert_batch`](super::LinkContext::insert_batch),
-/// [`LinkContext::acquire`](super::LinkContext::acquire), or a linker load. It is
-/// intentionally neither [`Clone`] nor [`Copy`]; pass it to
-/// [`LinkContext::release`](super::LinkContext::release) exactly once when the
-/// direct use ends.
-///
-/// Dropping a lease does not mutate its [`LinkContext`](super::LinkContext) and
-/// therefore does not release the acquisition. A lost lease keeps its module
-/// rooted until that context is dropped.
+/// Pass it to [`LinkContext::release`](super::LinkContext::release) when finished.
+/// Dropping a lease does not release it: the module remains a root until the
+/// context is dropped. Leases cannot be cloned or copied.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "a module lease must eventually be released"]
 pub struct ModuleLease {

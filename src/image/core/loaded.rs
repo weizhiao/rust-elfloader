@@ -18,11 +18,9 @@ use crate::{
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ops::Deref};
 
-/// A fully loaded and relocated ELF module with a retained relocation lookup scope.
-///
-/// This is the common loaded representation used by relocated dylibs, dynamic
-/// [`crate::image::LoadedExec`] values, and loaded object-file images. It dereferences
-/// to [`ElfCore`], so shared ELF metadata does not need another forwarding API.
+/// A relocated ELF module that retains its lookup scope.
+/// Used for shared libraries, dynamic executables, and object files.
+/// Dereferences to [`ElfCore`] for ELF metadata.
 pub struct LoadedCore<
     D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
@@ -129,14 +127,10 @@ impl<
         self.core.user_data_mut()
     }
 
-    /// Gets a pointer to a function or static variable by symbol name.
-    ///
-    /// The symbol is interpreted as-is; no mangling is done. This means
-    /// that symbols like `x::y` are most likely invalid.
+    /// Looks up a function or variable by its exact exported name, without mangling.
     ///
     /// # Safety
-    /// Users of this API must specify the correct type of the function
-    /// or variable loaded.
+    /// `T` must match the symbol's type and calling convention.
     ///
     /// # Examples
     /// ```no_run
@@ -167,27 +161,16 @@ impl<
     ///     **awesome_variable = 42.0;
     /// };
     /// ```
-    ///
-    /// # Arguments
-    /// * `name` - The name of the symbol to look up
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - If the symbol is found
-    /// * `None` - If the symbol is not found
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: impl AsRef<[u8]>) -> Option<Symbol<'lib, T>> {
         unsafe { self.try_get(name).ok().flatten() }
     }
 
-    /// Tries to get a pointer to a function or static variable by symbol name.
-    ///
-    /// Names are raw bytes without a trailing NUL; strings are also accepted.
-    ///
-    /// This resolves IFUNC symbols through the executor retained during relocation.
+    /// Looks up a symbol, returning lookup errors. IFUNCs use the domain's executor.
+    /// Names are bytes without a trailing NUL; strings are also accepted.
     ///
     /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
+    /// `T` must match the resolved symbol's type and calling convention.
     #[inline]
     pub unsafe fn try_get<'lib, T>(
         &'lib self,
@@ -232,15 +215,11 @@ impl<
         unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 
-    /// Tries to load a versioned symbol from the ELF object.
-    ///
-    /// Names and versions are raw bytes without a trailing NUL.
-    ///
-    /// This resolves IFUNC symbols through the executor retained during relocation.
+    /// Looks up a versioned symbol, returning lookup errors. IFUNCs use the domain's executor.
+    /// Names and versions are bytes without a trailing NUL.
     ///
     /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
+    /// `T` must match the resolved symbol's type and calling convention.
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn try_get_version<'lib, T>(
@@ -321,33 +300,18 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         Ok(view)
     }
 
-    /// Creates a new [`LoadedCore`] from an existing loaded ELF mapping.
+    /// Wraps an existing loaded ELF mapping and takes ownership of its TLS registration.
+    /// The registration is also released if construction fails.
+    ///
+    /// Preserve the original `source_id` for file-backed images; use an opaque ID
+    /// for custom sources or [`ModuleSourceId::fresh`] for a new anonymous source.
     ///
     /// # Safety
-    /// The caller must ensure that the provided metadata, segments, and TLS values
-    /// describe a valid loaded ELF image. A supplied TLS registration must refer
-    /// to its existing, initialized storage and belong to `domain`.
-    /// This constructor takes ownership of the registry entry, including on
-    /// failure. The provider must retain the existing storage and runtime; the
-    /// caller must keep the ELF mapping valid while any derived view uses it.
-    /// The `PT_TLS` initialization bytes must remain readable within `segments`
-    /// for the lifetime of the image. This constructor retains a template view
-    /// without publishing it or copying it into thread storage.
-    ///
-    /// # Arguments
-    /// * `path` - Validated shared loader source path or diagnostic name.
-    ///   Convert a `PathBuf` with `ModulePath::try_from` before calling.
-    /// * `source_id` - Identity of the original source backing the loaded image.
-    ///   Preserve the reader's identity for file-backed images; use a stable opaque
-    ///   identity for other sources, or `ModuleSourceId::fresh()` for a new anonymous source.
-    /// * `phdrs` - The program headers
-    /// * `segments` - The mapped ELF segments and their module-relative ranges
-    /// * `domain` - Fixed address space and TLS runtime of the existing image
-    /// * `tls` - Owned registry entry for the existing TLS block, if any
-    /// * `user_data` - User-defined data to associate with the ELF
-    ///
-    /// # Returns
-    /// A new [`LoadedCore`] instance
+    /// Metadata and segments must describe a valid, relocated image in `domain`.
+    /// Any TLS registration must belong to that domain and refer to initialized
+    /// storage. Its provider must retain the storage and runtime. Keep the mapping
+    /// valid while derived views use it, including readable `PT_TLS` initialization
+    /// bytes for the image's lifetime. No TLS template is published by this constructor.
     #[inline]
     pub unsafe fn new_unchecked(
         path: ModulePath,

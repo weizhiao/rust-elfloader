@@ -1,29 +1,14 @@
-//! TLS registration, storage and runtime bindings.
+//! TLS registration and per-thread storage.
 //!
-//! [`TlsResolver::register`] returns a unique [`TlsRegistration`] owner. Images
-//! retain it through finalization and descriptor cleanup, then unregister on drop.
-//! [`TlsModule`] provides non-owning ABI metadata. [`TlsTemplate`] owns the
-//! relocated initialization bytes independently of the ELF mapping. [`TlsBinding`] contains only ABI metadata: the module ID and an
-//! optional stable thread-pointer offset.
+//! Use [`DefaultTlsResolver`] for native execution, or implement [`TlsResolver`]
+//! for a custom runtime. [`TlsProvider`] supplies storage, including existing host TLS.
 //!
-//! [`TlsProvider`] supplies storage through one interface for template publication,
-//! address resolution, and non-allocating queries. [`DefaultTlsResolver`] supplies
-//! a managed provider and accepts custom providers for existing host storage.
-//! A host provider retains its original module and translates logical offsets
-//! into its TLS ABI; its storage is not copied into a managed block.
-//! [`TlsRegistry`] binds providers to immutable [`TlsContext`] metadata, while
-//! [`TlsOwner`] retains provider resources independently of registry membership.
-//! Callbacks and destruction run outside registry locks. [`ThreadDtv`] caches
-//! only allocated dynamic blocks.
+//! [`TlsRegistration`] owns a registry entry and unregisters it on drop.
+//! [`TlsModule`] is borrowed metadata; [`TlsTemplate`] owns initialization bytes
+//! independently of the ELF image.
 //!
-//! TLS IDs are shared by each runtime entry's namespace and are never reused by
-//! the default registry. Native TLSDESC bindings use the same entry and retain
-//! their arguments in the image that contains the descriptor. Custom runtimes can
-//! replace the resolver and override descriptor bindings for other target ABIs.
-//!
-//! Current-thread queries return raw pointers, not static Rust references. Their
-//! validity depends on the thread and module lifetimes. Use
-//! [`DefaultTlsResolver::get_ptr_if_allocated`] for non-allocating inspection.
+//! [`DefaultTlsResolver::get_ptr_if_allocated`] queries storage without allocating.
+//! Returned pointers are valid only for the corresponding thread and module lifetime.
 
 mod defs;
 mod manager;

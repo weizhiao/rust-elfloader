@@ -58,12 +58,8 @@ where
     module.resolve_symbol(symbol).map(Some)
 }
 
-/// Identity and runtime state shared by every view of one logical module.
-///
-/// Module implementations store this value and return it from
-/// [`Module::state`]. It owns the canonical instance identity and runtime domain,
-/// and coordinates initialization, finalization, and runtime bindings without
-/// duplicating the ownership count already maintained by [`Arc`].
+/// Tracks a module's identity, domain, lifecycle, and runtime bindings.
+/// Module implementations store this state and expose it through [`Module::state`].
 pub struct ModuleState {
     id: ModuleInstanceId,
     domain: DomainId,
@@ -216,12 +212,11 @@ impl ModuleState {
         }
     }
 
-    /// Runs the module finalizer at most once after initialization was attempted.
+    /// Runs the finalizer at most once after initialization was attempted.
     ///
-    /// A module with finalization work should call this from its owning
-    /// allocation's [`Drop`] implementation. For core-backed ELF modules,
-    /// `ElfModule` already provides that integration. Calls made before
-    /// initialization or after another finalizer claimed the module are no-ops.
+    /// Call this from the module owner's [`Drop`] implementation; `ElfModule`
+    /// already does so. Calls before initialization or after finalization is
+    /// claimed do nothing.
     pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut phase = self.phase.load(Ordering::Acquire);
         loop {
@@ -252,11 +247,8 @@ impl Default for ModuleState {
     }
 }
 
-/// One shared ownership reference to a module.
-///
-/// Finalization follows the lifetime of the underlying module allocation, not
-/// an individual handle. Cloning or dropping a handle only changes the [`Arc`]
-/// ownership count.
+/// A shared module handle.
+/// Clones keep the same module alive; finalization occurs when its owner is dropped.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
     module: Arc<dyn Module<Arch>>,
 }
@@ -330,33 +322,24 @@ impl<Arch: RelocationArch> AsRef<dyn Module<Arch>> for ModuleHandle<Arch> {
     }
 }
 
-/// Copy-on-write ordered modules used for symbol lookup and dependency retention.
+/// An ordered list of modules for symbol lookup that keeps its modules alive.
 ///
-/// Modules are searched in order and held alive by relocated outputs that keep
-/// this scope. Clones remain stable when another clone is modified. The scope
-/// dereferences to its ordered module slice for read-only access. Each scope is
-/// bound to a fixed runtime domain identity; additions are validated before
-/// changing the scope. The scope does not retain the domain's TLS resolver.
+/// Changes to a clone do not affect other copies. Added modules must match the
+/// scope's [`DomainId`]. Dereferences to a read-only module slice.
 pub struct ModuleScope<Arch: RelocationArch = NativeArch> {
     modules: Arc<Vec<ModuleHandle<Arch>>>,
     domain: DomainId,
 }
 
-/// Eager and deferred local scopes used while relocating one module.
-///
-/// The eager scope is used for ordinary relocation. The lazy scope is always
-/// present and is retained by standalone loaded images. Linker-managed images
-/// normally use their dependency closure as the lazy scope.
+/// Local symbol scopes for immediate relocation and lazy binding.
+/// Linker-managed images normally use their dependency closure for lazy binding.
 pub struct LocalScope<Arch: RelocationArch = NativeArch> {
     groups: Arc<[ModuleScope<Arch>]>,
     lazy: ModuleScope<Arch>,
 }
 
-/// Weak references used by deferred lookup to recover local and global scopes.
-///
-/// Linker-managed images use their retained dependency closure instead of the
-/// wider eager-relocation load group. This deliberately gives lazy binding the
-/// conservative `retained + global` lookup semantics documented by the linker.
+/// Weak references to the local and global scopes used by lazy binding.
+/// The linker's local scope is the requesting module's dependency closure.
 pub(crate) struct WeakLocalScope<Arch: RelocationArch = NativeArch> {
     local: Weak<Vec<ModuleHandle<Arch>>>,
     global: Option<Weak<GlobalScopeInner<Arch>>>,

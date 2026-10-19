@@ -178,18 +178,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 }
 
-/// A mapped but unrelocated executable image.
-///
-/// Values of this type are returned by [`crate::LoaderRun::load_exec`]. They may
-/// represent either a dynamic executable that still needs relocation or a
-/// static executable that is already ready to run.
-///
-/// The optional `Arch` type parameter is forwarded to the underlying
-/// [`RawDynamic`] for dynamic executables. Static executables ignore it but
-/// still carry it so that downstream APIs can treat both variants uniformly.
-///
-/// The dynamic variant intentionally stays inline to avoid changing the public
-/// enum shape or adding an allocation to executable loading.
+/// An executable mapped by [`crate::LoaderRun::load_exec`].
+/// Static executables are ready to use; dynamic executables need relocation
+/// through [`crate::Relocator::run`].
 #[allow(clippy::large_enum_variant)]
 pub enum RawExec<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
 where

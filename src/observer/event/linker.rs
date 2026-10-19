@@ -43,13 +43,9 @@ where
         &self.scope
     }
 
-    /// Returns the mutable lookup scope used to relocate this module.
-    /// Scope mutation admits only compatible groups and reports errors before
-    /// changing the scope. Replacing the entire scope is checked when attached
-    /// to the relocation run.
-    ///
-    /// Linker-global modules are managed separately and are not part of this
-    /// scope.
+    /// Returns this module's mutable local lookup scope.
+    /// Incompatible groups are rejected before mutation; a replacement scope is
+    /// checked when attached to relocation. Global modules are managed separately.
     #[inline]
     pub const fn scope_mut(&mut self) -> &mut LocalScope<Arch> {
         &mut self.scope

@@ -212,12 +212,9 @@ impl SearchPathPool {
         self
     }
 
-    /// Expands a raw library-path value using this context's target tokens.
-    ///
-    /// This uses the same separators, empty-component rules and executable
-    /// `$ORIGIN` as [`SearchConfig::library_path`](crate::linker::SearchConfig::library_path).
-    /// It is useful for library discovery that enumerates directories without
-    /// requesting a particular module.
+    /// Expands a library path into directories using this context's target tokens.
+    /// Uses the parsing and `$ORIGIN` rules of
+    /// [`SearchConfig::library_path`](crate::linker::SearchConfig::library_path).
     pub fn library_path_dirs(
         &self,
         value: impl AsRef<Path>,
