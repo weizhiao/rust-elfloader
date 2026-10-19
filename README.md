@@ -93,14 +93,14 @@ fn main() -> Result<()> {
     let resolver = SearchPathResolver::with_config(config);
 
     let loaded = LINKER
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .load(&mut context, root)?;
 
     let run = unsafe {
         context
             .module(loaded.root())?
-            .get::<extern "C" fn() -> i32>("run")
+            .get::<extern "C" fn() -> i32>("run").expect("symbol lookup failed")
             .expect("symbol `run` not found")
     };
     let _ = run();

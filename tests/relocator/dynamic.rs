@@ -20,6 +20,7 @@ fn symbol(image: &LoadedCore<()>, name: &str) -> VmAddr {
         VmAddr::from_ptr(
             image
                 .get::<u8>(name)
+                .expect("symbol lookup failed")
                 .unwrap_or_else(|| panic!("missing symbol {name}"))
                 .into_raw(),
         )
@@ -43,6 +44,7 @@ fn call_pointer(image: &LoadedCore<()>, name: &str) -> VmAddr {
     let function = unsafe {
         image
             .get::<extern "C" fn() -> *const ()>(name)
+            .expect("symbol lookup failed")
             .unwrap_or_else(|| panic!("missing function {name}"))
     };
     VmAddr::from_ptr(function())
@@ -104,7 +106,7 @@ mod native {
                     ))
                     .expect("failed to load relocation consumer"),
             )
-            .modules([&provider])
+            .with_modules([&provider])
             .expect("incompatible relocation modules")
             .relocate()
             .expect("failed to relocate consumer");
@@ -118,6 +120,7 @@ mod native {
             core::mem::transmute(
                 loaded
                     .get::<*const ()>("call_external")
+                    .expect("symbol lookup failed")
                     .expect("missing call_external")
                     .into_raw(),
             )
@@ -143,7 +146,7 @@ mod native {
                     ))
                     .expect("failed to load COPY relocation executable"),
             )
-            .modules([&provider])
+            .with_modules([&provider])
             .expect("incompatible relocation modules")
             .relocate()
             .expect("failed to relocate COPY executable");
@@ -177,6 +180,7 @@ mod native {
             core::mem::transmute(
                 loaded
                     .get::<*const ()>("read_relative")
+                    .expect("symbol lookup failed")
                     .expect("missing read_relative")
                     .into_raw(),
             )
@@ -203,6 +207,7 @@ mod native {
             core::mem::transmute(
                 loaded
                     .get::<*const ()>("call_selected")
+                    .expect("symbol lookup failed")
                     .expect("missing call_selected")
                     .into_raw(),
             )
@@ -227,7 +232,7 @@ fn synthetic_precedes_loaded() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .modules([
+        .with_modules([
             ModuleHandle::from(host_module()),
             ModuleHandle::from(&provider),
         ])
@@ -262,7 +267,7 @@ fn loaded_precedes_synthetic() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .modules([
+        .with_modules([
             ModuleHandle::from(&provider),
             ModuleHandle::from(host_module()),
         ])
@@ -306,7 +311,7 @@ fn extend_preserves_precedence() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .modules([&first, &second])
+        .with_modules([&first, &second])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate symbol consumer");
@@ -335,7 +340,7 @@ fn scope_interposes_by_default() {
                 .load_dylib(ElfBinary::new("defining.so", &fixtures.scope.defining))
                 .expect("failed to load defining symbol fixture"),
         )
-        .modules(std::slice::from_ref(&provider))
+        .with_modules(std::slice::from_ref(&provider))
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate defining symbol fixture");
@@ -359,7 +364,7 @@ fn symbolic_prefers_self() {
                 .load_dylib(ElfBinary::new("symbolic.so", &fixtures.scope.symbolic))
                 .expect("failed to load DF_SYMBOLIC fixture"),
         )
-        .modules(std::slice::from_ref(&provider))
+        .with_modules(std::slice::from_ref(&provider))
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate DF_SYMBOLIC fixture");
@@ -421,7 +426,7 @@ fn images_without_tls_retain_their_domain_at_admission() {
     let scope = LocalScope::from_group(modules);
     let relocator = Relocator::new();
     assert!(matches!(
-        relocator.run(load()).local_scope(scope),
+        relocator.run(load()).with_local_scope(scope),
         Err(Error::DomainMismatch(_))
     ));
 
@@ -431,10 +436,12 @@ fn images_without_tls_retain_their_domain_at_admission() {
             .unwrap(),
     );
     assert!(matches!(
-        relocator.run(load()).global_scope(context.global_scope()),
+        relocator
+            .run(load())
+            .with_global_scope(context.global_scope()),
         Err(Error::DomainMismatch(_))
     ));
-    let linker = Linker::new().resolver(SearchPathResolver::new());
+    let linker = Linker::new().with_resolver(SearchPathResolver::new());
     assert!(matches!(
         linker
             .run()

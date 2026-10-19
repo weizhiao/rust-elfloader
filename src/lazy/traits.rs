@@ -34,7 +34,7 @@ impl SupportLazy for () {}
 ///     }
 /// }
 ///
-/// let relocator = Relocator::new().lazy_binder(RemoteLazyBinder {
+/// let relocator = Relocator::new().with_lazy_binder(RemoteLazyBinder {
 ///     context: VmAddr::new(0x1000),
 ///     resolver: VmAddr::new(0x2000),
 /// });

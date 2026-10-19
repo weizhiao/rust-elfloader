@@ -35,12 +35,12 @@ fn main() {
                 .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
                 .unwrap(),
         )
-        .modules([host])
+        .with_modules([host])
         .unwrap()
         .relocate()
         .unwrap();
     // Call function a in liba.so
-    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
+    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").expect("symbol lookup failed").unwrap() };
     println!("{}", f());
 }
 ```

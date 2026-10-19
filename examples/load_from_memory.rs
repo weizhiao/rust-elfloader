@@ -23,6 +23,10 @@ fn main() {
         )
         .relocate()
         .unwrap();
-    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
+    let f = unsafe {
+        base.get::<extern "C" fn() -> i32>("base_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     println!("{}", f());
 }

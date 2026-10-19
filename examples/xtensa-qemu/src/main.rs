@@ -53,18 +53,18 @@ fn main() -> ! {
         .with_mmap(plugin_memory())
         .run(Domain::native(AddressSpaceId::PROCESS))
         .load_dylib(ElfBinary::new("fixture.so", FIXTURE))
-        .and_then(|raw| Relocator::new().run(raw).modules([host])?.relocate());
+        .and_then(|raw| Relocator::new().run(raw).with_modules([host])?.relocate());
 
     match plugin {
         Ok(plugin) => {
             let hello = unsafe {
                 plugin
-                    .get::<unsafe extern "C" fn()>("hello")
+                    .get::<unsafe extern "C" fn()>("hello").expect("symbol lookup failed")
                     .expect("missing hello")
             };
             let fibonacci = unsafe {
                 plugin
-                    .get::<unsafe extern "C" fn(u32) -> u32>("fibonacci")
+                    .get::<unsafe extern "C" fn(u32) -> u32>("fibonacci").expect("symbol lookup failed")
                     .expect("missing fibonacci")
             };
 

@@ -103,8 +103,12 @@ pub struct Domain<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
     /// Returns the shared executor used by every module in this domain.
-    pub fn executor(&self) -> &Arc<dyn CodeExecutor<Arch>> {
-        &self.executor
+    pub fn executor(&self) -> &dyn CodeExecutor<Arch> {
+        self.executor.as_ref()
+    }
+
+    pub(crate) fn shared_executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
+        self.executor.clone()
     }
 
     /// Returns the immutable identity used for module compatibility checks.
@@ -120,14 +124,14 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Domain<Arch, Tls> {
 
 impl<Arch: RelocationArch> Domain<Arch, ()> {
     /// Creates a domain with TLS explicitly disabled, without querying an entry.
-    pub fn new(address_space: AddressSpaceId, executor: Arc<dyn CodeExecutor<Arch>>) -> Self {
+    pub fn new<E: CodeExecutor<Arch>>(address_space: AddressSpaceId, executor: E) -> Self {
         Self {
             id: DomainId {
                 address_space,
                 tls_entry: None,
             },
             tls: (),
-            executor,
+            executor: arc_unsize!(Arc::new(executor) => dyn CodeExecutor<Arch>),
         }
     }
 
@@ -151,10 +155,7 @@ impl<Arch: RelocationArch> Domain<Arch, ()> {
 impl Domain<NativeArch, ()> {
     /// Creates a TLS-disabled domain executing code in the current process.
     pub fn native(address_space: AddressSpaceId) -> Self {
-        Self::new(
-            address_space,
-            arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<NativeArch>),
-        )
+        Self::new(address_space, NativeCodeExecutor)
     }
 }
 

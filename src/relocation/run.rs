@@ -77,7 +77,10 @@ where
     Binder: LazyBinder<Arch>,
 {
     /// Sets the runtime-linker observer used during relocation.
-    pub fn observer<NewObs>(self, observer: NewObs) -> RelocatorRun<'cfg, T, Arch, NewObs, Binder>
+    pub fn with_observer<NewObs>(
+        self,
+        observer: NewObs,
+    ) -> RelocatorRun<'cfg, T, Arch, NewObs, Binder>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -106,14 +109,14 @@ where
 
     /// Overrides the relocation binding mode.
     #[inline]
-    pub fn binding(mut self, binding: BindingMode) -> Self {
+    pub fn with_binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
         self
     }
 
     /// Sets precedence between the local and context-global lookup scopes.
     #[inline]
-    pub fn lookup_order(mut self, order: LookupOrder) -> Self {
+    pub fn with_lookup_order(mut self, order: LookupOrder) -> Self {
         self.lookup_order = order;
         self
     }
@@ -130,7 +133,7 @@ where
     /// binding stores a weak reference and therefore does not keep the context
     /// or unrelated global modules alive.
     #[inline]
-    pub fn global_scope(mut self, global: &GlobalScope<Arch>) -> Result<Self> {
+    pub fn with_global_scope(mut self, global: &GlobalScope<Arch>) -> Result<Self> {
         global.check_scope(&self.scope)?;
         self.global = Some(global.clone());
         Ok(self)
@@ -138,7 +141,7 @@ where
 
     /// Admits modules for both eager and deferred lookup.
     /// Incompatible address domains or TLS runtimes are rejected before relocation.
-    pub fn modules<I, R>(mut self, modules: I) -> Result<Self>
+    pub fn with_modules<I, R>(mut self, modules: I) -> Result<Self>
     where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch>>,
@@ -150,7 +153,7 @@ where
     }
 
     /// Attaches a compatible eager and deferred lookup scope.
-    pub fn local_scope(mut self, scope: LocalScope<Arch>) -> Result<Self> {
+    pub fn with_local_scope(mut self, scope: LocalScope<Arch>) -> Result<Self> {
         self.scope.check_scope(&scope)?;
         self.scope = scope;
         Ok(self)

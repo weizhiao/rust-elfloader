@@ -36,10 +36,10 @@ mod tests {
         let image = builder.build().unwrap();
         let expected_addr = image.exports[0].value;
 
-        let config = Loader::new().for_arch::<X86_64Arch>();
+        let config = Loader::new().with_arch::<X86_64Arch>();
         let mut loader = config.run(crate::runtime::Domain::new(
             crate::runtime::AddressSpaceId::PROCESS,
-            crate::sync::arc_unsize!(crate::sync::Arc::new(crate::runtime::NativeCodeExecutor) => dyn crate::runtime::CodeExecutor<X86_64Arch>),
+            crate::runtime::NativeCodeExecutor,
         ));
         let lib = Relocator::new()
             .run(
@@ -50,7 +50,7 @@ mod tests {
             .relocate()
             .unwrap();
 
-        let symbol = unsafe { lib.get::<*const ()>("virtual_func").unwrap() };
+        let symbol = unsafe { lib.get::<*const ()>("virtual_func").unwrap().unwrap() };
         assert_eq!(
             symbol.into_raw() as usize,
             (lib.segments().base() + VmOffset::new(expected_addr)).get(),

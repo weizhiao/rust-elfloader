@@ -97,7 +97,7 @@ impl LoadResult {
 ///     let mut resolver = SearchPathResolver::new();
 ///     resolver.push_fixed_dir("plugins");
 ///
-///     let linker = Linker::new().resolver(resolver);
+///     let linker = Linker::new().with_resolver(resolver);
 ///     let mut context = LinkContext::for_process();
 ///
 ///     let mut run = linker.run();
@@ -105,7 +105,7 @@ impl LoadResult {
 ///     let entry = unsafe {
 ///         context
 ///             .module(loaded.root())?
-///             .get::<extern "C" fn()>("plugin_entry")
+///             .get::<extern "C" fn()>("plugin_entry")?
 ///             .expect("symbol `plugin_entry` not found")
 ///     };
 ///     entry();
@@ -159,17 +159,17 @@ impl Linker {
 
     /// Switch the linker's relocation domain before a loader is attached.
     ///
-    /// This mirrors [`Loader::for_arch`] for the dependency-linking front-end:
+    /// This mirrors [`Loader::with_arch`] for the dependency-linking front-end:
     /// all modules committed through the resulting [`crate::LinkContext`] use
     /// `NewArch`.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn for_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>
+    pub const fn with_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>
     where
         NewArch: RelocationArch,
     {
         Linker {
-            loader: self.loader.for_arch::<NewArch>(),
+            loader: self.loader.with_arch::<NewArch>(),
             resolver: (),
             relocator: self.relocator,
             marker: PhantomData,
@@ -207,7 +207,7 @@ where
     }
 
     /// Sets the key resolver used to resolve root keys and dependencies.
-    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder>
+    pub const fn with_resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder>
     where
         R: Copy,
     {
@@ -226,7 +226,7 @@ where
     /// Sets the relocator template used for loaded modules.
     ///
     /// Dynamic initialization remains deferred until after the module group is committed.
-    pub const fn relocator<NewRelocBinder>(
+    pub const fn with_relocator<NewRelocBinder>(
         self,
         relocator: Relocator<NewRelocBinder>,
     ) -> Linker<Arch, L, R, NewRelocBinder>
@@ -285,7 +285,7 @@ where
 {
     /// Sets the loader template used to load root modules and dependencies.
     #[allow(clippy::type_complexity)]
-    pub const fn loader<NewD, NewM>(
+    pub const fn with_loader<NewD, NewM>(
         self,
         loader: Loader<NewD, Arch, NewM>,
     ) -> Linker<Arch, Loader<NewD, Arch, NewM>, R, RelocBinder>

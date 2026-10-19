@@ -45,8 +45,8 @@ fn bench_load_unload(c: &mut Criterion) {
     let mut group = c.benchmark_group("load_unload");
     for (soname, path) in roots {
         let linker = Linker::new()
-            .loader(Loader::new())
-            .resolver(cache.resolver());
+            .with_loader(Loader::new())
+            .with_resolver(cache.resolver());
         group.bench_function(format!("{soname}/relink"), |b| {
             let mut context = hosts.context();
             b.iter(|| {

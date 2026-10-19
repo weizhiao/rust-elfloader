@@ -21,7 +21,7 @@ use crate::{
 
 /// Defines ELF relocation numbers for a target architecture.
 /// The loader selects the native architecture by default; use
-/// [`crate::Loader::for_arch`] for other targets.
+/// [`crate::Loader::with_arch`] for other targets.
 pub trait RelocationArch: 'static {
     /// Runtime tag for this target architecture.
     const KIND: ArchKind;

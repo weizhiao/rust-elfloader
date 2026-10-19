@@ -128,6 +128,8 @@ impl<
     }
 
     /// Looks up a function or variable by its exact exported name, without mangling.
+    /// Returns `Ok(None)` when absent and an error when resolution fails.
+    /// IFUNCs use the domain's executor. Names are bytes without a trailing NUL.
     ///
     /// # Safety
     /// `T` must match the symbol's type and calling convention.
@@ -142,7 +144,7 @@ impl<
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
-    ///     let awesome_function = lib.get::<unsafe extern "C" fn(f64) -> f64>("awesome_function").unwrap();
+    ///     let awesome_function = lib.get::<unsafe extern "C" fn(f64) -> f64>("awesome_function").expect("symbol lookup failed").unwrap();
     ///     awesome_function(0.42);
     /// }
     /// ```
@@ -157,22 +159,12 @@ impl<
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
-    ///     let awesome_variable = lib.get::<*mut f64>("awesome_variable").unwrap();
+    ///     let awesome_variable = lib.get::<*mut f64>("awesome_variable").expect("symbol lookup failed").unwrap();
     ///     **awesome_variable = 42.0;
     /// };
     /// ```
     #[inline]
-    pub unsafe fn get<'lib, T>(&'lib self, name: impl AsRef<[u8]>) -> Option<Symbol<'lib, T>> {
-        unsafe { self.try_get(name).ok().flatten() }
-    }
-
-    /// Looks up a symbol, returning lookup errors. IFUNCs use the domain's executor.
-    /// Names are bytes without a trailing NUL; strings are also accepted.
-    ///
-    /// # Safety
-    /// `T` must match the resolved symbol's type and calling convention.
-    #[inline]
-    pub unsafe fn try_get<'lib, T>(
+    pub unsafe fn get<'lib, T>(
         &'lib self,
         name: impl AsRef<[u8]>,
     ) -> Result<Option<Symbol<'lib, T>>> {
@@ -180,7 +172,8 @@ impl<
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
-    /// Load a versioned symbol from the ELF object.
+    /// Looks up a versioned symbol, using the domain's executor for IFUNCs.
+    /// Names and versions are bytes without a trailing NUL.
     ///
     /// # Safety
     /// Users of this API must specify the correct type of the function
@@ -195,7 +188,7 @@ impl<
     /// # let mut loader = config.run(domain);
     /// # let raw = loader.load_dylib(ElfFile::from_path("target/liba.so").unwrap()).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
-    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
+    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").expect("symbol lookup failed").unwrap() };
     /// ```
     ///
     /// # Arguments
@@ -203,26 +196,12 @@ impl<
     /// * `version` - The version of the symbol to look up
     ///
     /// # Returns
-    /// * `Some(symbol)` - If the symbol is found
-    /// * `None` - If the symbol is not found
+    /// * `Ok(Some(symbol))` - If the symbol is found
+    /// * `Ok(None)` - If the symbol is not found
+    /// * `Err(error)` - If symbol resolution fails
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn get_version<'lib, T>(
-        &'lib self,
-        name: impl AsRef<[u8]>,
-        version: impl AsRef<[u8]>,
-    ) -> Option<Symbol<'lib, T>> {
-        unsafe { self.try_get_version(name, version).ok().flatten() }
-    }
-
-    /// Looks up a versioned symbol, returning lookup errors. IFUNCs use the domain's executor.
-    /// Names and versions are bytes without a trailing NUL.
-    ///
-    /// # Safety
-    /// `T` must match the resolved symbol's type and calling convention.
-    #[cfg(feature = "version")]
-    #[inline]
-    pub unsafe fn try_get_version<'lib, T>(
         &'lib self,
         name: impl AsRef<[u8]>,
         version: impl AsRef<[u8]>,

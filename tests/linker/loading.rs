@@ -176,7 +176,7 @@ fn commits_resolver_modules() {
     };
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
-    let linker = Linker::new().resolver(resolver);
+    let linker = Linker::new().with_resolver(resolver);
     let root = linker
         .run()
         .load(&mut context, "root")
@@ -221,7 +221,7 @@ fn commits_resolver_modules() {
 #[test]
 fn loads_module_root() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(SyntheticRootResolver);
+    let linker = Linker::new().with_resolver(SyntheticRootResolver);
 
     let first = linker.run().load(&mut context, "root").unwrap();
     assert!(
@@ -236,6 +236,7 @@ fn loads_module_root() {
             .module(first.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("synthetic_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 42);
@@ -255,7 +256,7 @@ fn loads_module_root() {
 fn loads_resolved_graph() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
-        .resolver(ResolvedGraphResolver {
+        .with_resolver(ResolvedGraphResolver {
             pin_dependency: false,
         })
         .run()
@@ -276,7 +277,7 @@ fn loads_resolved_graph() {
 fn resolver_pins_dependency() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
-        .resolver(ResolvedGraphResolver {
+        .with_resolver(ResolvedGraphResolver {
             pin_dependency: true,
         })
         .run()
@@ -305,7 +306,7 @@ fn resolver_pins_existing_dependency() {
         .expect("failed to insert dependency");
     let dependency_id = dependency.id();
     let loaded = Linker::new()
-        .resolver(ResolvedGraphResolver {
+        .with_resolver(ResolvedGraphResolver {
             pin_dependency: true,
         })
         .run()
@@ -324,7 +325,7 @@ fn resolver_pins_existing_dependency() {
 #[test]
 fn rollback_removes_resolver_pin() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(ResolvedGraphResolver {
+    let linker = Linker::new().with_resolver(ResolvedGraphResolver {
         pin_dependency: true,
     });
     let mut run = linker.run();
@@ -350,7 +351,7 @@ fn rollback_removes_pin_from_existing_dependency() {
             ),
         ))
         .unwrap();
-    let linker = Linker::new().resolver(ResolvedGraphResolver {
+    let linker = Linker::new().with_resolver(ResolvedGraphResolver {
         pin_dependency: true,
     });
     let mut run = linker.run();
@@ -373,7 +374,7 @@ fn rollback_removes_pin_from_existing_dependency() {
 fn nodelete_remains_loaded() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
-        .resolver(SingleBinaryResolver {
+        .with_resolver(SingleBinaryResolver {
             key: "nodelete",
             name: "libnodelete.so",
             data: &fixtures().nodelete,
@@ -389,7 +390,7 @@ fn nodelete_remains_loaded() {
 
 #[test]
 fn nodelete_rolls_back_with_failed_load() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "nodelete",
         name: "libnodelete.so",
         data: &fixtures().nodelete,
@@ -419,7 +420,7 @@ fn scan_loads_synthetic_dependency() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let root = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should accept a synthetic dependency");
@@ -454,7 +455,7 @@ fn unresolved_dependency_does_not_commit() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let error = Linker::new()
-        .resolver(SingleBinaryResolver {
+        .with_resolver(SingleBinaryResolver {
             key: "root",
             name: "unresolved_root.so",
             data: fixtures().dependent,
@@ -472,7 +473,7 @@ fn unresolved_dependency_does_not_commit() {
 
 #[test]
 fn publish_preserves_key_order() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "pending.so",
         data: fixtures().provider,
@@ -514,7 +515,7 @@ fn publish_rejects_occupied_source() {
             .expect("failed to load provider")
     };
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "unused",
         name: "unused.so",
         data: fixtures().provider,
@@ -563,7 +564,7 @@ fn publish_rejects_reloaded_dependency() {
     let dep_lease = context
         .insert(GraphModule::new(DEP_KEY, dep.clone()))
         .expect("failed to insert dependency");
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "existing_dep_root.so",
         data: fixtures().dependent,
@@ -599,7 +600,7 @@ fn publish_rejects_reloaded_global_provider() {
         .unwrap();
     let provider_instance = context.module(provider.id()).unwrap().state().instance_id();
     context.promote_global(provider.id()).unwrap();
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
         data: fixtures().global,
@@ -641,7 +642,7 @@ fn global_scope_binds_and_retains_provider() {
         .unwrap();
     context.promote_global(provider.id()).unwrap();
     assert_eq!(context.global_scope().modules().len(), 1);
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
         data: fixtures().global,
@@ -652,6 +653,7 @@ fn global_scope_binds_and_retains_provider() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("global_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
 
@@ -734,7 +736,7 @@ fn unused_global_is_not_retained() {
         .insert(GraphModule::new("unused-global", global))
         .unwrap();
     context.promote_global(global.id()).unwrap();
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "root.so",
         data: fixtures().provider,
@@ -756,7 +758,7 @@ fn observer_binding_retains_provider() {
         ))
         .unwrap();
     context.promote_global(provider.id()).unwrap();
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "bound",
         name: "bound.so",
         data: fixtures().global,
@@ -774,7 +776,7 @@ fn observer_binding_retains_provider() {
 #[test]
 fn relocation_reads_current_globals() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
         data: fixtures().global,
@@ -797,6 +799,7 @@ fn relocation_reads_current_globals() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("global_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
 
@@ -807,7 +810,7 @@ fn relocation_reads_current_globals() {
 
 #[test]
 fn publish_rejects_reloaded_root() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "reloaded_root.so",
         data: fixtures().provider,
@@ -840,7 +843,7 @@ fn loads_dynamic_exec() {
 
     for scan_first in [false, true] {
         let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-        let linker = Linker::new().resolver(MultiBinaryResolver {
+        let linker = Linker::new().with_resolver(MultiBinaryResolver {
             root: "root",
             modules: vec![
                 BinaryModule {
@@ -869,7 +872,8 @@ fn loads_dynamic_exec() {
 
 #[test]
 fn repeated_loads_acquire_the_root() {
-    let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
+    let linker =
+        Linker::new().with_resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let first = linker
@@ -902,7 +906,7 @@ fn repeated_loads_acquire_the_root() {
 #[test]
 fn pinned_dependency_does_not_retain_released_root() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let linker = Linker::new().resolver(dependency_resolver("root.so", "dep.so"));
+    let linker = Linker::new().with_resolver(dependency_resolver("root.so", "dep.so"));
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = linker
         .run()
@@ -940,7 +944,8 @@ fn pinned_dependency_does_not_retain_released_root() {
 
 #[test]
 fn rollback_releases_existing_root() {
-    let linker = Linker::new().resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
+    let linker =
+        Linker::new().with_resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
     let mut run = linker.run();
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = run
@@ -987,7 +992,7 @@ fn relocates_dependencies_first() {
     }
 
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(resolver);
+    let linker = Linker::new().with_resolver(resolver);
     let loaded = linker
         .run()
         .with_observer(PlanningObserver(Rc::clone(&planned)))
@@ -1007,7 +1012,7 @@ fn relocates_dependencies_first() {
 #[test]
 fn phased_load_initializes_dependencies_first() {
     let resolver = dependency_resolver("phased_root.so", "phased_dep.so");
-    let linker = Linker::new().resolver(resolver);
+    let linker = Linker::new().with_resolver(resolver);
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut run = linker
         .run()
@@ -1059,7 +1064,7 @@ fn phased_load_initializes_dependencies_first() {
 
 #[test]
 fn publish_rejects_other_context() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "context_bound.so",
         data: fixtures().provider,
@@ -1086,7 +1091,7 @@ fn publish_rejects_other_context() {
 
 #[test]
 fn rollback_rejects_other_context() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "context_bound.so",
         data: fixtures().provider,
@@ -1117,7 +1122,7 @@ fn rollback_rejects_other_context() {
 
 #[test]
 fn failed_init_can_roll_back() {
-    let linker = Linker::new().resolver(SingleBinaryResolver {
+    let linker = Linker::new().with_resolver(SingleBinaryResolver {
         key: "root",
         name: "failing_init.so",
         data: fixtures().provider,

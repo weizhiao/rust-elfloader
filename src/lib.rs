@@ -56,11 +56,11 @@
 //!
 //!     let lib = Relocator::new()
 //!         .run(Loader::new().run(domain).load_dylib("path/to/plugin.so")?)
-//!         .modules([host])?
+//!         .with_modules([host])?
 //!         .relocate()?;
 //!
 //!     let run = unsafe {
-//!         lib.get::<extern "C" fn(i32) -> i32>("run")
+//!         lib.get::<extern "C" fn(i32) -> i32>("run")?
 //!             .expect("symbol `run` not found")
 //!     };
 //!     assert_eq!(run(21), 42);
@@ -91,14 +91,14 @@
 //!     resolver.push_runpath();
 //!
 //!     let loaded = Linker::new()
-//!         .resolver(resolver)
+//!         .with_resolver(resolver)
 //!         .run()
 //!         .load(&mut context, root)?;
 //!
 //!     let run = unsafe {
 //!         context
 //!             .module(loaded.root())?
-//!             .get::<extern "C" fn() -> i32>("run")
+//!             .get::<extern "C" fn() -> i32>("run")?
 //!             .expect("symbol `run` not found")
 //!     };
 //!     let _ = run();

@@ -14,7 +14,7 @@ fn loads_dependency_chain() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
-        .resolver(crate::fixture::search_path_resolver())
+        .with_resolver(crate::fixture::search_path_resolver())
         .run()
         .load(
             &mut context,
@@ -27,6 +27,7 @@ fn loads_dependency_chain() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("root_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(root_value(), 3);
@@ -43,7 +44,7 @@ fn resolves_committed_by_source_identity() {
 
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     assert_eq!(
@@ -76,7 +77,7 @@ fn inherits_rpath() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
-        .resolver(crate::fixture::search_path_resolver())
+        .with_resolver(crate::fixture::search_path_resolver())
         .run()
         .load(
             &mut context,
@@ -115,6 +116,7 @@ fn inherits_rpath() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("rpath_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 3);
@@ -127,7 +129,7 @@ fn scan_inherits_rpath() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
-        .resolver(crate::fixture::search_path_resolver())
+        .with_resolver(crate::fixture::search_path_resolver())
         .run()
         .load_scan_first(
             &mut context,
@@ -140,6 +142,7 @@ fn scan_inherits_rpath() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("rpath_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 3);
@@ -149,7 +152,7 @@ fn scan_inherits_rpath() {
 fn loads_from_module_rpath() {
     let fixtures = crate::fixture::fixtures();
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
         .run()
@@ -169,6 +172,7 @@ fn loads_from_module_rpath() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("rpath_leaf")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 1);
@@ -178,7 +182,7 @@ fn loads_from_module_rpath() {
 fn loads_mapped_from_module_rpath() {
     let fixtures = crate::fixture::fixtures();
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
         .run()
@@ -208,6 +212,7 @@ fn loads_mapped_from_module_rpath() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("rpath_middle")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 2);
@@ -222,7 +227,7 @@ fn reuses_soname() {
     fs::copy(&fixtures.rpath_leaf_path, &alias).unwrap();
 
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
     let first = linker
         .run()
         .load(&mut context, PathBuf::from(alias.to_str().unwrap()))
@@ -263,6 +268,7 @@ fn reuses_soname() {
             .module(root.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("rpath_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(value(), 3);
@@ -281,7 +287,7 @@ fn reuses_file() {
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
     let first = linker.run().load(&mut context, original.clone()).unwrap();
     let second = linker.run().load(&mut context, alias.clone()).unwrap();
 
@@ -319,7 +325,7 @@ fn imports_reuse_file() {
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let next = PathBuf::from(next_path.to_str().unwrap());
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
     let mut source = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let source_module = linker.run().load(&mut source, original).unwrap();
     let mut target = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
@@ -350,7 +356,7 @@ fn rejects_reloaded_file() {
 
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
-    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let linker = Linker::new().with_resolver(crate::fixture::search_path_resolver());
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let mut run = linker.run();
     let loaded = run.load(&mut context, original.clone()).unwrap();
@@ -377,7 +383,7 @@ fn scan_loads_dependency_chain() {
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
 
     let loaded = Linker::new()
-        .resolver(crate::fixture::search_path_resolver())
+        .with_resolver(crate::fixture::search_path_resolver())
         .run()
         .load_scan_first(
             &mut context,
@@ -390,6 +396,7 @@ fn scan_loads_dependency_chain() {
             .module(loaded.root())
             .unwrap()
             .get::<extern "C" fn() -> i32>("root_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert_eq!(root_value(), 3);
@@ -422,7 +429,7 @@ fn dynamic_dirs_precede_static_dirs() {
 
     let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .load(&mut context, PathBuf::from("libpick.so"))
         .unwrap();

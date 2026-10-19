@@ -140,20 +140,9 @@ where
     /// `T` must match the symbol's type and calling convention. A TLS address may
     /// only be used in the resolving thread while its module and thread are alive.
     #[inline]
-    pub unsafe fn try_get<T>(&self, name: impl AsRef<[u8]>) -> Result<Option<Symbol<'_, T>>> {
+    pub unsafe fn get<T>(&self, name: impl AsRef<[u8]>) -> Result<Option<Symbol<'_, T>>> {
         let addr = lookup_symbol(self, &mut SymbolLookup::new(name.as_ref()))?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
-    }
-
-    /// Resolves a typed symbol, discarding lookup errors.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the symbol's type and calling convention. A TLS address may
-    /// only be used in the resolving thread while its module and thread are alive.
-    #[inline]
-    pub unsafe fn get<T>(&self, name: impl AsRef<[u8]>) -> Option<Symbol<'_, T>> {
-        unsafe { self.try_get(name).ok().flatten() }
     }
 
     /// Tries to resolve a versioned typed symbol while this module remains borrowed.
@@ -166,7 +155,7 @@ where
     /// only be used in the resolving thread while its module and thread are alive.
     #[cfg(feature = "version")]
     #[inline]
-    pub unsafe fn try_get_version<T>(
+    pub unsafe fn get_version<T>(
         &self,
         name: impl AsRef<[u8]>,
         version: impl AsRef<[u8]>,
@@ -176,22 +165,6 @@ where
             &mut SymbolLookup::with_version(name.as_ref(), version.as_ref()),
         )?;
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
-    }
-
-    /// Resolves a versioned typed symbol, discarding lookup errors.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the symbol's type and calling convention. A TLS address may
-    /// only be used in the resolving thread while its module and thread are alive.
-    #[cfg(feature = "version")]
-    #[inline]
-    pub unsafe fn get_version<T>(
-        &self,
-        name: impl AsRef<[u8]>,
-        version: impl AsRef<[u8]>,
-    ) -> Option<Symbol<'_, T>> {
-        unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 }
 

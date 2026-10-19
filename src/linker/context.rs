@@ -979,7 +979,7 @@ mod tests {
                 &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
                 "stateful",
             )
-            .with_user_data(String::from("module data")),
+            .with_data(String::from("module data")),
         );
         let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
         let id = context.insert(node("stateful", module.clone())).unwrap();

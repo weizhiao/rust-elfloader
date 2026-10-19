@@ -108,7 +108,7 @@ fn arena_materializes_section_bytes() {
     };
 
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -123,6 +123,7 @@ fn arena_materializes_section_bytes() {
         let module = context.module(loaded.root()).unwrap();
         let ptr = module
             .get::<u8>("value")
+            .expect("symbol lookup failed")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
@@ -189,7 +190,7 @@ fn arena_supports_assign_next() {
     };
 
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -206,6 +207,7 @@ fn arena_supports_assign_next() {
         let module = context.module(loaded.root()).unwrap();
         let ptr = module
             .get::<u8>("value")
+            .expect("symbol lookup failed")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
@@ -237,7 +239,7 @@ fn defaults_to_section_regions() {
     };
 
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -254,6 +256,7 @@ fn defaults_to_section_regions() {
         let module = context.module(loaded.root()).unwrap();
         let ptr = module
             .get::<u8>("value")
+            .expect("symbol lookup failed")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
@@ -287,7 +290,7 @@ fn missing_sections_become_opaque() {
     };
 
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -308,6 +311,7 @@ fn missing_sections_become_opaque() {
         let module = context.module(loaded.root()).unwrap();
         let ptr = module
             .get::<u8>("value")
+            .expect("symbol lookup failed")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
@@ -338,7 +342,7 @@ fn invalid_sections_become_opaque() {
     };
 
     let _loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -385,7 +389,7 @@ fn whole_dso_supports_section_overrides() {
     };
 
     let loaded = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -408,6 +412,7 @@ fn whole_dso_supports_section_overrides() {
         let module = context.module(loaded.root()).unwrap();
         let ptr = module
             .get::<u8>("value")
+            .expect("symbol lookup failed")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
@@ -445,7 +450,7 @@ fn section_data_rejects_section_regions() {
     };
 
     let err = Linker::new()
-        .resolver(resolver)
+        .with_resolver(resolver)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));

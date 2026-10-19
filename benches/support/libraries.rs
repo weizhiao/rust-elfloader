@@ -9,9 +9,7 @@ use elf_loader::{
     input::ElfFile,
     linker::{GraphModule, LdCache, SearchConfig, SearchPathResolver},
     relocation::RelocationArch,
-    tls::{
-        DefaultTlsResolver, TlsContext, TlsIndex, TlsInfo, TlsModuleId, TlsProvider, TlsResolver,
-    },
+    tls::{DefaultTlsResolver, TlsContext, TlsIndex, TlsInfo, TlsModuleId, TlsProvider},
 };
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
 use std::{
@@ -234,7 +232,7 @@ unsafe fn bridge_exports(
             .unwrap(),
         soname.to_owned(),
     )
-    .with_user_data(HostModuleData {
+    .with_data(HostModuleData {
         _library: library.clone(),
     });
     if let Some(header) = elf

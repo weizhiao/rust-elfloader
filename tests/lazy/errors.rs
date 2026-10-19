@@ -14,7 +14,7 @@ fn requires_binder() {
         (BindingMode::Lazy, None),
         (BindingMode::Eager, Some(BindingMode::Lazy)),
     ] {
-        let relocator = Relocator::new().binding(configured);
+        let relocator = Relocator::new().with_binding(configured);
         let run = relocator.run(
             Loader::new()
                 .run(elf_loader::Domain::native(
@@ -24,7 +24,7 @@ fn requires_binder() {
                 .expect("failed to load lazy-binding consumer"),
         );
         let run = match override_mode {
-            Some(binding) => run.binding(binding),
+            Some(binding) => run.with_binding(binding),
             None => run,
         };
         let error = run

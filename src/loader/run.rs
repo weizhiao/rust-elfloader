@@ -95,7 +95,7 @@ where
     M: Mmap,
 {
     /// Reads and validates the ELF header against the loader's target architecture.
-    /// Use [`Loader::for_arch`] to select a different target.
+    /// Use [`Loader::with_arch`] to select a different target.
     pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
         read_ehdr::<Arch>(object)
     }
@@ -217,7 +217,7 @@ where
 
     /// Maps a shared object (`ET_DYN`) from a path, bytes, or another [`IntoElfReader`] input.
     /// Pass the raw image to [`crate::Relocator::run`] to relocate it.
-    /// Select non-native targets with [`Loader::for_arch`] before creating this run.
+    /// Select non-native targets with [`Loader::with_arch`] before creating this run.
     ///
     /// # Examples
     /// ```no_run

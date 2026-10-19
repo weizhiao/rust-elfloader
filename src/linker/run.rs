@@ -94,7 +94,7 @@ where
 
     /// Sets symbol-scope precedence for modules relocated by this run.
     #[inline]
-    pub fn lookup_order(mut self, order: LookupOrder) -> Self {
+    pub fn with_lookup_order(mut self, order: LookupOrder) -> Self {
         self.lookup_order = order;
         self
     }
@@ -335,11 +335,11 @@ where
                         .linker
                         .relocator
                         .run(raw)
-                        .local_scope(scope)?
-                        .global_scope(global)?
-                        .lookup_order(self.lookup_order)
+                        .with_local_scope(scope)?
+                        .with_global_scope(global)?
+                        .with_lookup_order(self.lookup_order)
                         .symbol_registry(Arc::clone(symbols))
-                        .observer(&mut self.observer)
+                        .with_observer(&mut self.observer)
                         .relocate()?;
                     session.push_ready(id, key, loaded, direct_deps, retained);
                 } else {

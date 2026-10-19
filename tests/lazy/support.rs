@@ -38,7 +38,7 @@ pub(crate) fn load_provider() -> Image {
 
 pub(crate) fn load_lazy(provider: &Image) -> Image {
     Relocator::new()
-        .lazy_binder(NativeLazyBinder::new())
+        .with_lazy_binder(NativeLazyBinder::new())
         .run(
             LOADER
                 .run(elf_loader::Domain::native(
@@ -50,7 +50,7 @@ pub(crate) fn load_lazy(provider: &Image) -> Image {
                 ))
                 .expect("failed to load lazy-binding consumer"),
         )
-        .modules([provider])
+        .with_modules([provider])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate lazy-binding consumer")
@@ -69,7 +69,7 @@ pub(crate) fn load_eager(provider: &Image) -> Image {
                 ))
                 .expect("failed to load bind-now consumer"),
         )
-        .modules([provider])
+        .with_modules([provider])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate bind-now consumer")
@@ -107,6 +107,7 @@ pub(crate) fn symbol(image: &Image, name: &str) -> u64 {
     unsafe {
         image
             .get::<u8>(name)
+            .expect("symbol lookup failed")
             .unwrap_or_else(|| panic!("missing symbol {name}"))
             .into_raw() as u64
     }
@@ -117,6 +118,7 @@ pub(crate) fn call(image: &Image, name: &str) -> i32 {
         core::mem::transmute(
             image
                 .get::<*const ()>(name)
+                .expect("symbol lookup failed")
                 .unwrap_or_else(|| panic!("missing entry symbol {name}"))
                 .into_raw(),
         )

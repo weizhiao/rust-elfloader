@@ -32,7 +32,7 @@ fn main() -> Result<()> {
                 .run(Domain::native(AddressSpaceId::PROCESS))
                 .load_object(fixtures.base_object_str())?,
         )
-        .modules([host_symbols()])?
+        .with_modules([host_symbols()])?
         .relocate()?;
     let middle = Relocator::new()
         .run(
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
                 .run(Domain::native(AddressSpaceId::PROCESS))
                 .load_dylib(fixtures.middle_str())?,
         )
-        .modules([
+        .with_modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
         ])?
@@ -51,21 +51,30 @@ fn main() -> Result<()> {
                 .run(Domain::native(AddressSpaceId::PROCESS))
                 .load_object(fixtures.leaf_object_str())?,
         )
-        .modules([
+        .with_modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
             ModuleHandle::from(&middle),
         ])?
         .relocate()?;
-    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
+    let f = unsafe {
+        base.get::<extern "C" fn() -> i32>("base_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 1);
     let f = unsafe {
         middle
             .get::<extern "C" fn() -> i32>("middle_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert!(f() == 2);
-    let f = unsafe { leaf.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let f = unsafe {
+        leaf.get::<extern "C" fn() -> i32>("leaf_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 3);
     Ok(())
 }

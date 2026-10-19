@@ -61,6 +61,7 @@ impl TlsScenario {
             core::mem::transmute(
                 self.consumer
                     .get::<*const ()>(&name)
+                    .expect("symbol lookup failed")
                     .unwrap_or_else(|| panic!("missing TLS helper symbol {name}"))
                     .into_raw(),
             )
@@ -119,7 +120,7 @@ fn load() -> TlsScenario {
                 .load_dylib(ElfBinary::new("consumer.so", &output.data))
                 .expect("failed to load TLS consumer"),
         )
-        .modules([&provider])
+        .with_modules([&provider])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate TLS consumer");

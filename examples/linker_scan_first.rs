@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     let mut context = LinkContext::for_process();
 
     let loaded = Linker::new()
-        .resolver(fixture_support::search_path_resolver())
+        .with_resolver(fixture_support::search_path_resolver())
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(ConfigureRootSectionRegions);
@@ -36,7 +36,12 @@ fn main() -> Result<()> {
         .load_scan_first(&mut context, PathBuf::from(fixtures.leaf_str()))?;
 
     let module = context.module(loaded.root())?;
-    let leaf_value = unsafe { module.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let leaf_value = unsafe {
+        module
+            .get::<extern "C" fn() -> i32>("leaf_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     let value = leaf_value();
     assert_eq!(value, 3);
     println!(

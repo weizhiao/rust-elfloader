@@ -347,7 +347,7 @@ fn finalizer_runs_on_drop() {
     let loaded_object = Relocator::new()
         .run(
             elf_loader::Loader::new()
-                .run(Domain::new(AddressSpaceId::PROCESS, Arc::new(executor)))
+                .run(Domain::new(AddressSpaceId::PROCESS, executor))
                 .load_object(ElfBinary::new("test_static_fini.o", &object))
                 .expect("failed to load object"),
         )
@@ -431,12 +431,12 @@ fn defers_initialization() {
             elf_loader::Loader::new()
                 .run(Domain::new(
                     AddressSpaceId::PROCESS,
-                    Arc::new(RecordingExecutor(Arc::clone(&calls))),
+                    RecordingExecutor(Arc::clone(&calls)),
                 ))
                 .load_object(ElfBinary::new("a.o", object))
                 .expect("failed to load object"),
         )
-        .observer(InitObserver(init_addr))
+        .with_observer(InitObserver(init_addr))
         .relocate()
         .expect("failed to relocate object");
 

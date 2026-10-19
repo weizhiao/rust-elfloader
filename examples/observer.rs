@@ -82,8 +82,8 @@ impl LinkerObserver<UserData> for Observer {}
 fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
     let linker = Linker::new()
-        .loader(LOADER)
-        .resolver(fixture_support::search_path_resolver());
+        .with_loader(LOADER)
+        .with_resolver(fixture_support::search_path_resolver());
     let mut context = LinkContext::for_process();
     let middle = linker
         .run()
@@ -94,6 +94,7 @@ fn main() -> Result<()> {
     let middle_value = unsafe {
         module
             .get::<extern "C" fn() -> i32>("middle_value")
+            .expect("symbol lookup failed")
             .expect("missing middle_value")
     };
     println!(

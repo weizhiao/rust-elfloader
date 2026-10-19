@@ -27,7 +27,7 @@ fn main() {
                 .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
                 .unwrap(),
         )
-        .modules([host.clone()])
+        .with_modules([host.clone()])
         .unwrap()
         .relocate()
         .unwrap();
@@ -37,7 +37,7 @@ fn main() {
                 .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
                 .unwrap(),
         )
-        .modules([host.clone(), ModuleHandle::from(&liba)])
+        .with_modules([host.clone(), ModuleHandle::from(&liba)])
         .unwrap()
         .relocate()
         .unwrap();
@@ -47,14 +47,26 @@ fn main() {
                 .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
                 .unwrap(),
         )
-        .modules([host.clone(), ModuleHandle::from(&libb)])
+        .with_modules([host.clone(), ModuleHandle::from(&libb)])
         .unwrap()
         .relocate()
         .unwrap();
-    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
+    let f = unsafe {
+        liba.get::<extern "sysv64" fn() -> i32>("a")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 1);
-    let f = unsafe { libb.get::<extern "sysv64" fn() -> i32>("b").unwrap() };
+    let f = unsafe {
+        libb.get::<extern "sysv64" fn() -> i32>("b")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 2);
-    let f = unsafe { libc.get::<extern "sysv64" fn() -> i32>("c").unwrap() };
+    let f = unsafe {
+        libc.get::<extern "sysv64" fn() -> i32>("c")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 3);
 }

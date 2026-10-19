@@ -120,7 +120,7 @@ where
 
 impl Loader<(), NativeArch, DefaultMmap> {
     /// Creates a loader for [`NativeArch`] with the default memory mapper and `()` user data.
-    /// Use [`Self::for_arch`] to select another architecture.
+    /// Use [`Self::with_arch`] to select another architecture.
     #[inline]
     pub const fn new() -> Self {
         Self {
@@ -159,14 +159,7 @@ where
             }
         }
     }
-}
 
-impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
-where
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    M: Mmap,
-{
     #[inline]
     pub(crate) const fn mapper(&self) -> &M {
         &self.mapper
@@ -237,25 +230,9 @@ where
         self.force_static_tls = enabled;
         self
     }
-}
 
-/// Select the target architecture before setting the user-data type.
-///
-/// ```no_run
-/// use elf_loader::Loader;
-/// use elf_loader::arch::x86_64::X86_64Arch;
-///
-/// let _loader = Loader::new()
-///     .for_arch::<X86_64Arch>()
-///     .with_data::<()>();
-/// ```
-impl<Arch, M> Loader<(), Arch, M>
-where
-    Arch: RelocationArch,
-    M: Mmap,
-{
     /// Returns a new loader with a custom `Mmap` backend.
-    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<(), Arch, NewMmap>
+    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<D, Arch, NewMmap>
     where
         NewMmap: Mmap,
         M: Copy,
@@ -265,9 +242,9 @@ where
 
     /// Selects the architecture used to validate ELF headers and apply relocations.
     ///
-    /// Call this before [`Self::with_data`]. For non-native execution, provide a
-    /// matching executor through [`Domain`] when calling [`Loader::run`].
-    pub const fn for_arch<NewArch>(self) -> Loader<(), NewArch, M>
+    /// For non-native execution, provide a matching executor through [`Domain`]
+    /// when calling [`Loader::run`].
+    pub const fn with_arch<NewArch>(self) -> Loader<D, NewArch, M>
     where
         NewArch: RelocationArch,
     {
@@ -283,7 +260,10 @@ mod tests {
     #[test]
     fn run_preserves_runtime_domain() {
         let domain = Domain::native(AddressSpaceId::new());
-        let loader = Loader::new().with_data::<()>();
+        let loader = Loader::new()
+            .with_data::<()>()
+            .with_arch::<crate::arch::NativeArch>()
+            .with_mmap(crate::os::DefaultMmap::new());
         let run = loader.run(domain.clone());
 
         assert_eq!(run.domain.id(), domain.id());

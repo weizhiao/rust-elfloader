@@ -99,9 +99,9 @@ fn observes_symbol_binding() {
                 .load_dylib(ElfBinary::new("consumer.so", &fixtures.dependent))
                 .expect("failed to load symbol consumer"),
         )
-        .modules([&provider])
+        .with_modules([&provider])
         .expect("incompatible relocation modules")
-        .observer(BindingRecorder(Arc::clone(&state)))
+        .with_observer(BindingRecorder(Arc::clone(&state)))
         .relocate()
         .expect("failed to relocate symbol consumer");
 
@@ -110,8 +110,12 @@ fn observes_symbol_binding() {
         all(any(target_os = "linux", target_os = "android"), feature = "libc")
     ))]
     {
-        let dependent = unsafe { _loaded.get::<extern "C" fn() -> i32>("dependent_value") }
-            .expect("missing symbol");
+        let dependent = unsafe {
+            _loaded
+                .get::<extern "C" fn() -> i32>("dependent_value")
+                .expect("symbol lookup failed")
+        }
+        .expect("missing symbol");
         assert_eq!(dependent(), 42);
     }
 
@@ -187,7 +191,7 @@ fn handles_relocation_hooks() {
                 .load_dylib(ElfBinary::new("unresolved.so", bytes))
                 .expect("failed to load unresolved image"),
         )
-        .observer(FallbackRecorder(Arc::clone(&state)))
+        .with_observer(FallbackRecorder(Arc::clone(&state)))
         .relocate()
         .expect("observer should handle unresolved symbols");
 
@@ -252,7 +256,7 @@ fn defers_initialization() {
     let loaded = Relocator::new()
         .defer_init()
         .run(raw)
-        .observer(LifecycleRecorder(Arc::clone(&state)))
+        .with_observer(LifecycleRecorder(Arc::clone(&state)))
         .relocate()
         .expect("dynamic image should relocate without initialization");
 

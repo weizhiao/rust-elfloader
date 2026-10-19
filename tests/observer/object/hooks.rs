@@ -65,7 +65,7 @@ fn exports_survive_init_symtab() {
                 .load_object(ElfBinary::new("dependent.o", &fixtures.dependent_object))
                 .expect("failed to load object"),
         )
-        .modules([&provider])
+        .with_modules([&provider])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("relocation failed");
@@ -75,6 +75,7 @@ fn exports_survive_init_symtab() {
         unsafe {
             loaded_object
                 .get::<extern "C" fn() -> i32>("dependent_value")
+                .expect("symbol lookup failed")
                 .is_some()
         },
         "runtime object exports should survive init metadata release"
@@ -156,7 +157,7 @@ fn exposes_sections() {
                 .load_object(elf_loader::input::ElfBinary::new("a.o", object))
                 .expect("failed to load object"),
         )
-        .observer(MetadataObserver)
+        .with_observer(MetadataObserver)
         .relocate()
         .expect("relocation failed");
 
@@ -218,12 +219,17 @@ fn can_clear_exports() {
                 .load_object(elf_loader::input::ElfBinary::new("a.o", object))
                 .expect("failed to load object"),
         )
-        .observer(ClearExports)
+        .with_observer(ClearExports)
         .relocate()
         .expect("relocation failed");
 
     assert!(
-        unsafe { loaded_object.get::<i32>(VALUE) }.is_none(),
+        unsafe {
+            loaded_object
+                .get::<i32>(VALUE)
+                .expect("symbol lookup failed")
+        }
+        .is_none(),
         "object export event should be able to replace the default exports"
     );
 }

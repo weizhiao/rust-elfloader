@@ -149,14 +149,19 @@ fn relocations_match() {
                 ))
                 .expect("failed to load object"),
         )
-        .modules([host_symbols.module()])
+        .with_modules([host_symbols.module()])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("relocation failed");
     assert!(loaded_object.state().is_initialized());
 
-    let data_base =
-        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME).unwrap().into_raw() } as usize;
+    let data_base = unsafe {
+        loaded_object
+            .get::<i32>(LOCAL_VAR_NAME)
+            .expect("symbol lookup failed")
+            .unwrap()
+            .into_raw()
+    } as usize;
     let external_func_addr = host_symbols.func;
     let external_var_addr = host_symbols.var;
 
@@ -245,13 +250,18 @@ fn addends_apply() {
                 ))
                 .expect("failed to load object"),
         )
-        .modules([host_symbols.module()])
+        .with_modules([host_symbols.module()])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("relocation failed");
 
-    let data_base =
-        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME).unwrap().into_raw() } as usize;
+    let data_base = unsafe {
+        loaded_object
+            .get::<i32>(LOCAL_VAR_NAME)
+            .expect("symbol lookup failed")
+            .unwrap()
+            .into_raw()
+    } as usize;
     let relocation = relocation_for_symbol(&object_file, 1, EXTERNAL_VAR_NAME);
     assert_eq!(relocation.section, SectionKind::Data);
 

@@ -333,7 +333,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
             ),
             tls: None,
-            executor: domain.executor().clone(),
+            executor: domain.shared_executor(),
             resolve_hook: (),
             user_data: (),
             names: Vec::new(),
@@ -346,7 +346,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
 impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
     /// Replaces the user data associated with this synthetic module.
     #[inline]
-    pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD, R> {
+    pub fn with_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD, R> {
         SyntheticModule {
             state: self.state,
             name: self.name,
@@ -859,7 +859,7 @@ mod tests {
         )
         .with_tls(tls)
         .unwrap()
-        .with_user_data(SyntheticData { tag: 7 });
+        .with_data(SyntheticData { tag: 7 });
 
         assert_eq!(
             <SyntheticModule<NativeArch, SyntheticData> as Module<NativeArch>>::tls(&module)

@@ -27,12 +27,12 @@ use super::BindingMode;
 ///     let raw = Loader::new().run(domain).load_dylib("plugin.so")?;
 ///     let loaded = Relocator::new()
 ///         .run(raw)
-///         .modules([host])?
+///         .with_modules([host])?
 ///         .relocate()?;
 ///
 ///     let run = unsafe {
 ///         loaded
-///             .get::<extern "C" fn()>("run")
+///             .get::<extern "C" fn()>("run")?
 ///             .expect("symbol `run` not found")
 ///     };
 ///     run();
@@ -86,13 +86,13 @@ impl<Binder> Relocator<Binder> {
     /// `BindingMode::Default` follows the ELF object's binding requirements.
     /// A relocation run may override this policy.
     #[inline]
-    pub const fn binding(mut self, binding: BindingMode) -> Self {
+    pub const fn with_binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
         self
     }
 
     /// Overrides the lazy PLT binder used to prepare runtime binding.
-    pub const fn lazy_binder<NewBinder>(self, binder: NewBinder) -> Relocator<NewBinder>
+    pub const fn with_lazy_binder<NewBinder>(self, binder: NewBinder) -> Relocator<NewBinder>
     where
         Binder: Copy,
     {

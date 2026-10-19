@@ -337,7 +337,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     #[inline]
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
-        self.domain.executor().as_ref()
+        self.domain.executor()
     }
 
     #[inline]
@@ -390,7 +390,7 @@ where
                 .module()
                 .ok_or(TlsError::TemplateUnavailable)?
                 .resolve(
-                    self.domain.executor().as_ref(),
+                    self.domain.executor(),
                     CodeContext::new(self.name(), &self.segments),
                     symbol.st_value(),
                 )
@@ -424,7 +424,7 @@ where
             .get()
             .expect("lifecycle must be installed before initialization")
             .initializer();
-        let executor = self.domain.executor().as_ref();
+        let executor = self.domain.executor();
         initializer.run(self.name(), &self.segments, |ctx, addr| {
             executor.call_lifecycle(ctx, addr)
         })
@@ -435,7 +435,7 @@ where
             return Ok(());
         };
         let finalizer = lifecycle.finalizer();
-        let executor = self.domain.executor().as_ref();
+        let executor = self.domain.executor();
         finalizer.run(self.name(), &self.segments, |ctx, addr| {
             executor.call_lifecycle(ctx, addr)
         })

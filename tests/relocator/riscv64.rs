@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use elf_loader::{Loader, Relocator, image::LoadedObject};
+use elf_loader::{AddressSpaceId, Domain, Loader, Relocator, image::LoadedObject};
 
 use crate::fixtures::{Riscv64Fixtures, riscv64};
 
@@ -14,6 +14,7 @@ fn load(path: &Path) -> LoadedObject {
     Relocator::new()
         .run(
             LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
                 .load_object(path.to_str().expect("fixture path must be valid UTF-8"))
                 .expect("failed to load RISC-V object fixture"),
         )
@@ -28,6 +29,7 @@ fn resolves_external_symbols() {
     let a = Relocator::new()
         .run(
             LOADER
+                .run(Domain::native(AddressSpaceId::PROCESS))
                 .load_object(
                     fixtures
                         .a
@@ -36,17 +38,19 @@ fn resolves_external_symbols() {
                 )
                 .expect("failed to load a.o"),
         )
-        .modules([&b])
+        .with_modules([&b])
         .expect("incompatible relocation modules")
         .relocate()
         .expect("failed to relocate a.o");
 
     let a_fn = unsafe {
         a.get::<extern "C" fn() -> i32>("a")
+            .expect("symbol lookup failed")
             .expect("missing symbol a")
     };
     let b_fn = unsafe {
         b.get::<extern "C" fn() -> i32>("b")
+            .expect("symbol lookup failed")
             .expect("missing symbol b")
     };
     assert_eq!(b_fn(), 41);
@@ -59,6 +63,7 @@ fn relocates_calls() {
     let call = unsafe {
         object
             .get::<extern "C" fn(i32) -> i32>("call_test")
+            .expect("symbol lookup failed")
             .expect("missing call_test")
     };
 
@@ -71,16 +76,19 @@ fn relocates_globals() {
     let read = unsafe {
         object
             .get::<extern "C" fn() -> i32>("read_globals")
+            .expect("symbol lookup failed")
             .expect("missing read_globals")
     };
     let get_ptr = unsafe {
         object
             .get::<extern "C" fn() -> *mut i32>("get_global_ptr")
+            .expect("symbol lookup failed")
             .expect("missing get_global_ptr")
     };
     let modify = unsafe {
         object
             .get::<extern "C" fn(i32) -> i32>("modify_through_pointer")
+            .expect("symbol lookup failed")
             .expect("missing modify_through_pointer")
     };
 
@@ -95,16 +103,19 @@ fn relocates_hi_lo_pairs() {
     let load_value = unsafe {
         object
             .get::<extern "C" fn(i32) -> i32>("test_hi20_load")
+            .expect("symbol lookup failed")
             .expect("missing test_hi20_load")
     };
     let store_value = unsafe {
         object
             .get::<extern "C" fn(i32, i32)>("test_hi20_store")
+            .expect("symbol lookup failed")
             .expect("missing test_hi20_store")
     };
     let load_external = unsafe {
         object
             .get::<extern "C" fn(i32) -> i32>("test_extern_array")
+            .expect("symbol lookup failed")
             .expect("missing test_extern_array")
     };
 
@@ -119,11 +130,13 @@ fn relocates_pointers() {
     let call = unsafe {
         object
             .get::<extern "C" fn(i32, i32) -> i32>("call_through_table")
+            .expect("symbol lookup failed")
             .expect("missing call_through_table")
     };
     let sum = unsafe {
         object
             .get::<extern "C" fn() -> i32>("sum_through_ptrs")
+            .expect("symbol lookup failed")
             .expect("missing sum_through_ptrs")
     };
 

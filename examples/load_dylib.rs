@@ -9,13 +9,13 @@ use elf_loader::{
 const LOADER: Loader = Loader::new();
 const RELOCATOR: Relocator = Relocator::new();
 
-fn host_symbols() -> ModuleHandle {
+fn host_symbols(domain: &Domain) -> ModuleHandle {
     fn print(s: &str) {
         println!("{}", s);
     }
 
     SyntheticModule::new(
-        &Domain::<elf_loader::arch::NativeArch>::native(AddressSpaceId::PROCESS),
+        domain,
         "__host",
         [SyntheticSymbol::function(c"print", print as *const ())],
     )
@@ -27,40 +27,39 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let host = host_symbols();
+    let domain = Domain::native(AddressSpaceId::PROCESS);
+    let host = host_symbols(&domain);
+    let mut loader = LOADER.run(domain);
     let base = RELOCATOR
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_dylib(fixtures.base_str())?,
-        )
-        .modules([host.clone()])?
+        .run(loader.load_dylib(fixtures.base_str())?)
+        .with_modules([host.clone()])?
         .relocate()?;
     let middle = RELOCATOR
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_dylib(fixtures.middle_str())?,
-        )
-        .modules([host.clone(), ModuleHandle::from(&base)])?
+        .run(loader.load_dylib(fixtures.middle_str())?)
+        .with_modules([host.clone(), ModuleHandle::from(&base)])?
         .relocate()?;
     let leaf = RELOCATOR
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_dylib(fixtures.leaf_str())?,
-        )
-        .modules([host, ModuleHandle::from(&base), ModuleHandle::from(&middle)])?
+        .run(loader.load_dylib(fixtures.leaf_str())?)
+        .with_modules([host, ModuleHandle::from(&base), ModuleHandle::from(&middle)])?
         .relocate()?;
-    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
+    let f = unsafe {
+        base.get::<extern "C" fn() -> i32>("base_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 1);
     let f = unsafe {
         middle
             .get::<extern "C" fn() -> i32>("middle_value")
+            .expect("symbol lookup failed")
             .unwrap()
     };
     assert!(f() == 2);
-    let f = unsafe { leaf.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let f = unsafe {
+        leaf.get::<extern "C" fn() -> i32>("leaf_value")
+            .expect("symbol lookup failed")
+            .unwrap()
+    };
     assert!(f() == 3);
     Ok(())
 }

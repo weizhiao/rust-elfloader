@@ -556,12 +556,12 @@ impl<Arch: RelocationArch> LocalScope<Arch> {
     }
 
     /// Appends a compatible eager group without changing deferred lookup.
-    pub fn push(&mut self, group: ModuleScope<Arch>) -> Result<()> {
-        self.extend([group])
+    pub fn push_eager(&mut self, group: ModuleScope<Arch>) -> Result<()> {
+        self.extend_eager([group])
     }
 
     /// Appends compatible eager groups atomically.
-    pub fn extend<I>(&mut self, groups: I) -> Result<()>
+    pub fn extend_eager<I>(&mut self, groups: I) -> Result<()>
     where
         I: IntoIterator<Item = ModuleScope<Arch>>,
     {
@@ -764,10 +764,10 @@ mod tests {
         );
         assert!(LocalScope::new([foreign.clone()], group.clone()).is_err());
         let mut local = LocalScope::from_group(group.clone());
-        assert!(local.extend([group, foreign.clone()]).is_err());
+        assert!(local.extend_eager([group, foreign.clone()]).is_err());
         assert_eq!(local.groups().len(), 1);
         assert!(local.set_lazy_scope(foreign.clone()).is_err());
-        assert!(local.push(foreign).is_err());
+        assert!(local.push_eager(foreign).is_err());
         assert_eq!(local.lazy_scope()[0].name(), b"retained");
         let global = GlobalScope::new(
             Domain::native(AddressSpaceId::PROCESS)
@@ -902,7 +902,7 @@ mod tests {
         let mut extra =
             ModuleScope::new(Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id());
         extra.push(unrelated).unwrap();
-        scope.push(extra).unwrap();
+        scope.push_eager(extra).unwrap();
         let weak = scope.downgrade(None);
 
         assert_eq!(
