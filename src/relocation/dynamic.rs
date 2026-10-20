@@ -94,7 +94,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         );
         let mut helper = RelocHelper::new(
             &self,
-            resolver,
+            &resolver,
             BindingDeps::new(),
             self.symtab().view(),
             self.segments(),
@@ -107,7 +107,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 .relocate_pltrel(lazy, &mut helper)?;
         }
 
-        let (scope, bindings) = helper.into_parts();
+        let bindings = helper.into_bindings();
+        let scope = resolver.into_scope();
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);
@@ -268,8 +269,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                     continue;
                 }
 
-                let symbol = helper.symbol_entry(rel);
-                if let Some(addr) = helper.bind_symbol_addr(rel, symbol)? {
+                if let Some(addr) = helper.bind_symbol_addr(rel)? {
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(addr.get());
                     unsafe { helper.memory().write_value(place, word)? };
                     continue;
@@ -365,8 +365,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
-                let symbol = helper.symbol_entry(rel);
-                if let Some(addr) = helper.bind_symbol_addr(rel, symbol)? {
+                if let Some(addr) = helper.bind_symbol_addr(rel)? {
                     let r_addend = rel.read_addend(helper.memory(), place)?;
                     let value = addr.wrapping_add_signed(r_addend);
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());

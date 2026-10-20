@@ -2,9 +2,12 @@
 use crate::memory::VmOffset;
 use crate::{
     Error, RelocReason, Result,
-    elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
+    elf::{
+        ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol, HashTable, SymbolEntry,
+        SymbolTableView,
+    },
     hint::unlikely,
-    image::{ElfCore, LocalScope, ModuleInstanceId, ModuleState},
+    image::{ElfCore, ModuleInstanceId, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
@@ -56,6 +59,14 @@ impl BindingDeps {
     }
 }
 
+struct SymbolCache<'find, Arch: RelocationArch> {
+    index: usize,
+    relocation_type: ElfRelocationType,
+    symbol: &'find ElfSymbol<Arch::Layout>,
+    name: &'find [u8],
+    definition: Option<SymDef<'find, Arch>>,
+}
+
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<
     'find,
@@ -68,7 +79,8 @@ pub(crate) struct RelocHelper<
     Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
-    resolver: SymbolResolver<'find, Arch>,
+    resolver: &'find SymbolResolver<'find, Arch>,
+    symbol_cache: Option<SymbolCache<'find, Arch>>,
     bindings: BindingDeps,
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
@@ -86,7 +98,7 @@ where
 {
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R, Tls>,
-        resolver: SymbolResolver<'find, Arch>,
+        resolver: &'find SymbolResolver<'find, Arch>,
         bindings: BindingDeps,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
@@ -95,6 +107,7 @@ where
         Self {
             core,
             resolver,
+            symbol_cache: None,
             bindings,
             symbols,
             memory,
@@ -103,8 +116,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LocalScope<Arch>, BindingDeps) {
-        (self.resolver.into_scope(), self.bindings)
+    pub(crate) fn into_bindings(self) -> BindingDeps {
+        self.bindings
     }
 
     #[inline]
@@ -117,7 +130,7 @@ where
         let mut event = RelocationEvent::new(
             self.core,
             rel,
-            &self.resolver,
+            self.resolver,
             &mut self.bindings,
             self.symbols,
         );
@@ -130,7 +143,7 @@ where
         let mut event = RelocationEvent::new(
             self.core,
             rel,
-            &self.resolver,
+            self.resolver,
             &mut self.bindings,
             self.symbols,
         );
@@ -146,7 +159,7 @@ where
         let mut event = RelocationEvent::new(
             self.core,
             rel,
-            &self.resolver,
+            self.resolver,
             &mut self.bindings,
             self.symbols,
         );
@@ -214,36 +227,48 @@ where
     }
 
     #[inline]
-    pub(crate) fn bind_symbol_addr(
-        &mut self,
-        rel: &ElfRelType<Arch>,
-        symbol: SymbolEntry<'_, Arch::Layout>,
-    ) -> Result<Option<VmAddr>> {
-        let (resolved, effect) =
-            if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-                (
-                    Some(
-                        self.core
-                            .domain()
-                            .id()
-                            .tls_entry()
-                            .expect("TLS entry override requires a TLS-enabled domain"),
-                    ),
-                    BindingEffect::default(),
-                )
+    pub(crate) fn bind_symbol_addr(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
+        // Cache only ordinary bindings within this module's fixed lookup scope.
+        // COPY and TLS lookups use their separate paths. Keep the definition,
+        // not its address: IFUNC and custom address resolvers still run per site.
+        if self.symbol_cache.as_ref().is_none_or(|cached| {
+            cached.index != rel.r_symbol() || cached.relocation_type != rel.r_type()
+        }) {
+            let entry = self.symbol_entry(rel);
+            let definition = if Tls::OVERRIDE_TLS_GET_ADDR && entry.name() == TLS_GET_ADDR_SYMBOL {
+                None
             } else {
-                let definition = self.resolver.find(&symbol);
-                let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
-                let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
-                (resolved, effect)
+                self.resolver.find(&entry)
             };
-        let mut event = SymbolBindingEvent::new(
-            self.core,
-            Some(rel),
-            symbol.symbol(),
-            symbol.name(),
-            resolved,
-        );
+            self.symbol_cache = Some(SymbolCache {
+                index: rel.r_symbol(),
+                relocation_type: rel.r_type(),
+                symbol: entry.symbol(),
+                name: entry.name(),
+                definition,
+            });
+        }
+        let cached = self.symbol_cache.as_ref().unwrap();
+        let (resolved, effect) = if Tls::OVERRIDE_TLS_GET_ADDR && cached.name == TLS_GET_ADDR_SYMBOL
+        {
+            (
+                Some(
+                    self.core
+                        .domain()
+                        .id()
+                        .tls_entry()
+                        .expect("TLS entry override requires a TLS-enabled domain"),
+                ),
+                BindingEffect::default(),
+            )
+        } else {
+            let definition = &cached.definition;
+            let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
+            let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
+            (resolved, effect)
+        };
+        let mut event =
+            SymbolBindingEvent::new(self.core, Some(rel), cached.symbol, cached.name, resolved);
         self.observer.on_symbol_binding(&mut event)?;
         let resolved = event.into_resolved_addr();
         if resolved.is_some() {

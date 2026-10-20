@@ -101,7 +101,7 @@ where
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         let mut helper = RelocHelper::new(
             &self.core,
-            resolver,
+            &resolver,
             bindings,
             self.symtab.view(),
             relocation_segments,
@@ -135,7 +135,8 @@ where
             }
         }
 
-        let (scope, bindings) = helper.into_parts();
+        let bindings = helper.into_bindings();
+        let scope = resolver.into_scope();
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
