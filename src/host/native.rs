@@ -1,27 +1,36 @@
 use super::HostError;
-use crate::Result;
-use alloc::string::ToString;
+use crate::{IoError, Result, input::Path};
+use alloc::{ffi::CString, string::ToString};
 use core::{
     ffi::{CStr, c_void},
     ptr::NonNull,
 };
 
-pub(super) struct NativeLibrary(NonNull<c_void>);
+pub(super) struct NativeLibrary {
+    handle: NonNull<c_void>,
+}
 
 // The native loader synchronizes access to its handles. The last owner closes it.
 unsafe impl Send for NativeLibrary {}
 unsafe impl Sync for NativeLibrary {}
 
 impl NativeLibrary {
-    pub(super) unsafe fn open(path: &CStr) -> Result<Self> {
+    pub(super) unsafe fn open(path: &Path) -> Result<Self> {
+        // A slash keeps dlopen from treating a relative filename as a SONAME.
+        let path = if path.is_absolute() {
+            path.into()
+        } else {
+            Path::new(".").join(path)
+        };
+        let path = CString::new(path.as_bytes()).map_err(|_| IoError::NullByteInPath)?;
         let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         NonNull::new(handle)
-            .map(Self)
+            .map(|handle| Self { handle })
             .ok_or_else(|| last_error("dlopen"))
     }
 
     pub(super) fn handle(&self) -> *mut c_void {
-        self.0.as_ptr()
+        self.handle.as_ptr()
     }
 
     pub(super) fn lookup(&self, name: &CStr, version: Option<&CStr>) -> Result<*mut c_void> {
