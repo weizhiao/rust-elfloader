@@ -19,8 +19,7 @@ struct TlsDef {
     effect: BindingEffect,
 }
 
-impl<'find, D: Send + Sync + 'static, Arch, R, Tls, Obs, H, Memory>
-    RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

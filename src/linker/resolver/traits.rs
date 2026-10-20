@@ -1,12 +1,17 @@
 use super::{super::ModuleKey, ResolveRequest};
 use crate::{
-    Result, arch::NativeArch, image::ModuleHandle, input::ElfReader, relocation::RelocationArch,
+    Result, arch::NativeArch, elf::ElfHeader, image::ModuleHandle, input::ElfReader,
+    loader::read_ehdr, relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
 
 pub(crate) enum ResolvedKind<'cfg, Arch: RelocationArch = NativeArch> {
     /// Provides an ELF reader for the requested key.
-    Load(Box<dyn ElfReader + 'cfg>),
+    Load {
+        reader: Box<dyn ElfReader + 'cfg>,
+        /// Header already validated for `Arch` by the resolver.
+        ehdr: ElfHeader<Arch::Layout>,
+    },
     /// Provides a module candidate and its dependencies.
     ///
     /// The underlying allocation may already be shared elsewhere. A visible
@@ -49,15 +54,21 @@ impl<'cfg, Arch: RelocationArch> ResolvedDependency<'cfg, Arch> {
 
 impl<'cfg, Arch: RelocationArch> ResolvedKey<'cfg, Arch> {
     /// Creates a result that loads a new module from the provided reader.
+    ///
+    /// Reads and validates the ELF header for `Arch`. Read and validation
+    /// errors are returned here; loading or scanning reuses the validated header.
     #[inline]
-    pub fn load(reader: impl ElfReader + 'cfg) -> Self {
-        Self::load_boxed(Box::new(reader))
+    pub fn load(reader: impl ElfReader + 'cfg) -> Result<Self> {
+        let ehdr = read_ehdr::<Arch>(&reader)?;
+        Ok(Self::load_with_ehdr(Box::new(reader), ehdr))
     }
 
-    #[inline]
-    pub(super) fn load_boxed(reader: Box<dyn ElfReader + 'cfg>) -> Self {
+    pub(super) fn load_with_ehdr(
+        reader: Box<dyn ElfReader + 'cfg>,
+        ehdr: ElfHeader<Arch::Layout>,
+    ) -> Self {
         Self {
-            kind: ResolvedKind::Load(reader),
+            kind: ResolvedKind::Load { reader, ehdr },
             pinned: false,
             aliases: Vec::new(),
         }

@@ -366,7 +366,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch> for LoadedCore<D, Arch, R, Tls>
+impl<D, Arch, R, Tls> Module<Arch> for LoadedCore<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

@@ -120,7 +120,7 @@ where
     unsafe { elf_module::<D, Arch, R, Tls>(runtime) }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> CoreRuntimeModule<Arch> for ElfModule<D, Arch, R, Tls>
+impl<D, Arch, R, Tls> CoreRuntimeModule<Arch> for ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -357,7 +357,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch> for ElfModule<D, Arch, R, Tls>
+impl<D, Arch, R, Tls> Module<Arch> for ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

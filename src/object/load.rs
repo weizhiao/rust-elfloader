@@ -16,7 +16,7 @@ use crate::{
     tls::TlsResolver,
 };
 
-impl<Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'_, Obs, D, Tls, Arch, M>
+impl<Obs, D, Tls, Arch, M> LoaderRun<'_, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
@@ -31,7 +31,7 @@ where
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
+impl<'run, Obs, D, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + Send + Sync + 'static,

@@ -234,7 +234,7 @@ where
         let resolved = self.resolve_root_input(root, caller, resolver)?;
         let (resolved, _, _) = resolved.into_parts();
         let source = match resolved {
-            ResolvedKind::Load(reader) => reader.source_id(),
+            ResolvedKind::Load { reader, .. } => reader.source_id(),
             ResolvedKind::Module { module, .. } => module.source_id(),
         };
         Ok(self.module_for_source(source))
@@ -402,12 +402,12 @@ where
             slot
         } else {
             match resolved {
-                ResolvedKind::Load(reader) => {
+                ResolvedKind::Load { reader, ehdr } => {
                     if let Some(slot) = self.module_for_source(reader.source_id()) {
                         self.session.bind_key(entry_key, slot);
                         slot
                     } else {
-                        let raw = loader.load_dynamic(reader)?;
+                        let raw = loader.load_dynamic_with_ehdr(reader, ehdr)?;
                         self.stage_dynamic(entry_key, raw, parent)
                     }
                 }
@@ -504,12 +504,13 @@ where
             slot
         } else {
             match resolved {
-                ResolvedKind::Load(reader) => {
+                ResolvedKind::Load { reader, ehdr } => {
                     if let Some(slot) = self.module_for_source(reader.source_id()) {
                         self.session.bind_key(entry_key, slot);
                         slot
                     } else {
-                        let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
+                        let ScannedElf::Dynamic(module) = loader.scan_with_ehdr(reader, ehdr)?
+                        else {
                             return Err(ParsePhdrError::MissingDynamicSection.into());
                         };
                         self.stage_dynamic(entry_key, module, parent)

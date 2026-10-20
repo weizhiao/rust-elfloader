@@ -27,7 +27,7 @@ use crate::{
 use alloc::{collections::BTreeMap, vec::Vec};
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Resolver, RelocBinder, Obs>
+impl<'run, 'pipe, D, Tls, Arch, M, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M>, Resolver, RelocBinder, Tls, Obs>
 where
     D: Default + Send + Sync + 'static,
@@ -105,13 +105,11 @@ where
                 let (key, module, full_deps) = entry.into_parts();
                 let full_deps =
                     full_deps.expect("missing resolved dependencies while building scan plan");
-                Ok((id, (key, module, full_deps)))
+                (id, (key, module, full_deps))
             })
-            .collect::<Result<_>>()?;
+            .collect();
         let mut mapped_runtime = None;
-        let planned = if entries.is_empty() {
-            None
-        } else {
+        if !entries.is_empty() {
             let plan_root = if dynamic_ids.contains(root) {
                 root
             } else {
@@ -131,10 +129,7 @@ where
             let mut plan = LinkPlan::new(plan_root, plan_group_order, entries);
             self.pipeline.run(&mut plan)?;
             mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
-            let (_, _, entries, memory_layout) = plan.into_parts();
-            Some((entries, memory_layout))
-        };
-        if let Some((entries, memory_layout)) = planned {
+            let (entries, memory_layout) = plan.into_parts();
             for (module_id, entry) in entries {
                 let (id, key, module, direct_deps) = entry.into_parts();
                 let raw = self.materialize_planned_raw(

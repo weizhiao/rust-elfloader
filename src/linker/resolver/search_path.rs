@@ -371,14 +371,14 @@ impl SearchPathResolver {
     }
 
     /// Opens and validates a target-compatible ELF candidate.
-    fn try_candidate(
+    fn try_candidate<T>(
         &self,
         path: &Path,
         dir: Option<&SharedDir>,
         skip_incompatible: bool,
         incompatible: &mut Option<Error>,
-        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
-    ) -> Result<Option<Box<dyn ElfReader>>> {
+        validate: &impl Fn(&dyn ElfReader) -> Result<T>,
+    ) -> Result<Option<(Box<dyn ElfReader>, T)>> {
         let dir = dir.filter(|_| self.opener.is_none());
         let opened = match &self.opener {
             Some(open) => open(path),
@@ -408,7 +408,7 @@ impl SearchPathResolver {
         };
 
         match validate(file.as_ref()) {
-            Ok(()) => Ok(Some(file)),
+            Ok(value) => Ok(Some((file, value))),
             Err(err) if skip_incompatible && Self::is_incompatible(&err) => {
                 incompatible.get_or_insert(err);
                 Ok(None)
@@ -417,14 +417,14 @@ impl SearchPathResolver {
         }
     }
 
-    fn try_dir(
+    fn try_dir<T>(
         &self,
         dir: &SharedDir,
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
-        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
-    ) -> Result<Option<Box<dyn ElfReader>>> {
+        validate: &impl Fn(&dyn ElfReader) -> Result<T>,
+    ) -> Result<Option<(Box<dyn ElfReader>, T)>> {
         if self.opener.is_none() && dir.is_missing() {
             return Ok(None);
         }
@@ -432,14 +432,14 @@ impl SearchPathResolver {
         self.try_candidate(candidate, Some(dir), true, incompatible, validate)
     }
 
-    fn try_dirs(
+    fn try_dirs<T>(
         &self,
         dirs: &[SharedDir],
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
-        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
-    ) -> Result<Option<Box<dyn ElfReader>>> {
+        validate: &impl Fn(&dyn ElfReader) -> Result<T>,
+    ) -> Result<Option<(Box<dyn ElfReader>, T)>> {
         for dir in dirs {
             if let Some(file) = self.try_dir(dir, requested, candidate, incompatible, validate)? {
                 return Ok(Some(file));
@@ -466,14 +466,14 @@ impl SearchPathResolver {
             tokens,
             &loaders,
         );
-        self.search_file(request, validate)
+        self.search_file(request, validate).map(|(file, ())| file)
     }
 
-    fn search_file(
+    fn search_file<T>(
         &self,
         req: ResolveRequest<'_, PathBuf>,
-        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
-    ) -> Result<Box<dyn ElfReader>> {
+        validate: &impl Fn(&dyn ElfReader) -> Result<T>,
+    ) -> Result<(Box<dyn ElfReader>, T)> {
         let requested = match req.input() {
             ResolveInput::Root { root } => root.as_path(),
             ResolveInput::Dependency { needed } => {
@@ -590,8 +590,8 @@ where
         &self,
         req: ResolveRequest<'_, Self::Root>,
     ) -> Result<ResolvedKey<'cfg, Arch>> {
-        self.search_file(req, &|file| read_ehdr::<Arch>(file).map(|_| ()))
-            .map(ResolvedKey::load_boxed)
+        self.search_file(req, &|file| read_ehdr::<Arch>(file))
+            .map(|(reader, ehdr)| ResolvedKey::load_with_ehdr(reader, ehdr))
     }
 }
 
@@ -660,7 +660,7 @@ mod tests {
             .into_parts()
             .0
         {
-            ResolvedKind::Load(reader) => Some(PathBuf::from(reader.path())),
+            ResolvedKind::Load { reader, .. } => Some(PathBuf::from(reader.path())),
             ResolvedKind::Module { .. } => None,
         }
     }

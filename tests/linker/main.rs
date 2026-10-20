@@ -139,7 +139,7 @@ impl KeyResolver for SingleBinaryResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, self.key);
-                Ok(ResolvedKey::load(ElfBinary::new(self.name, self.data)))
+                ResolvedKey::load(ElfBinary::new(self.name, self.data))
             }
             ResolveInput::Dependency { .. } => Err(req.unresolved()),
         }
@@ -160,10 +160,7 @@ impl KeyResolver for ModuleDependencyResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, "root");
-                Ok(ResolvedKey::load(ElfBinary::new(
-                    "visible_root.so",
-                    self.root_data,
-                )))
+                ResolvedKey::load(ElfBinary::new("visible_root.so", self.root_data))
             }
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, DEP_KEY.as_bytes());
@@ -187,10 +184,7 @@ impl KeyResolver for SyntheticDependencyResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, "root");
-                Ok(ResolvedKey::load(ElfBinary::new(
-                    "scan_synthetic_root.so",
-                    self.root_data,
-                )))
+                ResolvedKey::load(ElfBinary::new("scan_synthetic_root.so", self.root_data))
             }
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, b"dep");

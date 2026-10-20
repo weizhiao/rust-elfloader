@@ -43,7 +43,7 @@ where
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<D: Send + Sync + 'static, Arch, M> Copy for Loader<D, Arch, M>
+impl<D, Arch, M> Copy for Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -100,7 +100,7 @@ impl<M> LoaderFields<M> {
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M> Clone for Loader<D, Arch, M>
+impl<D, Arch, M> Clone for Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -140,7 +140,7 @@ impl Default for Loader<(), NativeArch, DefaultMmap> {
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
+impl<D, Arch, M> Loader<D, Arch, M>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

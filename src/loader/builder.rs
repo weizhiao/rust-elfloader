@@ -82,23 +82,6 @@ pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
     pub(crate) reader: Box<dyn ElfReader + 'static>,
 }
 
-impl<L: ElfLayout> ScanBuilder<L> {
-    #[inline]
-    pub(crate) fn new(
-        path: PathBuf,
-        ehdr: ElfHeader<L>,
-        phdrs: Box<[ElfPhdr<L>]>,
-        reader: Box<dyn ElfReader + 'static>,
-    ) -> Self {
-        Self {
-            path,
-            ehdr,
-            phdrs,
-            reader,
-        }
-    }
-}
-
 impl<Tls, D: Send + Sync + 'static, Arch, R> ImageBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,

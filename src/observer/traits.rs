@@ -153,7 +153,7 @@ where
 {
 }
 
-impl<D: Send + Sync + 'static, Arch, O> LoadObserver<D, Arch> for &mut O
+impl<D, Arch, O> LoadObserver<D, Arch> for &mut O
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -263,7 +263,7 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, O> LoadObserver<D, Arch> for Box<O>
+impl<D, Arch, O> LoadObserver<D, Arch> for Box<O>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

@@ -422,12 +422,7 @@ where
             local.len(),
             "resolved group order and module scope must stay aligned"
         );
-        let indices = group_order
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, slot)| (slot, index))
-            .collect::<BTreeMap<_, _>>();
+        let mut indices = None;
 
         modules
             .iter()
@@ -435,6 +430,15 @@ where
                 if module == root {
                     return local.clone();
                 }
+
+                let indices = indices.get_or_insert_with(|| {
+                    group_order
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(index, slot)| (slot, index))
+                        .collect::<BTreeMap<_, _>>()
+                });
 
                 let mut scope = ModuleScope::new(local.domain_id());
                 let mut visited = EntitySet::default();
@@ -500,9 +504,7 @@ where
     pub(crate) fn build_lifecycle_order(&self, root: ModuleSlot, order: &mut Vec<ModuleSlot>) {
         order.clear();
         let pending_len = self.resolve.dynamics.len() + self.resolve.modules.len();
-        if order.capacity() < pending_len {
-            order.reserve(pending_len - order.capacity());
-        }
+        order.reserve(pending_len);
 
         let mut visited = EntitySet::default();
         let mut stack = Vec::with_capacity(pending_len.saturating_mul(2));

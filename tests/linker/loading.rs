@@ -84,8 +84,8 @@ impl KeyResolver for MultiBinaryResolver {
             ResolveInput::Dependency { needed } => *needed,
         };
         self.module(key)
-            .map(|module| ResolvedKey::load(ElfBinary::new(module.name, module.data)))
             .ok_or_else(|| req.unresolved())
+            .and_then(|module| ResolvedKey::load(ElfBinary::new(module.name, module.data)))
     }
 }
 

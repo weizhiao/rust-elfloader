@@ -445,7 +445,7 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Relocatable<D> for RawDynamic<D, Arch, R, Tls>
+impl<D, Arch, R, Tls> Relocatable<D> for RawDynamic<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

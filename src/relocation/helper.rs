@@ -75,8 +75,7 @@ pub(crate) struct RelocHelper<
     pub(crate) observer: &'find mut Obs,
 }
 
-impl<'find, D: Send + Sync + 'static, Arch, R, Tls, Obs, H, Memory>
-    RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

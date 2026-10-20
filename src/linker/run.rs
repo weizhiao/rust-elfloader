@@ -107,7 +107,7 @@ where
     }
 }
 
-impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Resolver, RelocBinder, Obs>
+impl<'run, 'pipe, D, Tls, Arch, M, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M>, Resolver, RelocBinder, Tls, Obs>
 where
     D: Default + Send + Sync + 'static,

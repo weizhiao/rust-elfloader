@@ -338,7 +338,7 @@ where
             domain,
             bindings: BTreeMap::new(),
             sources: BTreeMap::new(),
-            entries: PrimaryMap::new(),
+            entries: PrimaryMap::default(),
             lifecycle: Vec::new(),
             free_slots: Vec::new(),
             addresses: Arc::new(AddressIndex::default()),

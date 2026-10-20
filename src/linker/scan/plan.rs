@@ -95,8 +95,6 @@ where
 }
 
 type LinkPlanParts<Arch, Tls> = (
-    ModuleId,
-    Vec<ModuleId>,
     PrimaryMap<ModuleId, PlannedModule<Arch, Tls>>,
     MemoryLayoutPlan,
 );
@@ -399,11 +397,6 @@ where
 
     #[inline]
     pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<Arch, Tls> {
-        (
-            self.root,
-            self.group_order,
-            self.entries,
-            self.memory_layout,
-        )
+        (self.entries, self.memory_layout)
     }
 }

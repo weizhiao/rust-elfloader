@@ -127,13 +127,6 @@ impl<K, V> PrimaryMap<K, V>
 where
     K: EntityRef,
 {
-    /// Creates an empty primary map.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// Appends one value and returns its typed id.
     #[inline]
     pub(crate) fn push(&mut self, value: V) -> K {
@@ -264,13 +257,6 @@ impl<K, V> SecondaryMap<K, V>
 where
     K: EntityRef,
 {
-    /// Creates an empty secondary map.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// Inserts side data for `key`, returning the previous value if present.
     pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
         let index = key.index();
@@ -344,7 +330,7 @@ mod tests {
 
     #[test]
     fn primary_map_returns_dense_index_ids() {
-        let mut arena = PrimaryMap::<TestId, u32>::new();
+        let mut arena = PrimaryMap::<TestId, u32>::default();
 
         let first = arena.push(7);
         let second = arena.push(11);
@@ -359,7 +345,7 @@ mod tests {
 
     #[test]
     fn primary_map_consuming_iterator_yields_keys_and_values() {
-        let mut arena = PrimaryMap::<TestId, u32>::new();
+        let mut arena = PrimaryMap::<TestId, u32>::default();
         let first = arena.push(7);
         let second = arena.push(11);
 
@@ -371,7 +357,7 @@ mod tests {
 
     #[test]
     fn secondary_map_tracks_sparse_side_data() {
-        let mut map = SecondaryMap::<TestId, &'static str>::new();
+        let mut map = SecondaryMap::<TestId, &'static str>::default();
         let first = TestId::new(0);
         let third = TestId::new(2);
 

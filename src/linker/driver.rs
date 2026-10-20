@@ -276,8 +276,7 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, M, R, RelocBinder>
-    Linker<Arch, Loader<D, Arch, M>, R, RelocBinder>
+impl<D, Arch, M, R, RelocBinder> Linker<Arch, Loader<D, Arch, M>, R, RelocBinder>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,

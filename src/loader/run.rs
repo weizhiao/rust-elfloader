@@ -53,7 +53,7 @@ pub struct LoaderRun<
     pub(crate) object_groups: Arc<SectionGroups>,
 }
 
-impl<'a, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'a, Obs, D, Tls, Arch, M>
+impl<'a, Obs, D, Tls, Arch, M> LoaderRun<'a, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Send + Sync + 'static,
@@ -124,6 +124,14 @@ where
         expected: ExpectedElf,
     ) -> Result<ElfHeader<Arch::Layout>> {
         let ehdr = self.read_ehdr(object)?;
+        Self::validate_expected_ehdr(object, ehdr, expected)
+    }
+
+    fn validate_expected_ehdr(
+        object: &impl ElfReader,
+        ehdr: ElfHeader<Arch::Layout>,
+        expected: ExpectedElf,
+    ) -> Result<ElfHeader<Arch::Layout>> {
         if expected.matches(&ehdr) {
             return Ok(ehdr);
         }
@@ -137,16 +145,7 @@ where
         );
         Err(expected.error(file_type).into())
     }
-}
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: Send + Sync + 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-{
     /// Scans an executable or dynamic ELF image without mapping its segments.
     ///
     /// Images with `PT_DYNAMIC` are returned as [`ScannedElf::Dynamic`]. Executable
@@ -155,11 +154,27 @@ where
     where
         I: IntoElfReader<'static>,
     {
-        scan::<Arch>(input, &mut self.buf, self.search_paths.as_deref_mut())
+        let object = input.into_reader()?;
+        let ehdr = self.read_ehdr(&object)?;
+        self.scan_with_ehdr(Box::new(object), ehdr)
+    }
+
+    /// Reuses a header already validated for this architecture.
+    pub(crate) fn scan_with_ehdr(
+        &mut self,
+        object: Box<dyn ElfReader>,
+        ehdr: ElfHeader<Arch::Layout>,
+    ) -> Result<ScannedElf<Arch>> {
+        scan::<Arch>(
+            object,
+            &mut self.buf,
+            self.search_paths.as_deref_mut(),
+            ehdr,
+        )
     }
 }
 
-impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
+impl<'run, Obs, D, Tls, Arch, M> LoaderRun<'run, Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + Send + Sync + 'static,
@@ -171,7 +186,6 @@ where
     /// `ET_DYN` images are classified using their program headers.
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
-        D: Send + Sync + 'static,
         Arch: ObjectArch,
         I: IntoElfReader<'a>,
     {
@@ -249,9 +263,19 @@ where
         I: IntoElfReader<'a>,
     {
         let object = input.into_reader()?;
+        let ehdr = self.read_ehdr(&object)?;
+        self.load_dynamic_with_ehdr(object, ehdr)
+    }
+
+    /// Reuses a header already validated for this architecture.
+    pub(crate) fn load_dynamic_with_ehdr(
+        &mut self,
+        object: impl ElfReader,
+        ehdr: ElfHeader<Arch::Layout>,
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         logging::debug!("Loading dynamic image: {}", object.path());
 
-        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dynamic)?;
+        let ehdr = Self::validate_expected_ehdr(&object, ehdr, ExpectedElf::Dynamic)?;
         self.load_dynamic_impl(&object, ehdr)
     }
 
@@ -487,14 +511,13 @@ fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout
 }
 
 fn scan<Arch: RelocationArch>(
-    input: impl IntoElfReader<'static>,
+    object: Box<dyn ElfReader>,
     buf: &mut ElfBuf,
     search_paths: Option<&mut SearchPathPool>,
+    ehdr: ElfHeader<Arch::Layout>,
 ) -> Result<ScannedElf<Arch>> {
-    let object = input.into_reader()?;
     logging::debug!("Scanning ELF metadata: {}", object.path());
 
-    let ehdr = read_ehdr::<Arch>(&object)?;
     if !ExpectedElf::Executable.matches(&ehdr) {
         return Err(ExpectedElf::Executable.error(ehdr.file_type()).into());
     }
@@ -502,7 +525,12 @@ fn scan<Arch: RelocationArch>(
     let has_dynamic = has_dynamic_phdr(phdrs);
     let phdrs = Box::from(phdrs);
     let path = PathBuf::from(object.path());
-    let builder = ScanBuilder::new(path, ehdr, phdrs, Box::new(object));
+    let builder = ScanBuilder {
+        path,
+        ehdr,
+        phdrs,
+        reader: object,
+    };
 
     if has_dynamic {
         return ScannedDynamic::<Arch>::from_builder(builder, search_paths)
@@ -523,22 +551,16 @@ where
     pub fn read_ehdr(&self, object: &(impl ElfReader + ?Sized)) -> Result<ElfHeader<Arch::Layout>> {
         read_ehdr::<Arch>(object)
     }
-}
 
-impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
-where
-    (): LoadObserver<D, Arch>,
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    M: Mmap,
-{
     /// Scans an executable or dynamic ELF image without mapping its segments.
     #[inline]
     pub fn scan<I>(&self, input: I) -> Result<ScannedElf<Arch>>
     where
         I: IntoElfReader<'static>,
     {
-        scan::<Arch>(input, &mut ElfBuf::new(), None)
+        let object = input.into_reader()?;
+        let ehdr = self.read_ehdr(&object)?;
+        scan::<Arch>(Box::new(object), &mut ElfBuf::new(), None, ehdr)
     }
 }
 
