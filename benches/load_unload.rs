@@ -6,6 +6,8 @@ use std::{ffi::CString, hint::black_box, os::unix::ffi::OsStrExt, path::Path};
 
 #[path = "support/libraries.rs"]
 mod libraries;
+#[path = "support/timing.rs"]
+mod timing;
 use libraries::{HostLibraries, LibraryCache, root_path};
 
 const DEFAULT_WORKLOADS: &[&str] = &[
@@ -42,52 +44,77 @@ fn bench_load_unload(c: &mut Criterion) {
         .collect();
     // The fixed host allowlist is prepared outside timing for every selection.
     let hosts = HostLibraries::new(&cache);
-    let mut group = c.benchmark_group("load_unload");
+    // A new group keeps results separate from the old reused-context measurements.
+    let mut group = c.benchmark_group("load_teardown");
     for (soname, path) in roots {
         let linker = Linker::new()
             .with_loader(Loader::new())
             .with_resolver(cache.resolver());
-        group.bench_function(format!("{soname}/relink"), |b| {
-            let mut context = hosts.context();
-            b.iter(|| {
-                let loaded = linker
-                    .run()
-                    .load(
-                        &mut context,
-                        PathBuf::from(black_box(path.to_str().unwrap())),
+        for (index, phase) in timing::PHASES.iter().enumerate() {
+            group.bench_function(format!("{soname}/relink/{phase}"), |b| {
+                b.iter_custom(|iterations| {
+                    timing::measure(
+                        iterations,
+                        || hosts.context(),
+                        |context| {
+                            linker
+                                .run()
+                                .load(context, PathBuf::from(black_box(path.to_str().unwrap())))
+                                .unwrap()
+                        },
+                        |mut context, loaded| {
+                            drop(loaded.release(&mut context).unwrap());
+                            drop(context);
+                        },
                     )
-                    .unwrap();
-                // Includes graph detachment, finalizers and unmapping of all
-                // ordinary dependencies, not just the root library.
-                drop(loaded.release(&mut context).unwrap());
+                    .phases()[index]
+                });
             });
-            assert_eq!(context.load_order().count(), hosts.len());
-        });
-        // RTLD_NOLOAD checks only the native loader, not Relink mappings.
-        assert_native_unloaded(&path);
-        group.bench_function(format!("{soname}/libloading"), |b| {
-            b.iter(|| {
-                let library =
-                    unsafe { Library::open(Some(black_box(&path)), RTLD_NOW | RTLD_LOCAL) }
-                        .unwrap();
-                drop(library);
+        }
+        // dlclose cannot end a glibc namespace containing a NODELETE root.
+        // Detect this before collecting misleading cached-handle measurements.
+        if native_is_loaded(&path) {
+            eprintln!("skip\t{soname}\tlibloading\troot already resident before measurement");
+            continue;
+        }
+        drop(unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }.unwrap());
+        if native_is_loaded(&path) {
+            eprintln!(
+                "skip\t{soname}\tlibloading\troot retained after dlclose (NODELETE or GNU-unique bindings)"
+            );
+            continue;
+        }
+        for (index, phase) in timing::PHASES.iter().enumerate() {
+            group.bench_function(format!("{soname}/libloading/{phase}"), |b| {
+                b.iter_custom(|iterations| {
+                    timing::measure(
+                        iterations,
+                        || (),
+                        |_| unsafe {
+                            Library::open(Some(black_box(&path)), RTLD_NOW | RTLD_LOCAL).unwrap()
+                        },
+                        |(), library| drop(library),
+                    )
+                    .phases()[index]
+                });
             });
-        });
-        assert_native_unloaded(&path);
+            assert!(
+                !native_is_loaded(&path),
+                "{} became resident during measurement",
+                path.display()
+            );
+        }
     }
     group.finish();
 }
 
-fn assert_native_unloaded(path: &Path) {
+fn native_is_loaded(path: &Path) -> bool {
     let name = CString::new(path.as_os_str().as_bytes()).unwrap();
     let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
     if !handle.is_null() {
         unsafe { libc::dlclose(handle) };
-        panic!(
-            "{} remains loaded; refusing cached-handle measurements",
-            path.display()
-        );
     }
+    !handle.is_null()
 }
 
 criterion_group!(benches, bench_load_unload);

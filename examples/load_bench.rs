@@ -1,6 +1,8 @@
 //! Relink-only Linux/glibc load/unload runner for timing and profiling.
 #[path = "../benches/support/libraries.rs"]
 mod libraries;
+#[path = "../benches/support/timing.rs"]
+mod timing;
 
 use elf_loader::{Linker, Loader, input::PathBuf};
 use std::{
@@ -21,7 +23,7 @@ fn main() {
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
             println!(
-                "{USAGE}\nTimes complete Relink load/unload cycles; setup is excluded. Defaults: 1000 ms warmup, auto-calibrated iterations for ~1000 ms per round, 9 rounds. --iterations overrides calibration."
+                "{USAGE}\nEach iteration uses a fresh context. Reports load, teardown (release + context destruction), and total ns/iteration; context creation and host imports are excluded. Defaults: 1000 ms warmup, auto-calibrated iterations for ~1000 ms of measured time per round, 9 rounds. --iterations overrides calibration."
             );
             return;
         }
@@ -68,53 +70,73 @@ fn main() {
     let linker = Linker::new()
         .with_loader(Loader::new())
         .with_resolver(cache.resolver());
-    let mut context = hosts.context();
-    let mut measure = |iterations| {
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let loaded = linker
-                .run()
-                .load(
-                    &mut context,
-                    PathBuf::from(black_box(path.to_str().unwrap())),
-                )
-                .unwrap();
-            drop(loaded.release(&mut context).unwrap());
-        }
-        let elapsed = start.elapsed();
-        // Exclude validation from timing, and reject resident roots before reporting samples.
-        assert_eq!(
-            context.load_order().count(),
-            hosts.len(),
-            "workload retained modules after unload"
-        );
-        elapsed
+    let measure = |iterations| {
+        timing::measure(
+            iterations as u64,
+            || hosts.context(),
+            |context| {
+                linker
+                    .run()
+                    .load(context, PathBuf::from(black_box(path.to_str().unwrap())))
+                    .unwrap()
+            },
+            |mut context, loaded| {
+                drop(loaded.release(&mut context).unwrap());
+                drop(context);
+            },
+        )
     };
     let warmup_start = Instant::now();
     let mut batch = 1usize;
     while warmup_start.elapsed() < Duration::from_millis(warmup_ms) {
-        let elapsed = measure(batch);
+        let elapsed = measure(batch).total();
         if elapsed < Duration::from_millis(50) {
             batch = batch.saturating_mul(2);
         }
     }
-    let iterations =
-        iterations.unwrap_or_else(|| calibrate(&mut measure, Duration::from_millis(sample_ms)));
-    println!("workload\tround\titerations\telapsed_ms\tns_per_load_unload");
-    let mut times = Vec::with_capacity(rounds);
+    let iterations = iterations.unwrap_or_else(|| {
+        calibrate(
+            &mut |n| measure(n).total(),
+            Duration::from_millis(sample_ms),
+        )
+    });
+    println!(
+        "workload\tround\titerations\t{}_ns\t{}_ns\t{}_ns",
+        timing::PHASES[0],
+        timing::PHASES[1],
+        timing::PHASES[2],
+    );
+    let mut times = [
+        Vec::with_capacity(rounds),
+        Vec::with_capacity(rounds),
+        Vec::with_capacity(rounds),
+    ];
     for round in 0..rounds {
-        let elapsed = measure(iterations);
-        let time = elapsed.as_nanos() as f64 / iterations as f64;
-        times.push(time);
+        let values = measure(iterations)
+            .phases()
+            .map(|elapsed| elapsed.as_nanos() as f64 / iterations as f64);
+        for (samples, time) in times.iter_mut().zip(values) {
+            samples.push(time);
+        }
         println!(
-            "{name}\t{}\t{iterations}\t{:.1}\t{time:.1}",
+            "{name}\t{}\t{iterations}\t{:.1}\t{:.1}\t{:.1}",
             round + 1,
-            elapsed.as_secs_f64() * 1000.0
+            values[0],
+            values[1],
+            values[2],
         );
     }
-    times.sort_by(f64::total_cmp);
+    for samples in &mut times {
+        samples.sort_by(f64::total_cmp);
+    }
     for (label, fraction) in [("p10", 0.1), ("median", 0.5), ("p90", 0.9)] {
-        println!("{name}\t{label}\t-\t-\t{:.1}", percentile(&times, fraction));
+        let values = times
+            .each_ref()
+            .map(|samples| percentile(samples, fraction));
+        println!(
+            "{name}\t{label}\t-\t{:.1}\t{:.1}\t{:.1}",
+            values[0], values[1], values[2]
+        );
     }
 }
 

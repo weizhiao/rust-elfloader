@@ -135,8 +135,4 @@ impl HostLibraries {
         context.insert_batch(modules).unwrap();
         context
     }
-
-    pub fn len(&self) -> usize {
-        self.libraries.len()
-    }
 }

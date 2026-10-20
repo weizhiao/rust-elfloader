@@ -1,3 +1,5 @@
 target
 .vscode
 zig*
+__pycache__/
+*.py[cod]
