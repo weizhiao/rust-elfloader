@@ -96,7 +96,7 @@ where
 {
     /// Reads and validates the ELF header against the loader's target architecture.
     /// Use [`Loader::with_arch`] to select a different target.
-    pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
+    pub fn read_ehdr(&self, object: &(impl ElfReader + ?Sized)) -> Result<ElfHeader<Arch::Layout>> {
         read_ehdr::<Arch>(object)
     }
 
@@ -520,7 +520,7 @@ where
 {
     /// Reads the ELF header without creating runtime state.
     #[inline]
-    pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
+    pub fn read_ehdr(&self, object: &(impl ElfReader + ?Sized)) -> Result<ElfHeader<Arch::Layout>> {
         read_ehdr::<Arch>(object)
     }
 }
