@@ -1,11 +1,13 @@
-#[cfg(test)]
 use super::request::LoaderVisitor;
 use super::{
     KeyResolver, LdCache, ResolveInput, ResolveRequest, ResolvedKey, request::LoaderProvider,
 };
 use crate::{
     Error, IoError, ParseEhdrError, Result,
-    image::{ModuleSearch, PathTokens, SharedDir, library_path_components, normalize_dir},
+    image::{
+        ModuleSearch, PathTokens, SharedDir, default_module_search, library_path_components,
+        normalize_dir,
+    },
     input::{ElfFile, ElfReader, Path, PathBuf},
     loader::read_ehdr,
     os::path_is_dir,
@@ -369,12 +371,13 @@ impl SearchPathResolver {
     }
 
     /// Opens and validates a target-compatible ELF candidate.
-    fn try_candidate<Arch: RelocationArch>(
+    fn try_candidate(
         &self,
         path: &Path,
         dir: Option<&SharedDir>,
         skip_incompatible: bool,
         incompatible: &mut Option<Error>,
+        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
     ) -> Result<Option<Box<dyn ElfReader>>> {
         let dir = dir.filter(|_| self.opener.is_none());
         let opened = match &self.opener {
@@ -404,8 +407,8 @@ impl SearchPathResolver {
             Err(err) => return Err(err),
         };
 
-        match read_ehdr::<Arch>(&file) {
-            Ok(_) => Ok(Some(file)),
+        match validate(file.as_ref()) {
+            Ok(()) => Ok(Some(file)),
             Err(err) if skip_incompatible && Self::is_incompatible(&err) => {
                 incompatible.get_or_insert(err);
                 Ok(None)
@@ -414,51 +417,63 @@ impl SearchPathResolver {
         }
     }
 
-    fn try_dir<Arch: RelocationArch>(
+    fn try_dir(
         &self,
         dir: &SharedDir,
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
+        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
     ) -> Result<Option<Box<dyn ElfReader>>> {
         if self.opener.is_none() && dir.is_missing() {
             return Ok(None);
         }
         candidate.set_joined(dir.path(), requested);
-        self.try_candidate::<Arch>(candidate, Some(dir), true, incompatible)
+        self.try_candidate(candidate, Some(dir), true, incompatible, validate)
     }
 
-    fn try_dirs<Arch: RelocationArch>(
+    fn try_dirs(
         &self,
         dirs: &[SharedDir],
         requested: &Path,
         candidate: &mut PathBuf,
         incompatible: &mut Option<Error>,
+        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
     ) -> Result<Option<Box<dyn ElfReader>>> {
         for dir in dirs {
-            if let Some(file) = self.try_dir::<Arch>(dir, requested, candidate, incompatible)? {
+            if let Some(file) = self.try_dir(dir, requested, candidate, incompatible, validate)? {
                 return Ok(Some(file));
             }
         }
         Ok(None)
     }
-}
-
-impl<Arch> KeyResolver<Arch> for SearchPathResolver
-where
-    Arch: RelocationArch,
-{
-    type Root = PathBuf;
-
-    #[inline]
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
-        root.as_bytes()
+    /// Open a root using the caller's search metadata and candidate validation.
+    /// Handle existing modules and synthetic providers before calling this.
+    /// Incompatible candidates are skipped for names; direct-path errors are returned.
+    pub fn open_file(
+        &self,
+        root: impl Into<PathBuf>,
+        search: Option<&ModuleSearch>,
+        tokens: &PathTokens,
+        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
+    ) -> Result<Box<dyn ElfReader>> {
+        let loaders = |visitor: &mut LoaderVisitor<'_>| {
+            search.map_or(Ok(()), |search| visitor(search).map(|_| ()))
+        };
+        let request = ResolveRequest::root(
+            root.into(),
+            search.unwrap_or_else(|| default_module_search()),
+            tokens,
+            &loaders,
+        );
+        self.search_file(request, validate)
     }
 
-    fn resolve<'cfg>(
+    fn search_file(
         &self,
-        req: ResolveRequest<'_, Self::Root>,
-    ) -> Result<ResolvedKey<'cfg, Arch>> {
+        req: ResolveRequest<'_, PathBuf>,
+        validate: &impl Fn(&dyn ElfReader) -> Result<()>,
+    ) -> Result<Box<dyn ElfReader>> {
         let requested = match req.input() {
             ResolveInput::Root { root } => root.as_path(),
             ResolveInput::Dependency { needed } => {
@@ -483,8 +498,7 @@ where
             .map_or_else(|| request.requested(), PathBuf::as_path);
         if requested.has_dir_separator() {
             return self
-                .try_candidate::<Arch>(requested, None, false, &mut incompatible)?
-                .map(ResolvedKey::load_boxed)
+                .try_candidate(requested, None, false, &mut incompatible, validate)?
                 .ok_or_else(|| req.unresolved());
         }
 
@@ -501,16 +515,17 @@ where
                         let Some(dirs) = owner.rpath_dirs() else {
                             return Ok(true);
                         };
-                        found = self.try_dirs::<Arch>(
+                        found = self.try_dirs(
                             dirs,
                             requested,
                             &mut candidate,
                             &mut incompatible,
+                            validate,
                         )?;
                         Ok(found.is_none())
                     })?;
                     if let Some(file) = found {
-                        return Ok(ResolvedKey::load_boxed(file));
+                        return Ok(file);
                     }
                 }
                 SearchPathEntry::Runpath => {
@@ -518,16 +533,16 @@ where
                         continue;
                     };
                     if let Some(file) =
-                        self.try_dirs::<Arch>(dirs, requested, &mut candidate, &mut incompatible)?
+                        self.try_dirs(dirs, requested, &mut candidate, &mut incompatible, validate)?
                     {
-                        return Ok(ResolvedKey::load_boxed(file));
+                        return Ok(file);
                     }
                 }
                 SearchPathEntry::Dir(dir) => {
                     if let Some(file) =
-                        self.try_dir::<Arch>(dir, requested, &mut candidate, &mut incompatible)?
+                        self.try_dir(dir, requested, &mut candidate, &mut incompatible, validate)?
                     {
-                        return Ok(ResolvedKey::load_boxed(file));
+                        return Ok(file);
                     }
                 }
                 SearchPathEntry::DirProvider(provider) => {
@@ -536,9 +551,9 @@ where
                     for dir in &provided {
                         candidate.set_joined(dir, requested);
                         if let Some(file) =
-                            self.try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
+                            self.try_candidate(&candidate, None, true, &mut incompatible, validate)?
                         {
-                            return Ok(ResolvedKey::load_boxed(file));
+                            return Ok(file);
                         }
                     }
                 }
@@ -547,9 +562,9 @@ where
                     provider(request, &mut provided)?;
                     for candidate in &provided {
                         if let Some(file) =
-                            self.try_candidate::<Arch>(candidate, None, true, &mut incompatible)?
+                            self.try_candidate(candidate, None, true, &mut incompatible, validate)?
                         {
-                            return Ok(ResolvedKey::load_boxed(file));
+                            return Ok(file);
                         }
                     }
                 }
@@ -557,6 +572,26 @@ where
         }
 
         Err(incompatible.unwrap_or_else(|| req.unresolved()))
+    }
+}
+
+impl<Arch> KeyResolver<Arch> for SearchPathResolver
+where
+    Arch: RelocationArch,
+{
+    type Root = PathBuf;
+
+    #[inline]
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
+    }
+
+    fn resolve<'cfg>(
+        &self,
+        req: ResolveRequest<'_, Self::Root>,
+    ) -> Result<ResolvedKey<'cfg, Arch>> {
+        self.search_file(req, &|file| read_ehdr::<Arch>(file).map(|_| ()))
+            .map(ResolvedKey::load_boxed)
     }
 }
 

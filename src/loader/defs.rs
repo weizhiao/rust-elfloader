@@ -12,7 +12,7 @@ pub(crate) struct ElfBuf {
 
 /// Reads and validates an ELF header for `Arch`.
 pub(crate) fn read_ehdr<Arch: RelocationArch>(
-    object: &impl ElfReader,
+    object: &(impl ElfReader + ?Sized),
 ) -> Result<ElfHeader<Arch::Layout>> {
     let mut raw = MaybeUninit::<<Arch::Layout as ElfLayout>::Ehdr>::uninit();
     let bytes = unsafe {

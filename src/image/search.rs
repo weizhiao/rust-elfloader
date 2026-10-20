@@ -121,8 +121,9 @@ impl fmt::Debug for SharedDir {
     }
 }
 
+/// Target values used to expand dynamic search paths.
 #[derive(Clone, Default)]
-pub(crate) struct PathTokens {
+pub struct PathTokens {
     lib: Option<Arc<str>>,
     platform: Option<Arc<str>>,
 }
@@ -225,8 +226,9 @@ impl SearchPathPool {
             .collect()
     }
 
+    /// Returns a snapshot of the configured path-token values.
     #[inline]
-    pub(crate) fn tokens(&self) -> PathTokens {
+    pub fn tokens(&self) -> PathTokens {
         self.tokens.clone()
     }
 
