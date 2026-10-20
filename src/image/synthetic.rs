@@ -11,8 +11,9 @@ use crate::{
     sync::{Arc, arc_unsize},
     tls::{TlsModule, TlsRegistration, TlsResolver},
 };
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
+use hashbrown::HashTable;
 
 /// A symbol exported by a [`SyntheticModule`], such as a host callback or variable.
 /// Use a C string literal or [`SymbolName`] for its name.
@@ -271,7 +272,7 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = (), R = ()> {
     user_data: D,
     names: Vec<SymbolName>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
-    index: BTreeMap<SymbolName, SymbolIndex>,
+    index: HashTable<IndexedName>,
 }
 
 /// Runtime callback invoked when a synthetic symbol is resolved.
@@ -296,6 +297,12 @@ where
     fn resolve(&self, symbol: &ElfSymbol<Arch::Layout>, address: VmAddr) -> Result<()> {
         self(symbol, address)
     }
+}
+
+struct IndexedName {
+    hash: u64,
+    name: SymbolName,
+    symbols: SymbolIndex,
 }
 
 #[derive(Clone, Default)]
@@ -338,7 +345,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
             user_data: (),
             names: Vec::new(),
             symbols: Vec::new(),
-            index: BTreeMap::new(),
+            index: HashTable::new(),
         }
     }
 }
@@ -421,12 +428,19 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
 
     /// Inserts one symbol, returning the definition it replaced.
     pub fn insert(&mut self, symbol: SyntheticSymbol) -> Option<SyntheticSymbol> {
-        let name = match self.index.get_key_value(symbol.name.as_bytes()) {
-            Some((name, _)) => name.clone(),
-            None => symbol.name,
-        };
+        let hash = SymbolLookup::new(symbol.name.as_bytes()).index_hash();
+        let entry = self
+            .index
+            .entry(hash, |entry| entry.name == symbol.name, |entry| entry.hash)
+            .or_insert_with(|| IndexedName {
+                hash,
+                name: symbol.name,
+                symbols: SymbolIndex::default(),
+            })
+            .into_mut();
+        let name = entry.name.clone();
+        let entry = &mut entry.symbols;
         let version = symbol.version;
-        let entry = self.index.entry(name.clone()).or_default();
         let existing = match version.as_ref() {
             Some(version) => entry.versions.iter().find_map(|(entry, index)| {
                 (entry.name == version.name).then(|| (*index, Some(entry.clone())))
@@ -508,7 +522,12 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
     /// Returns whether this module exports a synthetic symbol with `name`.
     #[inline]
     pub fn contains(&self, name: impl AsRef<[u8]>) -> bool {
-        self.index.contains_key(name.as_ref())
+        let mut lookup = SymbolLookup::new(&name);
+        self.index
+            .find(lookup.index_hash(), |entry| {
+                entry.name.as_bytes() == lookup.name()
+            })
+            .is_some()
     }
 
     /// Returns the number of synthetic symbols.
@@ -623,7 +642,12 @@ where
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
-        let entry = self.index.get(lookup.name())?;
+        let entry = &self
+            .index
+            .find(lookup.index_hash(), |entry| {
+                entry.name.as_bytes() == lookup.name()
+            })?
+            .symbols;
         let idx = match lookup.version_name() {
             Some(version) => entry
                 .versions
@@ -648,6 +672,66 @@ mod tests {
         tls::TlsTpOffset,
     };
     use core::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn synthetic_hash_collisions_keep_names_and_replacements_distinct() {
+        // These names have the same GNU hash, including the absent third name.
+        let names = [c"ab", c"bA", c"c "];
+        let hash = SymbolLookup::new(names[0].to_bytes()).gnu_hash();
+        for name in names {
+            assert_eq!(SymbolLookup::new(name.to_bytes()).gnu_hash(), hash);
+        }
+        let mut module = SyntheticModule::<NativeArch>::empty(
+            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
+            "collisions",
+        );
+        module.insert(SyntheticSymbol::function(
+            names[0],
+            0x1000usize as *const (),
+        ));
+        module.insert(SyntheticSymbol::function(
+            names[1],
+            0x2000usize as *const (),
+        ));
+        // Force table growth and verify that rehashing preserves all entries.
+        for index in 0..128 {
+            let name = alloc::ffi::CString::new(alloc::format!("extra_{index}")).unwrap();
+            module.insert(SyntheticSymbol::function(
+                name,
+                (0x4000 + index) as *const (),
+            ));
+        }
+        for index in 0..128 {
+            let name = alloc::format!("extra_{index}");
+            assert_eq!(
+                module
+                    .lookup(&mut SymbolLookup::new(&name))
+                    .unwrap()
+                    .st_value(),
+                0x4000 + index
+            );
+        }
+        assert!(module.contains(b"ab"));
+        assert!(module.contains(b"bA"));
+        assert!(!module.contains(b"c "));
+        assert!(module.lookup(&mut SymbolLookup::new(b"c ")).is_none());
+        let old = module
+            .insert(SyntheticSymbol::function(
+                names[0],
+                0x3000usize as *const (),
+            ))
+            .unwrap();
+        assert_eq!(old.value, 0x1000);
+        for (name, address) in [(b"ab", 0x3000), (b"bA", 0x2000)] {
+            assert_eq!(
+                module
+                    .lookup(&mut SymbolLookup::new(name))
+                    .unwrap()
+                    .st_value(),
+                address
+            );
+        }
+    }
 
     #[test]
     fn synthetic_module_resolves_absolute_symbols_from_scope() {

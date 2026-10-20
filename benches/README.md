@@ -1,78 +1,61 @@
 # Performance benchmarks
 
-`load_unload` compares Relink's `Linker` with glibc-backed `libloading`
-(`RTLD_NOW | RTLD_LOCAL`) on Linux/glibc.
+Requires Linux/glibc and the selected libraries in `/etc/ld.so.cache`.
 
-## Run
+## CI comparison
 
-```sh
-# Ubuntu 24.04; use equivalent runtime packages on other distributions.
-sudo apt-get install build-essential zlib1g liblz4-1 libzstd1 libsqlite3-0 \
-  libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0
-bash ci/bench.sh
-
-# List candidate SONAMEs without running benchmarks:
-bash ci/bench.sh --list-workloads
-
-# Select one installed library by SONAME:
-bash ci/bench.sh --workload libzstd.so.1
-```
-
-Defaults: `libz.so.1`, `liblz4.so.1`, `libzstd.so.1`, `libsqlite3.so.0`,
-`libpng16.so.16`, and `libfreetype.so.6`. Other system-cache SONAMEs are accepted;
-missing or incompatible libraries fail. `--list-workloads` lists system-cache
-candidates excluding host runtimes; it does not validate architecture, dependencies,
-or symbols. Preloaded host runtimes cannot be roots.
-For direct `cargo bench`, set `RELINK_BENCH_WORKLOAD` to select one library.
-
-Each case defaults to 1 second warmup, 2 seconds measurement, and 30 samples.
-Override with `RELINK_BENCH_WARMUP`, `RELINK_BENCH_DURATION`, and
-`RELINK_BENCH_SAMPLES`. Criterion options are forwarded, but avoid `--quiet`
-and filters or modes that skip either implementation: reporting requires both
-measurements in the current log.
-
-## Measurement scope
-
-Timing includes loading the root and its dependencies, eager relocation,
-constructors, finalizers, and unloading. Each loader resolves dependencies itself.
-Root lookup, host setup, context creation, and cache parsing happen outside timing;
-Relink's dependency cache lookup and file loading happen inside it.
-
-Both implementations keep a fixed set of host runtimes loaded, defined by
-`HOST_RUNTIMES` in `support/libraries.rs`. Relink uses the public
-`host::open` adapter to import their supported exports, including TLS,
-symbol versions and resolved IFUNCs. Host TLS is resolved
-by glibc through the default TLS runtime; loaded libraries can also define their
-own dynamic TLS. The bridge does not supply static host TP offsets, so host
-`TPOFF` imports are unsupported. Other dependencies load
-from ELF files. Relink reuses a host-only context and a system-cache snapshot;
-its resolver enables RPATH/RUNPATH but omits environment and default directories.
-
-After measurement, Relink's context must contain only host modules. Native root
-absence is checked with `RTLD_NOLOAD` before and after libloading measurement.
-There are no library-specific API checks, dependency-path comparisons, or
-independent checks of unmapping and native dependency unloading.
-
-These are sequential, warm-page-cache measurements. glibc may choose different
-optimized dependency binaries and manages its own cache lifetime. Results do not
-cover cold startup or loading another libc. Regenerate baselines created before
-the default TLS runtime was enabled.
-
-## Results and comparisons
-
-`target/benchmark-report/` contains `summary.md`, `run.log`, and `environment.txt`
-with toolchain/system details and hashes of the cache, roots, and host runtimes
-(not the dependency closure). Raw Criterion results are in `target/criterion`;
-benchmark IDs use `load_unload/<SONAME>/<implementation>`. Regenerate baselines
-created with the previous `end_to_end_cache` group.
+Compare Relink with `libloading` (`RTLD_NOW | RTLD_LOCAL`):
 
 ```sh
-# Baseline revision:
+bash ci/bench.sh                          # Default suite
+bash ci/bench.sh --list-workloads         # Candidate SONAMEs, not validated
+bash ci/bench.sh --workload libzstd.so.1   # One library
 bash ci/bench.sh --save-baseline before
-# Changed revision, using the same harness and machine:
 bash ci/bench.sh --baseline before
 ```
 
-Use the same binaries and an idle machine; do not run measurements concurrently.
-Regenerate baselines when the harness changes. Shared CI reports results without
-an enforced regression threshold.
+The default suite covers zlib, LZ4, Zstd, SQLite, libpng and FreeType.
+Each case uses 1 second warmup, 2 seconds measurement and 30 samples; override
+with `RELINK_BENCH_WARMUP`, `RELINK_BENCH_DURATION` and `RELINK_BENCH_SAMPLES`.
+Criterion options are forwarded; reporting requires both loaders, so avoid
+`--quiet` or filters that skip either one.
+
+Reports and environment/file manifests go to `target/benchmark-report/`;
+raw Criterion data goes to `target/criterion/`.
+
+## Relink profiling
+
+The standalone runner requires `--workload`. It prints each round’s iteration
+count, elapsed time and average ns/load, plus P10/median/P90 across round averages.
+
+```sh
+CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --example load_bench --features version
+taskset -c 2 target/release/examples/load_bench --workload libfreetype.so.6
+perf record -e cpu-clock -F 999 --call-graph dwarf -- \
+  target/release/examples/load_bench --workload libfreetype.so.6 \
+  --iterations 10000 --rounds 1
+perf report
+```
+
+Defaults: `--warmup-ms 1000 --sample-ms 1000 --rounds 9`. Iterations are calibrated
+once to target the sample duration; `--iterations N` selects a fixed count instead.
+P10/P90 show variation between rounds, not confidence bounds or operation tails.
+Compare before/after binaries in alternating order with the same settings and CPU
+affinity (choose an available CPU). Profiling also includes setup and calibration.
+
+## Measurement scope
+
+Timing includes root/dependency loading, eager relocation, constructors,
+finalizers and unloading. Root lookup, host setup, context creation and cache
+parsing are excluded. These are warm-page-cache measurements, not cold startup.
+
+Both loaders retain the fixed `HOST_RUNTIMES` from `support/libraries.rs`.
+Relink imports them with `host::open`, including versions, IFUNCs and dynamic TLS;
+static host TLS offsets are unsupported. Other dependencies load from ELF files.
+Relink uses RPATH/RUNPATH and a cache snapshot, without environment or default
+search directories; glibc may select different dependency binaries.
+
+Checks verify Relink's context returns to host-only state and the native root
+is absent around native measurements. They do not validate library APIs or
+independently verify all dependency unmapping. Use an idle machine, never run
+measurements concurrently, and regenerate baselines when the harness changes.

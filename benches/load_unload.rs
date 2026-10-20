@@ -2,11 +2,11 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use elf_loader::{Linker, Loader, input::PathBuf};
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
-use std::hint::black_box;
+use std::{ffi::CString, hint::black_box, os::unix::ffi::OsStrExt, path::Path};
 
 #[path = "support/libraries.rs"]
 mod libraries;
-use libraries::{HostLibraries, LibraryCache, assert_native_unloaded, root_path};
+use libraries::{HostLibraries, LibraryCache, root_path};
 
 const DEFAULT_WORKLOADS: &[&str] = &[
     "libz.so.1",
@@ -35,7 +35,7 @@ fn bench_load_unload(c: &mut Criterion) {
         );
         eprintln!("workload\t{soname}");
     }
-    let cache = LibraryCache::new();
+    let cache = LibraryCache::new(true);
     let roots: Vec<_> = workloads
         .iter()
         .map(|&soname| (soname, root_path(&cache, soname)))
@@ -76,6 +76,18 @@ fn bench_load_unload(c: &mut Criterion) {
         assert_native_unloaded(&path);
     }
     group.finish();
+}
+
+fn assert_native_unloaded(path: &Path) {
+    let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
+    if !handle.is_null() {
+        unsafe { libc::dlclose(handle) };
+        panic!(
+            "{} remains loaded; refusing cached-handle measurements",
+            path.display()
+        );
+    }
 }
 
 criterion_group!(benches, bench_load_unload);

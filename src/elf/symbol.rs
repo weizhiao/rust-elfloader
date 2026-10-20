@@ -635,16 +635,10 @@ impl<'symbol> SymbolLookup<'symbol> {
         }
     }
 
+    /// Spreads the cached GNU hash across internal table bucket and fingerprint bits.
     #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn custom_hash(&mut self) -> u64 {
-        if let Some(hash) = self.precompute.custom {
-            hash
-        } else {
-            let hash = crate::object::CustomHash::<&[u8]>::hash(self.name());
-            self.precompute.custom = Some(hash);
-            hash
-        }
+    pub(crate) fn index_hash(&mut self) -> u64 {
+        u64::from(self.gnu_hash()).wrapping_mul(0x9e37_79b9_7f4a_7c15)
     }
 
     #[inline]

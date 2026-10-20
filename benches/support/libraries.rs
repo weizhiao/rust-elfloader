@@ -7,7 +7,7 @@ use elf_loader::{
     tls::DefaultTlsResolver,
 };
 use std::{
-    ffi::{CString, OsStr},
+    ffi::OsStr,
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
@@ -30,13 +30,27 @@ const HOST_RUNTIMES: &[&str] = &[
 /// Shared cache snapshot for root lookup and timed dependency lookup.
 pub struct LibraryCache {
     cache: LdCache,
+    record_manifest: bool,
 }
 
 impl LibraryCache {
-    pub fn new() -> Self {
-        let cache = LdCache::load_system().expect("cannot read /etc/ld.so.cache");
-        record_file("cache", "ld.so.cache", Path::new("/etc/ld.so.cache"));
-        Self { cache }
+    pub fn new(record_manifest: bool) -> Self {
+        let cache = Self {
+            cache: LdCache::load_system().expect("cannot read /etc/ld.so.cache"),
+            record_manifest,
+        };
+        cache.record_file("cache", "ld.so.cache", Path::new("/etc/ld.so.cache"));
+        cache
+    }
+
+    /// Machine-readable records consumed by ci/bench.sh to hash the exact files.
+    fn record_file(&self, kind: &str, soname: &str, path: &Path) {
+        if self.record_manifest {
+            eprintln!(
+                "manifest\t{kind}\t{soname}\t{}",
+                fs::canonicalize(path).unwrap().display()
+            );
+        }
     }
 
     /// Finds the first installed candidate accepted by the native loader backend.
@@ -63,28 +77,8 @@ pub fn root_path(cache: &LibraryCache, name: &str) -> PathBuf {
     let path = cache
         .find(name)
         .unwrap_or_else(|| panic!("missing compatible {name}; see benches/README.md"));
-    record_file("root", name, &path);
+    cache.record_file("root", name, &path);
     path
-}
-
-pub fn assert_native_unloaded(path: &Path) {
-    let name = CString::new(path.as_os_str().as_bytes()).unwrap();
-    let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
-    if !handle.is_null() {
-        unsafe { libc::dlclose(handle) };
-        panic!(
-            "{} remains loaded; refusing cached-handle measurements",
-            path.display()
-        );
-    }
-}
-
-/// Machine-readable records consumed by ci/bench.sh to hash the exact files.
-fn record_file(kind: &str, soname: &str, path: &Path) {
-    eprintln!(
-        "manifest\t{kind}\t{soname}\t{}",
-        fs::canonicalize(path).unwrap().display()
-    );
 }
 
 struct HostModule {
@@ -101,7 +95,6 @@ impl HostModule {
         let module =
             unsafe { host::open(domain, ElfPath::new(path.as_os_str().as_bytes()), soname) }
                 .unwrap();
-        record_file("host", soname, path);
         Self {
             soname: soname.to_owned(),
             module,
@@ -123,9 +116,11 @@ impl HostLibraries {
         let libraries = HOST_RUNTIMES
             .iter()
             .filter_map(|soname| {
-                cache
-                    .find(soname)
-                    .map(|path| HostModule::load(&domain, soname, &path))
+                cache.find(soname).map(|path| {
+                    let module = HostModule::load(&domain, soname, &path);
+                    cache.record_file("host", soname, &path);
+                    module
+                })
             })
             .collect();
         Self { domain, libraries }

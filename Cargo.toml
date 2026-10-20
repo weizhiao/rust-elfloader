@@ -88,13 +88,6 @@ features = ["mutex", "once", "rwlock", "spin_mutex"]
 [dependencies.hashbrown]
 version = "0.16.0"
 default-features = false
-features = ["default-hasher"]
-optional = true
-
-[dependencies.foldhash]
-version = "0.2.0"
-default-features = false
-optional = true
 
 [dependencies]
 bitflags = "2.9.0"
@@ -137,6 +130,10 @@ path = "tests/lazy/main.rs"
 required-features = ["lazy-binding"]
 
 [[example]]
+name = "load_bench"
+required-features = ["libc", "version"]
+
+[[example]]
 name = "load_object"
 required-features = ["object"]
 
@@ -159,7 +156,7 @@ version = []
 # Enable lazy binding support.
 lazy-binding = []
 # Enable relocatable object (`.o`) loading and lookup support.
-object = ["dep:foldhash", "dep:hashbrown"]
+object = ["hashbrown/default-hasher"]
 # Enable logging.
 log = ["dep:log"]
 # support target without native pointer size atomic operation

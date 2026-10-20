@@ -102,9 +102,6 @@ pub(in crate::elf) struct PreCompute {
 
     /// Traditional hash value (used for SYSV hash tables)
     pub(in crate::elf) hash: Option<u32>,
-
-    #[cfg(feature = "object")]
-    pub(in crate::elf) custom: Option<u64>,
 }
 
 impl PreCompute {
@@ -113,8 +110,6 @@ impl PreCompute {
         Self {
             gnuhash: None,
             hash: None,
-            #[cfg(feature = "object")]
-            custom: None,
         }
     }
 }

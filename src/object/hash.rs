@@ -3,16 +3,13 @@
 use crate::elf::{
     ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, SymbolHash, SymbolLookup, SymbolTableView,
 };
-use core::hash::{Hash, Hasher};
-use foldhash::{SharedSeed, fast::FoldHasher};
 use hashbrown::HashTable as RawHashTable;
 
 struct TableEntry<N> {
+    hash: u64,
     name: N,
     idx: usize,
 }
-
-const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
 /// Hash table used for symbol lookup in Relink-generated object exports.
 pub struct CustomHash<N = &'static [u8]> {
@@ -27,12 +24,6 @@ impl<N> CustomHash<N> {
         }
     }
 
-    pub(crate) fn hash(name: &[u8]) -> u64 {
-        let mut hasher = HASHER.clone();
-        name.hash(&mut hasher);
-        hasher.finish()
-    }
-
     #[inline]
     pub(crate) fn count_syms(&self) -> usize {
         self.map.len()
@@ -42,23 +33,21 @@ impl<N> CustomHash<N> {
 impl<N: AsRef<[u8]>> CustomHash<N> {
     #[inline]
     pub(crate) fn find_idx(&self, name: &[u8]) -> Option<usize> {
-        let hash = Self::hash(name);
+        let hash = SymbolLookup::new(name).index_hash();
         self.find_idx_with_hash(name, hash)
     }
 
     #[inline]
     pub(crate) fn lookup_idx(&self, lookup: &mut SymbolLookup<'_>) -> Option<usize> {
-        let hash = lookup.custom_hash();
+        let hash = lookup.index_hash();
         self.find_idx_with_hash(lookup.name(), hash)
     }
 
     #[inline]
     pub(crate) fn insert_unique(&mut self, name: N, idx: usize) {
-        let hash = Self::hash(name.as_ref());
+        let hash = SymbolLookup::new(name.as_ref()).index_hash();
         self.map
-            .insert_unique(hash, TableEntry { name, idx }, |val| {
-                Self::hash(val.name.as_ref())
-            });
+            .insert_unique(hash, TableEntry { hash, name, idx }, |entry| entry.hash);
     }
 
     #[inline]
