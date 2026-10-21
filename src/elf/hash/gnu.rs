@@ -313,16 +313,17 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             // Check if this chain entry matches our hash (ignoring LSB)
             if hash | 1 == chain_hash | 1 {
                 let cur_symbol = table.get_raw(cur_symbol_idx)?;
-                let sym_name = table.strtab.get_cstr(cur_symbol.st_name()).to_bytes();
+                let name_matches = table
+                    .strtab
+                    .matches_name(cur_symbol.st_name(), lookup.name());
 
                 // Check if this is the symbol we're looking for
                 #[cfg(feature = "version")]
-                if sym_name == lookup.name() && table.check_match(cur_symbol_idx, lookup.version())
-                {
+                if name_matches && table.check_match(cur_symbol_idx, lookup.version()) {
                     return Some(cur_symbol);
                 }
                 #[cfg(not(feature = "version"))]
-                if sym_name == lookup.name() {
+                if name_matches {
                     return Some(cur_symbol);
                 }
             }

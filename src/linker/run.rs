@@ -345,7 +345,6 @@ where
                 } else {
                     session.mark_module_ready(id, retained);
                 }
-                session.push_lifecycle(id);
             }
             Ok(())
         })();

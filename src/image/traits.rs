@@ -133,7 +133,8 @@ where
 
     /// Tries to resolve a typed symbol while this module remains borrowed.
     ///
-    /// Names are raw bytes without a trailing NUL; strings are also accepted.
+    /// Names are raw bytes or strings and must not contain NUL bytes;
+    /// this is not checked.
     ///
     /// # Safety
     ///
@@ -147,7 +148,8 @@ where
 
     /// Tries to resolve a versioned typed symbol while this module remains borrowed.
     ///
-    /// Names and versions are raw bytes without a trailing NUL.
+    /// Names must not contain NUL bytes; this is not checked.
+    /// Versions are raw bytes without a trailing NUL.
     ///
     /// # Safety
     ///

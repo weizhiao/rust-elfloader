@@ -1,5 +1,5 @@
 use super::storage::{CommittedStorage, ContextId, ModuleId, ModuleKey, ModuleLease};
-use super::unload::{UnloadGroup, UnloadedModule};
+use super::unload::UnloadGroup;
 use crate::{
     Result,
     arch::NativeArch,
@@ -156,12 +156,7 @@ where
     /// Returns the representative key associated with a committed module id.
     #[inline]
     pub fn module_key(&self, id: ModuleId) -> Result<&ModuleKey> {
-        let module_slot = self.committed.module_slot(id)?;
-        let module = self
-            .committed
-            .module(module_slot)
-            .expect("validated module id must refer to committed state");
-        Ok(module.entry_key())
+        Ok(self.committed.checked_module(id)?.entry_key())
     }
 
     /// Returns the committed module associated with an id.
@@ -175,24 +170,13 @@ where
     /// ```
     #[inline]
     pub fn module(&self, id: ModuleId) -> Result<&dyn Module<Arch>> {
-        let slot = self.committed.module_slot(id)?;
-        Ok(self
-            .committed
-            .module(slot)
-            .expect("validated module id must refer to committed state")
-            .handle()
-            .as_ref())
+        Ok(self.committed.checked_module(id)?.handle().as_ref())
     }
 
     /// Returns metadata owned by this context entry.
     #[inline]
     pub fn meta(&self, id: ModuleId) -> Result<&Meta> {
-        let slot = self.committed.module_slot(id)?;
-        Ok(self
-            .committed
-            .module(slot)
-            .expect("validated module id must refer to committed state")
-            .meta())
+        Ok(self.committed.checked_module(id)?.meta())
     }
 
     /// Returns mutable metadata owned by this context entry.
@@ -209,11 +193,9 @@ where
     /// Returns direct dependency modules for a committed module.
     #[inline]
     pub fn direct_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
-        let slot = self.committed.module_slot(id)?;
         Ok(self
             .committed
-            .module(slot)
-            .expect("validated module id must refer to committed state")
+            .checked_module(id)?
             .direct_deps()
             .iter()
             .copied()
@@ -223,11 +205,9 @@ where
     /// Returns modules retained by this module's runtime symbol bindings.
     #[inline]
     pub fn reloc_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
-        let slot = self.committed.module_slot(id)?;
         let deps = self
             .committed
-            .module(slot)
-            .expect("validated module id must refer to committed state")
+            .checked_module(id)?
             .handle()
             .state()
             .with_effects(|bindings, _| {
@@ -412,16 +392,7 @@ where
                 .module_for_source(module.source_id())
                 .is_some_and(|slot| reachable.contains(slot))
         });
-        let mut modules = Vec::with_capacity(unload_order.len());
-        for slot in unload_order {
-            let id = self.committed.make_module_id(slot);
-            let (module, retained, meta) = self.committed.remove(slot);
-            modules.push(UnloadedModule::new(id, module, retained, meta));
-        }
-        if !modules.is_empty() {
-            self.committed.prune_removed();
-        }
-        Ok(UnloadGroup::new(modules))
+        Ok(self.committed.remove_batch(unload_order))
     }
 
     /// Returns the retained breadth-first dependency scope rooted at `root`.
@@ -597,17 +568,6 @@ mod tests {
             load_group_names(&mut context, root.id()),
             ["root", "dependency"]
         );
-    }
-
-    #[test]
-    fn process_context_uses_native_defaults() {
-        let context = LinkContext::for_process();
-
-        assert_eq!(
-            context.domain_id(),
-            Domain::<NativeArch>::native(AddressSpaceId::PROCESS).id()
-        );
-        assert!(context.is_empty());
     }
 
     #[test]

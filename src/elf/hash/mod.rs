@@ -20,9 +20,19 @@ use sysv::ElfHash;
 /// Compute the layout-independent GNU hash of a symbol name.
 #[inline]
 pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
-    name.iter().fold(5381u32, |hash, byte| {
-        hash.wrapping_mul(33).wrapping_add(u32::from(*byte))
-    })
+    let mut hash = 5381u32;
+    let mut pairs = name.chunks_exact(2);
+    for pair in &mut pairs {
+        // Combine two rounds so the second byte does not depend on the
+        // intermediate hash: (h * 33 + a) * 33 + b.
+        hash = hash
+            .wrapping_mul(33 * 33)
+            .wrapping_add(u32::from(pair[0]) * 33 + u32::from(pair[1]));
+    }
+    if let [byte] = pairs.remainder() {
+        hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
+    }
+    hash
 }
 
 #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]

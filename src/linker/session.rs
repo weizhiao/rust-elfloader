@@ -1,6 +1,6 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, ModuleId, ModuleKey, ModuleSlot, StoredEntry},
+    storage::{CommittedStorage, ModuleId, ModuleKey, ModuleSlot, ReservationReturns, StoredEntry},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
@@ -102,6 +102,58 @@ impl<Arch: RelocationArch> ReadyModule<Arch> {
     }
 }
 
+struct StagedSource {
+    slot: ModuleSlot,
+    generation: u32,
+    ready_index: Option<usize>,
+}
+
+#[derive(Default)]
+struct PendingSources {
+    entries: BTreeMap<ModuleSourceId, StagedSource>,
+    returns: Option<ReservationReturns>,
+}
+
+impl PendingSources {
+    fn reserve<Meta, Arch: RelocationArch>(
+        &mut self,
+        committed: &mut CommittedStorage<Meta, Arch>,
+        source: ModuleSourceId,
+    ) -> (ModuleSlot, u32) {
+        let Entry::Vacant(entry) = self.entries.entry(source) else {
+            panic!("pending module sources must be unique");
+        };
+        self.returns
+            .get_or_insert_with(|| committed.reserve_returns());
+        let slot = committed.alloc_module();
+        let generation = committed.generation(slot);
+        entry.insert(StagedSource {
+            slot,
+            generation,
+            ready_index: None,
+        });
+        (slot, generation)
+    }
+
+    fn disarm(&mut self) {
+        self.returns = None;
+    }
+}
+
+impl Drop for PendingSources {
+    fn drop(&mut self) {
+        if let Some(returns) = &self.returns {
+            // Transactions may outlive their context or be dropped elsewhere.
+            // Return only identities; the next allocation batch reclaims them.
+            returns.lock().extend(
+                self.entries
+                    .values()
+                    .map(|source| (source.slot, source.generation)),
+            );
+        }
+    }
+}
+
 pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
     dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch>>,
@@ -111,7 +163,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
     guards: BTreeMap<ModuleSlot, u32>,
     group_order: Vec<ModuleSlot>,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
-    sources: BTreeMap<ModuleSourceId, ModuleSlot>,
+    sources: PendingSources,
     pins: Vec<ModuleSlot>,
 }
 
@@ -128,7 +180,7 @@ where
             guards: BTreeMap::new(),
             group_order: Vec::new(),
             bindings: BTreeMap::new(),
-            sources: BTreeMap::new(),
+            sources: PendingSources::default(),
             pins: Vec::new(),
         }
     }
@@ -160,14 +212,16 @@ where
 
     #[inline]
     pub(crate) fn module_for_source(&self, id: ModuleSourceId) -> Option<ModuleSlot> {
-        self.sources.get(&id).copied()
+        self.sources.entries.get(&id).map(|source| source.slot)
     }
 
     #[inline]
-    pub(crate) fn stage_source(&mut self, id: ModuleSourceId, module: ModuleSlot) {
-        if let Some(previous) = self.sources.insert(id, module) {
-            assert_eq!(previous, module, "pending module sources must be unique");
-        }
+    pub(crate) fn reserve_source<Meta>(
+        &mut self,
+        committed: &mut CommittedStorage<Meta, Arch>,
+        source: ModuleSourceId,
+    ) -> (ModuleSlot, u32) {
+        self.sources.reserve(committed, source)
     }
 
     #[inline]
@@ -253,12 +307,10 @@ where
         direct_deps: Box<[ModuleSlot]>,
     ) {
         self.track(slot, generation);
-        let source = module.source_id();
         let previous = self
             .modules
             .insert(slot, PendingModule::new(entry_key, module, direct_deps));
         debug_assert!(previous.is_none(), "pending modules must be unique");
-        self.stage_source(source, slot);
     }
 
     pub(crate) fn split_dynamics<Q>(
@@ -369,17 +421,17 @@ pub(crate) struct LoadSession<
     Tls: TlsResolver<Arch> = (),
 > {
     resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>,
-    ready_to_commit: BTreeMap<ModuleSlot, ReadyModule<Arch>>,
-    lifecycle: Vec<ModuleSlot>,
+    // Relocation appends modules in lifecycle order, which is also the order
+    // used for initialization and publication.
+    ready_to_commit: Vec<(ModuleSlot, ReadyModule<Arch>)>,
 }
 
 pub(crate) struct PublishSession<Arch: RelocationArch> {
     guards: BTreeMap<ModuleSlot, u32>,
-    modules: BTreeMap<ModuleSlot, ReadyModule<Arch>>,
+    modules: Vec<(ModuleSlot, ReadyModule<Arch>)>,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
-    pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
+    pending_sources: PendingSources,
     pins: Vec<ModuleSlot>,
-    lifecycle: Vec<ModuleSlot>,
 }
 
 pub(crate) struct CommitResult {
@@ -395,10 +447,10 @@ where
 {
     #[inline]
     pub(crate) fn from_resolve(resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>) -> Self {
+        let pending_len = resolve.dynamics.len() + resolve.modules.len();
         Self {
             resolve,
-            ready_to_commit: BTreeMap::new(),
-            lifecycle: Vec::new(),
+            ready_to_commit: Vec::with_capacity(pending_len),
         }
     }
 
@@ -478,15 +530,30 @@ where
             module,
             direct_deps,
         };
-        let previous = self
-            .ready_to_commit
-            .insert(slot, ReadyModule::new(pending, retained));
-        debug_assert!(previous.is_none(), "ready commit entries must be unique");
+        self.stage_ready(slot, pending, retained);
     }
 
     #[inline]
-    pub(crate) fn push_lifecycle(&mut self, slot: ModuleSlot) {
-        self.lifecycle.push(slot);
+    fn stage_ready(
+        &mut self,
+        slot: ModuleSlot,
+        pending: PendingModule<Arch>,
+        retained: ModuleScope<Arch>,
+    ) {
+        let source = self
+            .resolve
+            .sources
+            .entries
+            .get_mut(&pending.module.source_id())
+            .expect("ready module source must be staged");
+        debug_assert_eq!(source.slot, slot);
+        debug_assert!(
+            source.ready_index.is_none(),
+            "ready commit entries must be unique"
+        );
+        source.ready_index = Some(self.ready_to_commit.len());
+        self.ready_to_commit
+            .push((slot, ReadyModule::new(pending, retained)));
     }
 
     pub(crate) fn mark_module_ready(&mut self, slot: ModuleSlot, retained: ModuleScope<Arch>) {
@@ -495,10 +562,7 @@ where
             .modules
             .remove(&slot)
             .expect("missing pending module handle while preparing lifecycle");
-        let previous = self
-            .ready_to_commit
-            .insert(slot, ReadyModule::new(module, retained));
-        debug_assert!(previous.is_none(), "ready commit entries must be unique");
+        self.stage_ready(slot, module, retained);
     }
 
     pub(crate) fn build_lifecycle_order(&self, root: ModuleSlot, order: &mut Vec<ModuleSlot>) {
@@ -548,7 +612,6 @@ where
         let Self {
             resolve,
             ready_to_commit,
-            lifecycle,
         } = self;
         let ResolveSession {
             dynamics,
@@ -570,7 +633,6 @@ where
             bindings,
             pending_sources: sources,
             pins,
-            lifecycle,
         }
     }
 }
@@ -580,15 +642,9 @@ where
     Arch: RelocationArch,
 {
     pub(crate) fn initializers(&self) -> Box<[ModuleHandle<Arch>]> {
-        self.lifecycle
+        self.modules
             .iter()
-            .map(|id| {
-                let module = self
-                    .modules
-                    .get(id)
-                    .expect("lifecycle order must refer to a ready module");
-                module.module().clone()
-            })
+            .map(|(_, entry)| entry.module().clone())
             .collect::<Vec<_>>()
             .into_boxed_slice()
     }
@@ -604,12 +660,9 @@ where
             guards,
             modules,
             bindings,
-            pending_sources,
+            mut pending_sources,
             mut pins,
-            lifecycle,
         } = self;
-        let mut ready = modules;
-        let mut committed_ids = Vec::with_capacity(ready.len());
         // Slot generations protect references resolved through the context;
         // no committed state is changed until every guard has been checked.
         for (slot, generation) in guards {
@@ -620,7 +673,7 @@ where
                 .into());
             }
         }
-        for &source in pending_sources.keys() {
+        for &source in pending_sources.entries.keys() {
             if committed.module_for_source(source).is_some() {
                 return Err(
                     LinkerError::context(LinkContextError::SourceOccupied { source }).into(),
@@ -629,15 +682,23 @@ where
         }
         // Relocation records exact provider instances. Verify those providers
         // still exist, not merely another load of the same source.
-        for (&slot, entry) in &ready {
+        for (slot, entry) in &modules {
             let module = entry.module();
-            debug_assert_eq!(pending_sources.get(&module.source_id()), Some(&slot));
+            debug_assert_eq!(
+                pending_sources
+                    .entries
+                    .get(&module.source_id())
+                    .map(|source| source.slot),
+                Some(*slot)
+            );
             let find_provider = |provider: ModuleInstanceId| {
                 pending_sources
+                    .entries
                     .get(&provider.source_id())
-                    .and_then(|slot| ready.get(slot).map(|entry| (*slot, entry)))
+                    .and_then(|source| source.ready_index)
+                    .and_then(|index| modules.get(index))
                     .filter(|(_, entry)| provider == entry.module().state().instance_id())
-                    .map(|(slot, _)| slot)
+                    .map(|(slot, _)| *slot)
                     .or_else(|| committed.module_for_binding(provider))
             };
             let missing_provider = module.state().with_effects(|bindings, requested_pins| {
@@ -662,38 +723,31 @@ where
                 );
             }
         }
-        for &slot in &lifecycle {
-            let entry = ready
-                .remove(&slot)
-                .expect("lifecycle order must contain every ready module");
-            let ReadyModule { pending, retained } = entry;
-            let PendingModule {
-                entry_key,
-                module,
-                direct_deps,
-            } = pending;
-            committed.insert(
-                slot,
-                StoredEntry::new(entry_key, module, direct_deps, retained, 0, Meta::default()),
-            );
-            committed_ids.push(committed.make_module_id(slot));
-        }
-        assert!(
-            ready.is_empty(),
-            "ready commit entries must all be present in lifecycle order"
-        );
-        for (key, modules) in bindings {
-            for module in modules {
-                committed.bind_key(key.clone(), module);
+        let committed_ids = committed.publish(modules.len(), |publication| {
+            let mut committed_ids = Vec::with_capacity(modules.len());
+            for (slot, entry) in modules {
+                let ReadyModule { pending, retained } = entry;
+                let PendingModule {
+                    entry_key,
+                    module,
+                    direct_deps,
+                } = pending;
+                committed_ids.push(publication.insert(
+                    slot,
+                    StoredEntry::new(entry_key, module, direct_deps, retained, 0, Meta::default()),
+                ));
             }
-        }
-        committed.extend_lifecycle(&lifecycle);
-        for &slot in &pins {
-            committed
-                .module_mut(slot)
-                .expect("resolved pin must refer to a committed module")
-                .pin();
-        }
+            for (key, modules) in bindings {
+                for module in modules {
+                    publication.bind_key(key.clone(), module);
+                }
+            }
+            for &slot in &pins {
+                publication.pin(slot);
+            }
+            committed_ids
+        });
+        pending_sources.disarm();
         Ok(CommitResult {
             modules: committed_ids.into_boxed_slice(),
             pins: pins.into_boxed_slice(),

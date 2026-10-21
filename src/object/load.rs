@@ -52,9 +52,9 @@ where
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch, M::Region, Tls>>
+    pub fn load_object<I>(&mut self, input: I) -> Result<RawObject<D, Arch, M::Region, Tls>>
     where
-        I: IntoElfReader<'a>,
+        I: IntoElfReader,
     {
         let object = input.into_reader()?;
         logging::debug!("Loading object: {}", object.path());

@@ -866,7 +866,7 @@ impl PltGotSection {
             })?;
 
             let relocations =
-                object.read_slice::<ElfRelType<Arch>, _>(shdr.sh_offset(), size, &mut scratch)?;
+                object.read_slice::<ElfRelType<Arch>>(shdr.sh_offset(), size, &mut scratch)?;
             for rel_entry in relocations {
                 let r_type = rel_entry.r_type();
                 let needs_got = Arch::needs_got(r_type);

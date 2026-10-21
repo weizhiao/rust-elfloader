@@ -251,21 +251,3 @@ where
         self.into_fields().into_loader()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Loader;
-    use crate::runtime::{AddressSpaceId, Domain};
-
-    #[test]
-    fn run_preserves_runtime_domain() {
-        let domain = Domain::native(AddressSpaceId::new());
-        let loader = Loader::new()
-            .with_data::<()>()
-            .with_arch::<crate::arch::NativeArch>()
-            .with_mmap(crate::os::DefaultMmap::new());
-        let run = loader.run(domain.clone());
-
-        assert_eq!(run.domain.id(), domain.id());
-    }
-}

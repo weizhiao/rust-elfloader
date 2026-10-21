@@ -329,7 +329,7 @@ mod tests {
     super::entity_ref!(TestId);
 
     #[test]
-    fn primary_map_returns_dense_index_ids() {
+    fn primary_map_preserves_dense_ids_through_mutation_and_iteration() {
         let mut arena = PrimaryMap::<TestId, u32>::default();
 
         let first = arena.push(7);
@@ -340,18 +340,9 @@ mod tests {
         assert_eq!(arena.get(second), Some(&11));
         assert_eq!(arena[first], 7);
         arena[first] = 13;
-        assert_eq!(arena[first], 13);
-    }
-
-    #[test]
-    fn primary_map_consuming_iterator_yields_keys_and_values() {
-        let mut arena = PrimaryMap::<TestId, u32>::default();
-        let first = arena.push(7);
-        let second = arena.push(11);
-
         assert_eq!(
             arena.into_iter().collect::<Vec<_>>(),
-            [(first, 7), (second, 11)]
+            [(first, 13), (second, 11)]
         );
     }
 

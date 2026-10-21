@@ -98,11 +98,9 @@ where
     ) -> ModuleSlot {
         let source = payload.source_id();
         let (path, soname) = search_aliases(payload.search(), &entry_key);
-        let slot = self.committed.alloc_module();
-        let generation = self.committed.generation(slot);
+        let (slot, generation) = self.session.reserve_source(self.committed, source);
         self.session
             .stage_dynamic(slot, generation, entry_key.clone(), payload, loader);
-        self.session.stage_source(source, slot);
         self.session.bind_key(entry_key, slot);
         if let Some(path) = path {
             self.session.bind_key(path, slot);
@@ -123,8 +121,9 @@ where
             .search()
             .map(|search| search_aliases(search, &entry_key))
             .unwrap_or_default();
-        let slot = self.committed.alloc_module();
-        let generation = self.committed.generation(slot);
+        let (slot, generation) = self
+            .session
+            .reserve_source(self.committed, module.source_id());
         self.session
             .stage_module(slot, generation, entry_key.clone(), module, direct_deps);
         self.session.bind_key(entry_key, slot);

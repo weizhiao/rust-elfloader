@@ -172,15 +172,17 @@ impl ElfHash {
             // Get the current symbol and its name
             let next_chain = *chains.get(chain_idx)? as usize;
             let cur_symbol = table.get_raw(chain_idx)?;
-            let sym_name = table.strtab.get_cstr(cur_symbol.st_name()).to_bytes();
+            let name_matches = table
+                .strtab
+                .matches_name(cur_symbol.st_name(), lookup.name());
 
             // Check if this is the symbol we're looking for
             #[cfg(feature = "version")]
-            if sym_name == lookup.name() && table.check_match(chain_idx, lookup.version()) {
+            if name_matches && table.check_match(chain_idx, lookup.version()) {
                 return Some(cur_symbol);
             }
             #[cfg(not(feature = "version"))]
-            if sym_name == lookup.name() {
+            if name_matches {
                 return Some(cur_symbol);
             }
 

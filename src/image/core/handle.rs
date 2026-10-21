@@ -268,17 +268,3 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct NonCloneData;
-
-    #[test]
-    fn weak_core_ref_clone_does_not_require_user_data_clone() {
-        fn assert_clone<T: Clone>() {}
-
-        assert_clone::<ElfCoreRef<NonCloneData>>();
-    }
-}

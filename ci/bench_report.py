@@ -6,7 +6,7 @@ import sys
 
 GROUP = 'load_teardown'
 IMPLEMENTATIONS = ('relink', 'libloading')
-PHASES = ('load', 'teardown', 'total')
+PHASES = ('load', 'teardown')
 
 
 def benchmark_id(library, implementation, phase):
@@ -56,7 +56,7 @@ print('Warm page cache; fresh Relink context per iteration. Context creation and
       'host imports are excluded; Relink teardown includes release and context '
       'destruction. Native teardown is dlclose. '
       'Times: mean [95% CI] in µs. Ratio: Relink / libloading (lower is faster). '
-      'Phases are sampled independently; their estimates need not sum exactly.\n')
+      'Load and teardown are sampled independently.\n')
 print('| Library | Phase | Relink (µs) | libloading (µs) | Ratio |')
 print('|---|---|---:|---:|---:|')
 for library in libraries:

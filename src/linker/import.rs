@@ -147,66 +147,65 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
     source: &LinkContext<SourceMeta, Arch, Tls>,
     modules: &[ModuleSlot],
     mapped: &SecondaryMap<ModuleSlot, ModuleSlot>,
+    bindings: Vec<(ModuleKey, ModuleSlot)>,
 ) where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
     TargetMeta: Default,
 {
-    let mut lifecycle = Vec::with_capacity(modules.len());
-    let mut pins = Vec::new();
-    for &slot in modules {
-        let module = source
-            .committed
-            .module(slot)
-            .expect("collected imports must only contain committed modules");
-        let deps = module
-            .direct_deps()
-            .iter()
-            .map(|dep| {
-                *mapped
-                    .get(*dep)
-                    .expect("dependency closure must contain every bound module")
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let target_slot = *mapped
-            .get(slot)
-            .expect("collected module must have a target slot");
-        target.committed.insert(
-            target_slot,
-            StoredEntry::new(
-                module.entry_key().clone(),
-                module.handle().clone(),
-                deps,
-                module.retained().clone(),
-                0,
-                TargetMeta::default(),
-            ),
-        );
-        module.handle().state().with_effects(|_, requested| {
-            for provider in requested {
-                let source_slot = source
-                    .committed
-                    .module_for_binding(*provider)
-                    .expect("pinned provider must remain committed with its dependent");
-                let target_slot = *mapped
-                    .get(source_slot)
-                    .expect("import closure must contain every pinned provider");
-                if !pins.contains(&target_slot) {
-                    pins.push(target_slot);
+    target.committed.publish(modules.len(), |publication| {
+        let mut pins = Vec::new();
+        for &slot in modules {
+            let module = source
+                .committed
+                .module(slot)
+                .expect("collected imports must only contain committed modules");
+            let deps = module
+                .direct_deps()
+                .iter()
+                .map(|dep| {
+                    *mapped
+                        .get(*dep)
+                        .expect("dependency closure must contain every bound module")
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let target_slot = *mapped
+                .get(slot)
+                .expect("collected module must have a target slot");
+            publication.insert(
+                target_slot,
+                StoredEntry::new(
+                    module.entry_key().clone(),
+                    module.handle().clone(),
+                    deps,
+                    module.retained().clone(),
+                    0,
+                    TargetMeta::default(),
+                ),
+            );
+            module.handle().state().with_effects(|_, requested| {
+                for provider in requested {
+                    let source_slot = source
+                        .committed
+                        .module_for_binding(*provider)
+                        .expect("pinned provider must remain committed with its dependent");
+                    let target_slot = *mapped
+                        .get(source_slot)
+                        .expect("import closure must contain every pinned provider");
+                    if !pins.contains(&target_slot) {
+                        pins.push(target_slot);
+                    }
                 }
-            }
-        });
-        lifecycle.push(target_slot);
-    }
-    target.committed.extend_lifecycle(&lifecycle);
-    for slot in pins {
-        target
-            .committed
-            .module_mut(slot)
-            .expect("imported pin must refer to a committed module")
-            .pin();
-    }
+            });
+        }
+        for (key, module) in bindings {
+            publication.bind_key(key, module);
+        }
+        for slot in pins {
+            publication.pin(slot);
+        }
+    });
 }
 
 fn copy_closure<Arch, Tls, TargetMeta, SourceMeta>(
@@ -234,6 +233,7 @@ where
             &mut bindings,
         )?;
     }
+    target.committed.reclaim_returned_slots();
     for &slot in &modules {
         let module = source
             .committed
@@ -244,10 +244,7 @@ where
         bindings.push((module_key, target_slot));
         mapped.insert(slot, target_slot);
     }
-    copy_modules(target, source, &modules, &mapped);
-    for (key, module) in bindings {
-        target.committed.bind_key(key, module);
-    }
+    copy_modules(target, source, &modules, &mapped, bindings);
     Ok(mapped)
 }
 
@@ -368,11 +365,16 @@ where
             })?;
         }
 
+        self.committed.reclaim_returned_slots();
         let mut slots = BTreeMap::<ModuleInstanceId, ModuleSlot>::new();
+        let mut new_modules = 0;
         for node in &planned {
             let slot = match node.existing {
                 Some(slot) => slot,
-                None => self.committed.alloc_module(),
+                None => {
+                    new_modules += 1;
+                    self.committed.alloc_module()
+                }
             };
             slots.insert(node.instance, slot);
         }
@@ -416,33 +418,34 @@ where
             });
         }
 
-        let mut lifecycle = Vec::with_capacity(planned.len());
+        let domain = self.domain.id();
         let mut leases = Vec::with_capacity(planned.len());
-        for (node, deps) in planned.into_iter().zip(resolved) {
-            let slot = slots[&node.instance];
-            if node.existing.is_none() {
-                let retained = ModuleScope::new(self.domain.id());
-                self.committed.insert(
-                    slot,
-                    StoredEntry::new(node.key.clone(), node.module, deps, retained, 1, node.meta),
-                );
-                lifecycle.push(slot);
-            } else {
-                self.committed
-                    .module_mut(slot)
-                    .expect("reused module must remain committed")
-                    .acquire_root();
+        self.committed.publish(new_modules, |publication| {
+            for (node, deps) in planned.into_iter().zip(resolved) {
+                let slot = slots[&node.instance];
+                let id = if node.existing.is_none() {
+                    let retained = ModuleScope::new(domain);
+                    publication.insert(
+                        slot,
+                        StoredEntry::new(
+                            node.key.clone(),
+                            node.module,
+                            deps,
+                            retained,
+                            1,
+                            node.meta,
+                        ),
+                    )
+                } else {
+                    publication.acquire_root(slot)
+                };
+                publication.bind_key(node.key, slot);
+                leases.push(ModuleLease::new(id));
             }
-            self.committed.bind_key(node.key, slot);
-            leases.push(ModuleLease::new(self.committed.make_module_id(slot)));
-        }
-        self.committed.extend_lifecycle(&lifecycle);
-        for slot in pins {
-            self.committed
-                .module_mut(slot)
-                .expect("inserted pin must refer to a committed module")
-                .pin();
-        }
+            for slot in pins {
+                publication.pin(slot);
+            }
+        });
         Ok(leases.into_boxed_slice())
     }
 

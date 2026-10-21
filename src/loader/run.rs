@@ -152,7 +152,8 @@ where
     /// images without `PT_DYNAMIC` are returned as [`ScannedElf::StaticExec`].
     pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf<Arch>>
     where
-        I: IntoElfReader<'static>,
+        I: IntoElfReader,
+        I::Reader: 'static,
     {
         let object = input.into_reader()?;
         let ehdr = self.read_ehdr(&object)?;
@@ -184,10 +185,10 @@ where
 {
     /// Loads an ELF image, detecting whether it is a shared object, executable, or object file.
     /// `ET_DYN` images are classified using their program headers.
-    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
+    pub fn load<I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
         Arch: ObjectArch,
-        I: IntoElfReader<'a>,
+        I: IntoElfReader,
     {
         let object = input.into_reader()?;
         let ehdr = self.read_ehdr(&object)?;
@@ -244,9 +245,9 @@ where
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
     /// let lib = Relocator::new().run(raw).relocate().unwrap();
     /// ```
-    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region, Tls>>
+    pub fn load_dylib<I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region, Tls>>
     where
-        I: IntoElfReader<'a>,
+        I: IntoElfReader,
     {
         let object = input.into_reader()?;
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dylib)?;
@@ -258,9 +259,9 @@ where
 
     /// Maps an `ET_DYN` or `ET_EXEC` image containing a `PT_DYNAMIC` segment.
     /// Pass the raw image to [`crate::Relocator::run`] to relocate it.
-    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
+    pub fn load_dynamic<I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
     where
-        I: IntoElfReader<'a>,
+        I: IntoElfReader,
     {
         let object = input.into_reader()?;
         let ehdr = self.read_ehdr(&object)?;
@@ -450,9 +451,9 @@ where
     /// let exec = loader.load_exec("path/to/program").unwrap();
     /// println!("entry = 0x{:x}", exec.entry());
     /// ```
-    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch, M::Region, Tls>>
+    pub fn load_exec<I>(&mut self, input: I) -> Result<RawExec<D, Arch, M::Region, Tls>>
     where
-        I: IntoElfReader<'a>,
+        I: IntoElfReader,
     {
         let object = input.into_reader()?;
         logging::info!("Loading executable: {}", object.path());
@@ -556,7 +557,8 @@ where
     #[inline]
     pub fn scan<I>(&self, input: I) -> Result<ScannedElf<Arch>>
     where
-        I: IntoElfReader<'static>,
+        I: IntoElfReader,
+        I::Reader: 'static,
     {
         let object = input.into_reader()?;
         let ehdr = self.read_ehdr(&object)?;

@@ -129,7 +129,8 @@ impl<
 
     /// Looks up a function or variable by its exact exported name, without mangling.
     /// Returns `Ok(None)` when absent and an error when resolution fails.
-    /// IFUNCs use the domain's executor. Names are bytes without a trailing NUL.
+    /// IFUNCs use the domain's executor. Names must not contain NUL bytes;
+    /// this is not checked.
     ///
     /// # Safety
     /// `T` must match the symbol's type and calling convention.
@@ -173,7 +174,8 @@ impl<
     }
 
     /// Looks up a versioned symbol, using the domain's executor for IFUNCs.
-    /// Names and versions are bytes without a trailing NUL.
+    /// Names must not contain NUL bytes; this is not checked.
+    /// Versions are bytes without a trailing NUL.
     ///
     /// # Safety
     /// Users of this API must specify the correct type of the function

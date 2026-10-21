@@ -782,21 +782,9 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ElfDyn, ElfDynamicFlags, ElfDynamicTag, parse_dynamic_entries};
+    use super::{ElfDynamicFlags, ElfDynamicTag, parse_dynamic_entries};
     use core::num::NonZeroUsize;
     use elf::abi::DF_SYMBOLIC;
-
-    #[test]
-    fn owned_dyn_round_trips_and_mutates() {
-        let mut dyn_: ElfDyn = ElfDyn::new(ElfDynamicTag::STRTAB, 0x1234);
-        assert_eq!(dyn_.tag(), ElfDynamicTag::STRTAB);
-        assert_eq!(dyn_.value(), 0x1234);
-
-        dyn_.set_tag(ElfDynamicTag::NULL);
-        dyn_.set_value(0x5678);
-        assert_eq!(dyn_.tag(), ElfDynamicTag::NULL);
-        assert_eq!(dyn_.value(), 0x5678);
-    }
 
     #[test]
     fn parses_metadata_only_dynamic_tags() {

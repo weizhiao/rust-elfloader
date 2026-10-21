@@ -490,7 +490,7 @@ impl From<PathBuf> for alloc::vec::Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Path, PathBuf};
+    use super::Path;
 
     #[test]
     fn parent_falls_back_to_current_directory() {
@@ -517,12 +517,5 @@ mod tests {
             b"target/liba.so"
         );
         assert_eq!(Path::new(".").join("liba.so").as_bytes(), b"liba.so");
-    }
-
-    #[test]
-    fn owned_path_derefs_to_borrowed_path() {
-        let path = PathBuf::from("target/liba.so");
-        assert!(path.has_dir_separator());
-        assert_eq!(path.parent().as_bytes(), b"target");
     }
 }

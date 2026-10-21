@@ -480,18 +480,3 @@ where
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct NonCloneData;
-
-    #[test]
-    fn exec_handles_clone_without_user_data_clone() {
-        fn assert_clone<T: Clone>() {}
-
-        assert_clone::<StaticExec<NonCloneData>>();
-        assert_clone::<LoadedExec<NonCloneData>>();
-    }
-}

@@ -443,6 +443,16 @@ impl ElfStringTable {
         CStr::from_bytes_until_nul(bytes)
             .expect("ELF string table entry is missing a NUL terminator")
     }
+
+    /// Compare a candidate name without first finding its length.
+    /// `name` must not contain NUL bytes.
+    /// Missing terminators and entries shorter than the query do not match.
+    #[inline]
+    pub(crate) fn matches_name(&self, offset: usize, name: &[u8]) -> bool {
+        let bytes = self.bytes_from(offset);
+        // The terminator check bounds the comparison.
+        bytes.get(name.len()) == Some(&0) && bytes[..name.len()] == *name
+    }
 }
 
 /// Read-only symbol table view shared by dynamic and relocatable symbol tables.
@@ -536,6 +546,7 @@ impl<'symtab> Debug for SymbolInfo<'symtab> {
 
 impl<'symtab> SymbolInfo<'symtab> {
     /// Creates a new `SymbolInfo` from a name and optional version.
+    #[inline]
     #[allow(unused_variables)]
     pub(crate) fn from_bytes(name: &'symtab [u8], version: Option<&'symtab [u8]>) -> Self {
         SymbolInfo {
@@ -562,6 +573,9 @@ impl<'symtab> SymbolInfo<'symtab> {
 ///
 /// Names and versions are matched as raw bytes without a trailing NUL.
 /// UTF-8 strings and byte slices are both accepted.
+/// Symbol names must not contain any NUL bytes. This is not validated;
+/// names containing NUL bytes are unsupported and their lookup results are
+/// unspecified.
 pub struct SymbolLookup<'symbol> {
     info: SymbolInfo<'symbol>,
     precompute: PreCompute,
@@ -569,6 +583,8 @@ pub struct SymbolLookup<'symbol> {
 
 impl<'symbol> SymbolLookup<'symbol> {
     /// Creates a lookup request for an unversioned symbol name.
+    ///
+    /// `name` must not contain any NUL bytes. This requirement is not validated.
     #[inline]
     pub fn new(name: &'symbol (impl AsRef<[u8]> + ?Sized)) -> Self {
         Self::from_info(SymbolInfo::from_bytes(name.as_ref(), None))
@@ -576,6 +592,8 @@ impl<'symbol> SymbolLookup<'symbol> {
 
     #[cfg(feature = "version")]
     /// Creates a lookup request for a symbol name constrained to one version.
+    ///
+    /// `name` must not contain any NUL bytes. This requirement is not validated.
     #[inline]
     pub fn with_version(
         name: &'symbol (impl AsRef<[u8]> + ?Sized),

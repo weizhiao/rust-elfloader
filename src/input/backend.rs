@@ -196,8 +196,65 @@ impl ElfReader for ElfFile {
     }
 }
 
+#[repr(align(8))]
+struct FilePrefix([u8; 1024]);
+
+/// Reads the usual ELF and program headers together for filesystem resolution.
+/// The prefix stays inline in the resolver's existing boxed reader.
+pub(crate) struct BufferedElfFile {
+    file: ElfFile,
+    prefix: FilePrefix,
+    prefix_len: usize,
+}
+
+impl BufferedElfFile {
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
+        let file = ElfFile::from_path(path)?;
+        let mut prefix = FilePrefix([0; 1024]);
+        let prefix_len = file.len().min(prefix.0.len());
+        file.read(&mut prefix.0[..prefix_len], 0)?;
+        Ok(Self {
+            file,
+            prefix,
+            prefix_len,
+        })
+    }
+}
+
+impl ElfReader for BufferedElfFile {
+    fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    fn len(&self) -> usize {
+        self.file.len()
+    }
+
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+        if let Some(bytes) = self.borrow_bytes(offset, buf.len())? {
+            buf.copy_from_slice(bytes);
+            Ok(())
+        } else {
+            self.file.read(buf, offset)
+        }
+    }
+
+    fn source_id(&self) -> ModuleSourceId {
+        self.file.source_id()
+    }
+
+    fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
+        let range = checked_read_range(offset, len, self.file.len())?;
+        Ok(self.prefix.0[..self.prefix_len].get(range))
+    }
+
+    fn file_backing(&self) -> Option<super::FileBacking> {
+        self.file.file_backing()
+    }
+}
+
 // Implementation for string slices (file paths)
-impl<'a> IntoElfReader<'a> for &'a str {
+impl IntoElfReader for &str {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -206,7 +263,7 @@ impl<'a> IntoElfReader<'a> for &'a str {
 }
 
 // Implementation for owned strings (file paths)
-impl<'a> IntoElfReader<'a> for String {
+impl IntoElfReader for String {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -214,24 +271,7 @@ impl<'a> IntoElfReader<'a> for String {
     }
 }
 
-impl<'a> IntoElfReader<'a> for &'a Path {
-    type Reader = ElfFile;
-
-    fn into_reader(self) -> Result<Self::Reader> {
-        ElfFile::from_path(self)
-    }
-}
-
-#[cfg(feature = "std")]
-impl<'a> IntoElfReader<'a> for &'a std::path::Path {
-    type Reader = ElfFile;
-
-    fn into_reader(self) -> Result<Self::Reader> {
-        ElfFile::from_path(self)
-    }
-}
-
-impl<'a> IntoElfReader<'a> for PathBuf {
+impl IntoElfReader for &Path {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -240,7 +280,7 @@ impl<'a> IntoElfReader<'a> for PathBuf {
 }
 
 #[cfg(feature = "std")]
-impl<'a> IntoElfReader<'a> for std::path::PathBuf {
+impl IntoElfReader for &std::path::Path {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -248,7 +288,24 @@ impl<'a> IntoElfReader<'a> for std::path::PathBuf {
     }
 }
 
-impl<'a> IntoElfReader<'a> for &'a PathBuf {
+impl IntoElfReader for PathBuf {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
+#[cfg(feature = "std")]
+impl IntoElfReader for std::path::PathBuf {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
+impl IntoElfReader for &PathBuf {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -257,7 +314,7 @@ impl<'a> IntoElfReader<'a> for &'a PathBuf {
 }
 
 // Implementation for byte slices (in-memory ELF data)
-impl<'a> IntoElfReader<'a> for &'a [u8] {
+impl<'a> IntoElfReader for &'a [u8] {
     type Reader = ElfBinary<'a>;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -265,7 +322,7 @@ impl<'a> IntoElfReader<'a> for &'a [u8] {
     }
 }
 
-impl<'a> IntoElfReader<'a> for &'a Vec<u8> {
+impl<'a> IntoElfReader for &'a Vec<u8> {
     type Reader = ElfBinary<'a>;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -273,7 +330,7 @@ impl<'a> IntoElfReader<'a> for &'a Vec<u8> {
     }
 }
 
-impl<'a> IntoElfReader<'a> for Vec<u8> {
+impl IntoElfReader for Vec<u8> {
     type Reader = ElfBinary<'static>;
 
     fn into_reader(self) -> Result<Self::Reader> {
@@ -281,31 +338,10 @@ impl<'a> IntoElfReader<'a> for Vec<u8> {
     }
 }
 
-impl<'a> IntoElfReader<'a> for Box<[u8]> {
+impl IntoElfReader for Box<[u8]> {
     type Reader = ElfBinary<'static>;
 
     fn into_reader(self) -> Result<Self::Reader> {
         Ok(ElfBinary::owned("<memory>", self.into_vec()))
-    }
-}
-
-// Implementation for already constructed ElfFile (pass-through)
-impl<'a> IntoElfReader<'a> for ElfFile {
-    type Reader = ElfFile;
-
-    fn into_reader(self) -> Result<Self::Reader> {
-        Ok(self)
-    }
-}
-
-// Implementation for already constructed ElfBinary (pass-through)
-impl<'a, 'b> IntoElfReader<'a> for ElfBinary<'b>
-where
-    'b: 'a,
-{
-    type Reader = ElfBinary<'b>;
-
-    fn into_reader(self) -> Result<Self::Reader> {
-        Ok(self)
     }
 }

@@ -58,9 +58,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             ..
         } = args;
         let relocation = self.relocation();
-        if relocation.is_empty() {
-            logging::debug!("No relocations needed for {}", self.name().escape_ascii());
-        }
 
         let wants_lazy = match binding {
             BindingMode::Eager => false,
@@ -510,7 +507,7 @@ mod tests {
         RelocationArch,
     };
     use crate::{
-        ByteRepr, Error, ParseDynamicError,
+        Error, ParseDynamicError, Result,
         arch::NativeArch,
         elf::ElfRelType,
         memory::{MappedRegion, MappedView},
@@ -518,64 +515,59 @@ mod tests {
     use alloc::{boxed::Box, vec::Vec};
     use core::num::NonZeroUsize;
 
-    fn zeroed_rel() -> ElfRelType {
-        unsafe { core::mem::zeroed() }
+    fn relocation_table<const N: usize>() -> MappedView<ElfRelType> {
+        // Relocation entries contain only integers; these tests inspect table lengths.
+        let entries = Box::leak(Box::new(unsafe { core::mem::zeroed::<[ElfRelType; N]>() }));
+        let byte_len = core::mem::size_of_val(entries);
+        let region =
+            unsafe { MappedRegion::local_alias_no_unmap(entries.as_mut_ptr().cast(), byte_len) };
+        region.read_view(0, byte_len).unwrap()
     }
 
-    fn mapped_view<T: ByteRepr + 'static>(slice: &'static [T]) -> MappedView<T> {
-        let byte_len = core::mem::size_of_val(slice);
-        let region = unsafe {
-            MappedRegion::local_alias_no_unmap(slice.as_ptr().cast_mut().cast(), byte_len)
+    fn assert_count_out_of_range(
+        result: Result<DynamicRelocation<NativeArch>>,
+        expected_tag: ElfDynamicTag,
+    ) {
+        let err = result.err().expect("out-of-range count should be rejected");
+        let Error::ParseDynamic(ParseDynamicError::InvalidRelocTable { reason }) = err else {
+            panic!("expected an invalid relocation table, got {err}");
         };
-        region.read_view::<T>(0, byte_len).unwrap()
+        assert!(matches!(
+            *reason,
+            RelocTableError::CountOutOfRange { tag, .. } if tag == expected_tag
+        ));
     }
 
     #[test]
     fn rejects_relative_count_past_dynrel_len() {
-        let dynrel = Box::leak(Box::new([zeroed_rel()]));
-        let err = match DynamicRelocation::<NativeArch>::new(
+        let result = DynamicRelocation::<NativeArch>::new(
             None,
-            Some(mapped_view(&dynrel[..])),
+            Some(relocation_table::<1>()),
             None,
             Vec::new(),
             NonZeroUsize::new(2),
             false,
-        ) {
-            Ok(_) => panic!("relative count should be validated"),
-            Err(err) => err,
-        };
-
-        assert!(matches!(
-            err,
-            Error::ParseDynamic(ParseDynamicError::InvalidRelocTable { reason })
-                if matches!(*reason, RelocTableError::CountOutOfRange { tag, .. }
-                    if tag == if <NativeArch as RelocationArch>::Relocation::SECTION_TYPE == ElfSectionType::RELA {
-                        ElfDynamicTag::RELACOUNT
-                    } else {
-                        ElfDynamicTag::RELCOUNT
-                    })
-        ));
+        );
+        let tag =
+            if <NativeArch as RelocationArch>::Relocation::SECTION_TYPE == ElfSectionType::RELA {
+                ElfDynamicTag::RELACOUNT
+            } else {
+                ElfDynamicTag::RELCOUNT
+            };
+        assert_count_out_of_range(result, tag);
     }
 
     #[test]
     fn rejects_pltrel_suffix_longer_than_remaining_dynrel() {
-        let dynrel = Box::leak(Box::new([zeroed_rel(), zeroed_rel(), zeroed_rel()]));
-        let err = match DynamicRelocation::<NativeArch>::new(
-            Some(mapped_view(&dynrel[..])),
-            Some(mapped_view(&dynrel[..])),
+        let dynrel = relocation_table::<3>();
+        let result = DynamicRelocation::<NativeArch>::new(
+            Some(dynrel.clone()),
+            Some(dynrel),
             None,
             Vec::new(),
             NonZeroUsize::new(1),
             true,
-        ) {
-            Ok(_) => panic!("contiguous PLT suffix should fit in the non-relative tail"),
-            Err(err) => err,
-        };
-
-        assert!(matches!(
-            err,
-            Error::ParseDynamic(ParseDynamicError::InvalidRelocTable { reason })
-                if matches!(*reason, RelocTableError::CountOutOfRange { tag: ElfDynamicTag::JMPREL, .. })
-        ));
+        );
+        assert_count_out_of_range(result, ElfDynamicTag::JMPREL);
     }
 }

@@ -10,6 +10,9 @@ mod libraries;
 mod timing;
 use libraries::{HostLibraries, LibraryCache, root_path};
 
+// Only sample load and teardown; total would repeat the same work a third time.
+const PHASES: [&str; 2] = ["load", "teardown"];
+
 const DEFAULT_WORKLOADS: &[&str] = &[
     "libz.so.1",
     "liblz4.so.1",
@@ -50,7 +53,7 @@ fn bench_load_unload(c: &mut Criterion) {
         let linker = Linker::new()
             .with_loader(Loader::new())
             .with_resolver(cache.resolver());
-        for (index, phase) in timing::PHASES.iter().enumerate() {
+        for (index, phase) in PHASES.iter().enumerate() {
             group.bench_function(format!("{soname}/relink/{phase}"), |b| {
                 b.iter_custom(|iterations| {
                     timing::measure(
@@ -84,7 +87,7 @@ fn bench_load_unload(c: &mut Criterion) {
             );
             continue;
         }
-        for (index, phase) in timing::PHASES.iter().enumerate() {
+        for (index, phase) in PHASES.iter().enumerate() {
             group.bench_function(format!("{soname}/libloading/{phase}"), |b| {
                 b.iter_custom(|iterations| {
                     timing::measure(

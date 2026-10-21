@@ -1,8 +1,6 @@
 //! Separate load and teardown timing with preparation outside the measured intervals.
 use std::time::{Duration, Instant};
 
-pub const PHASES: [&str; 3] = ["load", "teardown", "total"];
-
 #[derive(Default)]
 pub struct Timings {
     pub load: Duration,

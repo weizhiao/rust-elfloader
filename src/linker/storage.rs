@@ -1,3 +1,4 @@
+use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
@@ -20,6 +21,7 @@ use core::{
     fmt::{self, Display},
     ops::Deref,
 };
+use spin::Mutex;
 
 /// Logical name used to address a module inside a [`LinkContext`](super::LinkContext).
 ///
@@ -208,54 +210,6 @@ impl ModuleLease {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(in crate::linker) struct CommittedModule<'a, Meta, Arch>
-where
-    Arch: RelocationArch,
-{
-    entry: &'a StoredEntry<Meta, Arch>,
-}
-
-impl<'a, Meta, Arch> CommittedModule<'a, Meta, Arch>
-where
-    Arch: RelocationArch,
-{
-    #[inline]
-    pub(in crate::linker) const fn entry_key(&self) -> &'a ModuleKey {
-        &self.entry.entry_key
-    }
-
-    #[inline]
-    pub(crate) fn handle(&self) -> &'a ModuleHandle<Arch> {
-        &self.entry.module
-    }
-
-    #[inline]
-    pub(crate) fn direct_deps(&self) -> &'a [ModuleSlot] {
-        &self.entry.direct_deps
-    }
-
-    #[inline]
-    pub(crate) const fn retained(&self) -> &'a ModuleScope<Arch> {
-        &self.entry.retained
-    }
-
-    #[inline]
-    pub(super) const fn load_group(&self) -> Option<&'a ModuleScope<Arch>> {
-        self.entry.load_group.as_ref()
-    }
-
-    #[inline]
-    pub(crate) const fn is_root(&self) -> bool {
-        self.entry.pins != 0 || self.entry.roots != 0
-    }
-
-    #[inline]
-    pub(crate) const fn meta(&self) -> &'a Meta {
-        &self.entry.meta
-    }
-}
-
 pub(in crate::linker) struct CommittedModuleMut<'a, Meta, Arch>
 where
     Arch: RelocationArch,
@@ -316,6 +270,8 @@ where
     }
 }
 
+pub(in crate::linker) type ReservationReturns = Arc<Mutex<Vec<(ModuleSlot, u32)>>>;
+
 pub(crate) struct CommittedStorage<Meta = (), Arch: RelocationArch = NativeArch> {
     context: ContextId,
     domain: DomainId,
@@ -324,6 +280,7 @@ pub(crate) struct CommittedStorage<Meta = (), Arch: RelocationArch = NativeArch>
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch>>,
     lifecycle: Vec<ModuleSlot>,
     free_slots: Vec<ModuleSlot>,
+    reservation_returns: Option<ReservationReturns>,
     pub(super) addresses: Arc<AddressIndex>,
 }
 
@@ -341,6 +298,7 @@ where
             entries: PrimaryMap::default(),
             lifecycle: Vec::new(),
             free_slots: Vec::new(),
+            reservation_returns: None,
             addresses: Arc::new(AddressIndex::default()),
         }
     }
@@ -366,24 +324,25 @@ where
 
     #[inline]
     pub(in crate::linker) fn module_slot(&self, id: ModuleId) -> Result<ModuleSlot> {
-        if id.context != self.context {
-            return Err(
-                LinkerError::context(LinkContextError::ModuleContextMismatch {
-                    id,
-                    expected: self.context,
-                })
-                .into(),
-            );
-        }
-        self.entries
-            .get(id.slot)
-            .filter(|entry| entry.generation == id.generation && entry.entry.is_some())
-            .map(|_| id.slot)
-            .ok_or_else(|| LinkerError::context(LinkContextError::StaleModuleId { id }).into())
+        self.checked_module(id).map(|_| id.slot)
     }
 
     #[inline]
     pub(in crate::linker) fn contains_id(&self, id: ModuleId) -> Result<bool> {
+        Ok(self.find_by_id(id)?.is_some())
+    }
+
+    #[inline]
+    pub(in crate::linker) fn checked_module(
+        &self,
+        id: ModuleId,
+    ) -> Result<&StoredEntry<Meta, Arch>> {
+        self.find_by_id(id)?
+            .ok_or_else(|| LinkerError::context(LinkContextError::StaleModuleId { id }).into())
+    }
+
+    #[inline]
+    fn find_by_id(&self, id: ModuleId) -> Result<Option<&StoredEntry<Meta, Arch>>> {
         if id.context != self.context {
             return Err(
                 LinkerError::context(LinkContextError::ModuleContextMismatch {
@@ -396,17 +355,13 @@ where
         Ok(self
             .entries
             .get(id.slot)
-            .is_some_and(|entry| entry.generation == id.generation && entry.entry.is_some()))
+            .filter(|cell| cell.generation == id.generation)
+            .and_then(|cell| cell.entry.as_ref()))
     }
 
     #[inline]
-    pub(in crate::linker) fn module(
-        &self,
-        slot: ModuleSlot,
-    ) -> Option<CommittedModule<'_, Meta, Arch>> {
-        let cell = self.entries.get(slot)?;
-        let entry = cell.entry.as_ref()?;
-        Some(CommittedModule { entry })
+    pub(in crate::linker) fn module(&self, slot: ModuleSlot) -> Option<&StoredEntry<Meta, Arch>> {
+        self.entries.get(slot)?.entry.as_ref()
     }
 
     #[inline]
@@ -472,62 +427,44 @@ where
     }
 
     pub(crate) fn bind_key(&mut self, key: ModuleKey, module: ModuleSlot) {
-        assert!(
-            self.contains_module(module),
-            "key bindings must refer to committed modules"
-        );
-        let entry_key = &self.entries[module]
-            .entry
-            .as_ref()
-            .expect("key bindings must refer to committed modules")
-            .entry_key;
-        let is_alias = entry_key != &key;
-        let mut alias = None;
-        let inserted = match self.bindings.entry(key) {
-            Entry::Vacant(entry) => {
-                if is_alias {
-                    alias = Some(entry.key().clone());
-                }
-                entry.insert(Vec::from([module]));
-                true
-            }
-            Entry::Occupied(mut entry) => {
-                if entry.get().contains(&module) {
-                    false
-                } else {
-                    if is_alias {
-                        alias = Some(entry.key().clone());
-                    }
-                    entry.get_mut().push(module);
-                    true
-                }
-            }
-        };
-        if inserted && let Some(alias) = alias {
-            let entry = self.entries[module]
-                .entry
-                .as_mut()
-                .expect("key bindings must refer to committed modules");
+        let entry = self
+            .entries
+            .get_mut(module)
+            .and_then(|cell| cell.entry.as_mut())
+            .expect("key bindings must refer to committed modules");
+        let binding = self.bindings.entry(key);
+        if let Entry::Occupied(binding) = &binding
+            && binding.get().contains(&module)
+        {
+            return;
+        }
+        let alias = (binding.key() != &entry.entry_key).then(|| binding.key().clone());
+        binding
+            .or_insert_with(|| Vec::with_capacity(1))
+            .push(module);
+        if let Some(alias) = alias {
             debug_assert!(!entry.aliases.contains(&alias));
             entry.aliases.push(alias);
         }
     }
 
-    pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
-        debug_assert!(
-            order
-                .iter()
-                .enumerate()
-                .all(|(idx, slot)| !order[..idx].contains(slot)),
-            "lifecycle entries must be unique"
-        );
-        debug_assert!(
-            order.iter().all(|slot| !self.lifecycle.contains(slot)),
-            "lifecycle entries must only be recorded once"
-        );
+    // Callers validate the whole batch before entering publication. Insertions
+    // record lifecycle order directly; address indexing runs once per batch.
+    pub(crate) fn publish<R>(
+        &mut self,
+        additional: usize,
+        publish: impl FnOnce(&mut Publication<'_, Meta, Arch>) -> R,
+    ) -> R {
+        let start = self.lifecycle.len();
+        self.lifecycle.reserve(additional);
+        let result = publish(&mut Publication { storage: self });
+        let added = &self.lifecycle[start..];
+        if added.is_empty() {
+            return result;
+        }
         let entries = &self.entries;
         let context = self.context;
-        Arc::make_mut(&mut self.addresses).extend(order.iter().map(|&slot| {
+        Arc::make_mut(&mut self.addresses).extend(added.iter().map(|&slot| {
             let cell = &entries[slot];
             let entry = cell.entry.as_ref().expect("published module must exist");
             (
@@ -535,7 +472,35 @@ where
                 entry.module.memory(),
             )
         }));
-        self.lifecycle.extend_from_slice(order);
+        result
+    }
+
+    // Called once when a transaction first reserves a module, so subsequent
+    // allocations in the same group do not acquire the return queue lock.
+    pub(crate) fn reserve_returns(&mut self) -> ReservationReturns {
+        self.reclaim_returned_slots();
+        Arc::clone(
+            self.reservation_returns
+                .get_or_insert_with(|| Arc::new(Mutex::new(Vec::new()))),
+        )
+    }
+
+    pub(crate) fn reclaim_returned_slots(&mut self) {
+        let Some(returns) = &self.reservation_returns else {
+            return;
+        };
+        let mut returned = returns.lock();
+        for (slot, generation) in returned.drain(..) {
+            let Some(cell) = self.entries.get_mut(slot) else {
+                continue;
+            };
+            if cell.generation == generation && cell.entry.is_none() {
+                // A returned reservation must not invalidate a later occupant
+                // or put the same vacant slot on the free list twice.
+                cell.advance_generation();
+                self.free_slots.push(slot);
+            }
+        }
     }
 
     pub(crate) fn alloc_module(&mut self) -> ModuleSlot {
@@ -548,24 +513,25 @@ where
         })
     }
 
-    pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch>) {
-        let source = entry.module.source_id();
-        assert!(
-            !self.sources.contains_key(&source),
-            "module source is already committed"
-        );
-        let cell = &mut self.entries[slot];
-        assert!(cell.entry.is_none(), "module slot is already committed");
-        cell.advance_generation();
-        cell.entry = Some(entry);
-        self.sources.insert(source, slot);
+    pub(crate) fn remove_batch(
+        &mut self,
+        order: impl IntoIterator<Item = ModuleSlot>,
+    ) -> UnloadGroup<Meta, Arch> {
+        let order = order.into_iter();
+        let mut modules = Vec::with_capacity(order.size_hint().0);
+        for slot in order {
+            let id = self.make_module_id(slot);
+            let (module, retained, meta) = self.remove(slot);
+            modules.push(UnloadedModule::new(id, module, retained, meta));
+        }
+        if !modules.is_empty() {
+            self.prune_removed();
+        }
+        UnloadGroup::new(modules)
     }
 
     #[inline]
-    pub(crate) fn remove(
-        &mut self,
-        slot: ModuleSlot,
-    ) -> (ModuleHandle<Arch>, ModuleScope<Arch>, Meta) {
+    fn remove(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch>, ModuleScope<Arch>, Meta) {
         let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell
@@ -575,17 +541,13 @@ where
             cell.advance_generation();
             entry
         };
-        for key in core::iter::once(&entry.entry_key).chain(&entry.aliases) {
-            let empty = {
-                let modules = self
-                    .bindings
-                    .get_mut(key)
-                    .expect("module key must have a binding list");
-                modules.retain(|candidate| *candidate != slot);
-                modules.is_empty()
+        for key in core::iter::once(entry.entry_key).chain(entry.aliases) {
+            let Entry::Occupied(mut binding) = self.bindings.entry(key) else {
+                panic!("module key must have a binding list");
             };
-            if empty {
-                self.bindings.remove(key);
+            binding.get_mut().retain(|candidate| *candidate != slot);
+            if binding.get().is_empty() {
+                binding.remove();
             }
         }
         let indexed = self
@@ -597,7 +559,7 @@ where
         (entry.module, entry.retained, entry.meta)
     }
 
-    pub(crate) fn prune_removed(&mut self) {
+    fn prune_removed(&mut self) {
         let entries = &self.entries;
         self.lifecycle
             .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
@@ -610,9 +572,52 @@ where
     }
 }
 
+pub(in crate::linker) struct Publication<'a, Meta, Arch: RelocationArch> {
+    storage: &'a mut CommittedStorage<Meta, Arch>,
+}
+
+impl<Meta, Arch: RelocationArch> Publication<'_, Meta, Arch> {
+    pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch>) -> ModuleId {
+        let source = entry.module.source_id();
+        assert!(
+            !self.storage.sources.contains_key(&source),
+            "module source is already committed"
+        );
+        let cell = &mut self.storage.entries[slot];
+        assert!(cell.entry.is_none(), "module slot is already committed");
+        cell.advance_generation();
+        cell.entry = Some(entry);
+        self.storage.sources.insert(source, slot);
+        self.storage.lifecycle.push(slot);
+        self.storage.make_module_id(slot)
+    }
+
+    #[inline]
+    pub(crate) fn bind_key(&mut self, key: ModuleKey, slot: ModuleSlot) {
+        self.storage.bind_key(key, slot);
+    }
+
+    #[inline]
+    pub(crate) fn acquire_root(&mut self, slot: ModuleSlot) -> ModuleId {
+        self.storage
+            .module_mut(slot)
+            .expect("reused module must remain committed")
+            .acquire_root();
+        self.storage.make_module_id(slot)
+    }
+
+    #[inline]
+    pub(crate) fn pin(&mut self, slot: ModuleSlot) {
+        self.storage
+            .module_mut(slot)
+            .expect("published pin must refer to a committed module")
+            .pin();
+    }
+}
+
 struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch> {
-    // Incremented on publication and removal to guard transactional references
-    // and make ids stale as soon as a module is unloaded.
+    // Incremented on publication, removal, and reservation reclamation to guard
+    // transactional references and make unloaded module ids stale.
     generation: u32,
     entry: Option<StoredEntry<Meta, Arch>>,
 }
@@ -646,6 +651,41 @@ impl<Meta, Arch> StoredEntry<Meta, Arch>
 where
     Arch: RelocationArch,
 {
+    #[inline]
+    pub(in crate::linker) const fn entry_key(&self) -> &ModuleKey {
+        &self.entry_key
+    }
+
+    #[inline]
+    pub(in crate::linker) fn handle(&self) -> &ModuleHandle<Arch> {
+        &self.module
+    }
+
+    #[inline]
+    pub(in crate::linker) fn direct_deps(&self) -> &[ModuleSlot] {
+        &self.direct_deps
+    }
+
+    #[inline]
+    pub(in crate::linker) const fn retained(&self) -> &ModuleScope<Arch> {
+        &self.retained
+    }
+
+    #[inline]
+    pub(in crate::linker) const fn load_group(&self) -> Option<&ModuleScope<Arch>> {
+        self.load_group.as_ref()
+    }
+
+    #[inline]
+    pub(in crate::linker) const fn is_root(&self) -> bool {
+        self.pins != 0 || self.roots != 0
+    }
+
+    #[inline]
+    pub(in crate::linker) const fn meta(&self) -> &Meta {
+        &self.meta
+    }
+
     #[inline]
     pub(in crate::linker) fn new(
         entry_key: ModuleKey,

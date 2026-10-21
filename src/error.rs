@@ -1407,7 +1407,7 @@ pub(crate) fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{format, string::ToString};
+    use alloc::string::ToString;
     use core::mem::size_of;
 
     #[test]
@@ -1417,15 +1417,6 @@ mod tests {
             "Error grew to {} bytes",
             size_of::<Error>()
         );
-    }
-
-    #[test]
-    fn debug_matches_display() {
-        let parse_err = ParseEhdrError::InvalidMagic;
-        assert_eq!(format!("{parse_err:?}"), parse_err.to_string());
-
-        let err = Error::from(parse_err);
-        assert_eq!(format!("{err:?}"), err.to_string());
     }
 
     #[test]

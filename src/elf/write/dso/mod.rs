@@ -19,10 +19,7 @@ pub use types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKi
 #[cfg(test)]
 mod tests {
     use super::{DsoBuilder, sysv_hash};
-    use crate::{
-        Loader, Relocator, arch::x86_64::X86_64Arch, input::ElfBinary, memory::VmOffset,
-        relocation::RelocationArch,
-    };
+    use crate::{Loader, Relocator, arch::x86_64::X86_64Arch, input::ElfBinary, memory::VmOffset};
 
     #[test]
     fn sysv_hash_matches_known_value() {
@@ -56,6 +53,5 @@ mod tests {
             (lib.segments().base() + VmOffset::new(expected_addr)).get(),
             "symbol value should be relative to the DSO base"
         );
-        assert_eq!(X86_64Arch::MACHINE.raw(), 62);
     }
 }

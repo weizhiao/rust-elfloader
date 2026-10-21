@@ -44,7 +44,7 @@ impl ElfBuf {
         };
 
         object
-            .read_slice::<ElfPhdr<L>, _>(start, size, &mut self.buf)
+            .read_slice::<ElfPhdr<L>>(start, size, &mut self.buf)
             .map(Some)
     }
 
@@ -58,7 +58,7 @@ impl ElfBuf {
         };
 
         object
-            .read_slice::<ElfShdr<L>, _>(start, size, &mut self.buf)
+            .read_slice::<ElfShdr<L>>(start, size, &mut self.buf)
             .map(Some)
     }
 }

@@ -59,12 +59,17 @@ impl BindingDeps {
     }
 }
 
+enum CachedDefinition<'find, Arch: RelocationArch> {
+    Symbol(Option<SymDef<'find, Arch>>),
+    TlsEntry(VmAddr),
+}
+
 struct SymbolCache<'find, Arch: RelocationArch> {
     index: usize,
     relocation_type: ElfRelocationType,
     symbol: &'find ElfSymbol<Arch::Layout>,
     name: &'find [u8],
-    definition: Option<SymDef<'find, Arch>>,
+    definition: CachedDefinition<'find, Arch>,
 }
 
 /// Internal context for managing relocation state and handlers.
@@ -236,9 +241,15 @@ where
         }) {
             let entry = self.symbol_entry(rel);
             let definition = if Tls::OVERRIDE_TLS_GET_ADDR && entry.name() == TLS_GET_ADDR_SYMBOL {
-                None
+                CachedDefinition::TlsEntry(
+                    self.core
+                        .domain()
+                        .id()
+                        .tls_entry()
+                        .expect("TLS entry override requires a TLS-enabled domain"),
+                )
             } else {
-                self.resolver.find(&entry)
+                CachedDefinition::Symbol(self.resolver.find(&entry))
             };
             self.symbol_cache = Some(SymbolCache {
                 index: rel.r_symbol(),
@@ -249,23 +260,13 @@ where
             });
         }
         let cached = self.symbol_cache.as_ref().unwrap();
-        let (resolved, effect) = if Tls::OVERRIDE_TLS_GET_ADDR && cached.name == TLS_GET_ADDR_SYMBOL
-        {
-            (
-                Some(
-                    self.core
-                        .domain()
-                        .id()
-                        .tls_entry()
-                        .expect("TLS entry override requires a TLS-enabled domain"),
-                ),
-                BindingEffect::default(),
-            )
-        } else {
-            let definition = &cached.definition;
-            let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
-            let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
-            (resolved, effect)
+        let (resolved, effect) = match &cached.definition {
+            CachedDefinition::TlsEntry(addr) => (Some(*addr), BindingEffect::default()),
+            CachedDefinition::Symbol(definition) => {
+                let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
+                let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
+                (resolved, effect)
+            }
         };
         let mut event =
             SymbolBindingEvent::new(self.core, Some(rel), cached.symbol, cached.name, resolved);

@@ -3,17 +3,18 @@
 //! Loading APIs accept any [`IntoElfReader`] input. This lets callers pass file paths,
 //! memory buffers, or explicit reader types without changing the loading logic.
 //!
-//! The built-in concrete inputs are:
+//! Supported inputs include:
 //!
 //! - [`ElfFile`] for file-backed ELF objects
 //! - [`Path`] / [`PathBuf`] for file path values used by file-backed inputs
 //! - [`ElfBinary`] for named byte slices already resident in memory
-//! - blanket [`IntoElfReader`] implementations for `&str`, `String`, `&[u8]`, and `&Vec<u8>`
+//! - [`IntoElfReader`] conversions for `&str`, `String`, `&[u8]`, and `&Vec<u8>`
+//! - any existing [`ElfReader`], passed through unchanged
 
 /// Immutable shared paths retained by loaded modules and C interface metadata.
 pub use module_path::ModulePath;
 
-pub(crate) use backend::checked_read_range as check_read_range;
+pub(crate) use backend::{BufferedElfFile, checked_read_range as check_read_range};
 pub use backend::{ElfBinary, ElfFile};
 pub use path::{Path, PathBuf, PathStr, PathString};
 pub(crate) use traits::ElfReaderExt;

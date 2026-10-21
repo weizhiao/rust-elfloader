@@ -5,7 +5,7 @@ use crate::{
         SymbolTableView,
     },
     image::{ElfCore, RawObject, SymbolExports},
-    input::{ElfReader, ElfReaderExt, Path},
+    input::{ElfReader, Path},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     object::{
         CustomHash, ObjectExports, ObjectSections, ObjectSegmentView, ObjectSymbolTable,
@@ -354,7 +354,12 @@ impl<'event, D: Send + Sync + 'static, L: ElfLayout> BeforeObjectLoadEvent<'even
         let Some((offset, len)) = self.section_content_range(id) else {
             return Ok(&[]);
         };
-        self.object.read_slice::<u8, _>(offset, len, scratch)
+        if let Some(bytes) = self.object.borrow_bytes(offset, len)? {
+            return Ok(bytes);
+        }
+        scratch.resize(len, 0);
+        self.object.read(scratch, offset)?;
+        Ok(scratch)
     }
 
     /// Returns immutable user data for this object image.

@@ -100,12 +100,7 @@ fn main() {
             Duration::from_millis(sample_ms),
         )
     });
-    println!(
-        "workload\tround\titerations\t{}_ns\t{}_ns\t{}_ns",
-        timing::PHASES[0],
-        timing::PHASES[1],
-        timing::PHASES[2],
-    );
+    println!("workload\tround\titerations\tload_ns\tteardown_ns\ttotal_ns");
     let mut times = [
         Vec::with_capacity(rounds),
         Vec::with_capacity(rounds),

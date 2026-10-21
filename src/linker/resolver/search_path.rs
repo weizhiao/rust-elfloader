@@ -8,7 +8,7 @@ use crate::{
         ModuleSearch, PathTokens, SharedDir, default_module_search, library_path_components,
         normalize_dir,
     },
-    input::{ElfFile, ElfReader, Path, PathBuf},
+    input::{BufferedElfFile, ElfReader, Path, PathBuf},
     loader::read_ehdr,
     os::path_is_dir,
     relocation::RelocationArch,
@@ -382,7 +382,9 @@ impl SearchPathResolver {
         let dir = dir.filter(|_| self.opener.is_none());
         let opened = match &self.opener {
             Some(open) => open(path),
-            None => ElfFile::from_path(path).map(|file| Box::new(file) as Box<dyn ElfReader>),
+            None => {
+                BufferedElfFile::from_path(path).map(|file| Box::new(file) as Box<dyn ElfReader>)
+            }
         };
         let file = match opened {
             Ok(file) => {

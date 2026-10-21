@@ -77,15 +77,14 @@ pub(crate) trait ElfReaderExt: ElfReader {
     /// Borrows bytes from the source when possible, otherwise reads them into
     /// `scratch` and returns the resulting typed view.
     #[inline]
-    fn read_slice<'a, V, S>(
+    fn read_slice<'a, V>(
         &'a self,
         offset: usize,
         len: usize,
-        scratch: &'a mut S,
+        scratch: &'a mut AlignedBytes,
     ) -> Result<&'a [V]>
     where
         V: ByteRepr + 'a,
-        S: ByteScratch + ?Sized,
     {
         if let Some(bytes) = self.borrow_bytes(offset, len)?
             && let Some(values) = try_cast_bytes::<V>(bytes)
@@ -93,7 +92,7 @@ pub(crate) trait ElfReaderExt: ElfReader {
             return Ok(values);
         }
 
-        let Some(bytes) = scratch.resize_bytes(len) else {
+        let Some(()) = scratch.resize(len) else {
             return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
                 offset,
                 len,
@@ -101,6 +100,7 @@ pub(crate) trait ElfReaderExt: ElfReader {
             )))
             .into());
         };
+        let bytes = scratch.as_bytes_mut();
         self.read(bytes, offset)?;
         let Some(values) = try_cast_bytes::<V>(bytes) else {
             return Err(IoError::ReadBufferNotAligned {
@@ -133,26 +133,6 @@ pub(crate) trait ElfReaderExt: ElfReader {
 
 impl<T: ElfReader + ?Sized> ElfReaderExt for T {}
 
-pub(crate) trait ByteScratch {
-    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]>;
-}
-
-impl ByteScratch for AlignedBytes {
-    #[inline]
-    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]> {
-        self.resize(len)?;
-        Some(self.as_bytes_mut())
-    }
-}
-
-impl ByteScratch for Vec<u8> {
-    #[inline]
-    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]> {
-        self.resize(len, 0);
-        Some(self.as_mut_slice())
-    }
-}
-
 #[inline]
 unsafe fn assume_init_vec<T>(mut values: Vec<MaybeUninit<T>>) -> Vec<T> {
     let len = values.len();
@@ -162,14 +142,11 @@ unsafe fn assume_init_vec<T>(mut values: Vec<MaybeUninit<T>>) -> Vec<T> {
     unsafe { Vec::from_raw_parts(ptr, len, cap) }
 }
 
-/// A trait for converting various input sources into an `ElfReader`.
-///
-/// This trait allows different types (like file paths or byte slices) to be
-/// converted into a reader that implements `ElfReader`, enabling polymorphic
-/// loading of ELF objects.
-pub trait IntoElfReader<'a> {
+/// Converts paths, byte buffers, and existing readers into an ELF reader.
+/// Existing readers pass through unchanged.
+pub trait IntoElfReader {
     /// The type of reader produced by this conversion.
-    type Reader: ElfReader + 'a;
+    type Reader: ElfReader;
 
     /// Converts the input into an `ElfReader`.
     ///
@@ -211,11 +188,8 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     }
 }
 
-impl<'a, R> IntoElfReader<'a> for Box<R>
-where
-    R: ElfReader + 'a + ?Sized,
-{
-    type Reader = Box<R>;
+impl<R: ElfReader> IntoElfReader for R {
+    type Reader = R;
 
     #[inline]
     fn into_reader(self) -> Result<Self::Reader> {
