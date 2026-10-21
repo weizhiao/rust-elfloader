@@ -61,14 +61,14 @@ and the built-in native lazy binder:
 
 ```toml
 [dependencies]
-elf_loader = "0.17.0"
+elf_loader = "0.18.0"
 ```
 
 For a smaller build, disable default features and opt in only to what you need:
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.17.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
 ```
 
 ### Use Linker to Load Dependencies
@@ -112,12 +112,8 @@ fn main() -> Result<()> {
 
 ## Benchmarks
 
-`bash ci/bench.sh` compares Relink with libloading using installed zlib, LZ4,
-Zstd, SQLite, PNG and FreeType libraries and their real dependencies. It times
-loading and complete unloading; symbol lookup and function calls validate
-correctness before timing.
-See [the benchmark guide](benches/README.md) for the timing boundaries,
-host-runtime bridge, system-cache snapshot, validation and CI artifacts.
+Run `bash ci/bench.sh` to compare load and teardown times for Relink and libloading.
+See [the benchmark guide](benches/README.md) for setup and measurement details.
 
 ## Feature Flags
 

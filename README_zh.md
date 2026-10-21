@@ -60,14 +60,14 @@ Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库
 
 ```toml
 [dependencies]
-elf_loader = "0.17.0"
+elf_loader = "0.18.0"
 ```
 
 如果你需要更小的构建，可以关闭默认 feature 后按需选择：
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.17.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
 ```
 
 ### 使用 Linker 加载依赖
@@ -76,7 +76,7 @@ elf_loader = { version = "0.17.0", default-features = false, features = ["libc"]
 use elf_loader::{
     LinkContext, Linker, Result,
     input::PathBuf,
-    linker::SearchPathResolver,
+    linker::{LdCache, SearchConfig, SearchPathResolver},
 };
 
 const LINKER: Linker = Linker::new();
@@ -84,9 +84,12 @@ const LINKER: Linker = Linker::new();
 fn main() -> Result<()> {
     let root = PathBuf::from("path/to/plugin.so");
     let mut context = LinkContext::for_process();
-    let mut resolver = SearchPathResolver::new();
-    resolver.push_rpath();
-    resolver.push_runpath();
+    // 按目标系统配置合适的路径。
+    let config = SearchConfig::new()
+        .library_path("$ORIGIN/plugins:/opt/app/lib", "/opt/app/bin")
+        .cache(LdCache::load_system()?)
+        .default_dirs(["/lib", "/usr/lib"]);
+    let resolver = SearchPathResolver::with_config(config);
 
     let loaded = LINKER
         .with_resolver(resolver)
@@ -108,27 +111,8 @@ fn main() -> Result<()> {
 
 ## 基准测试
 
-下表是 GitHub Actions 上的一次性能快照，只适合作为当前测试集的参考。完整环境见 [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)。fixture 是仓库内的 `leaf -> middle -> base` 测试链。
-
-加载耗时越低越好。`scan_first` 包含依赖扫描和 section 规划成本，因此不是和 `dlopen` 完全同质的直接替换。
-
-| 测试项 | 耗时 | 相对耗时 |
-| --- | ---: | --- |
-| `elf_loader/memory` | `89.531 µs` | `0.78x` |
-| `elf_loader/file` | `101.01 µs` | `0.88x` |
-| `linker/runtime` | `111.32 µs` | `0.97x` |
-| `libloading/lazy` | `115.34 µs` | `1.00x` |
-| `libloading/now` | `115.77 µs` | `1.00x` |
-| `linker/scan_first` | `288.92 µs` | `2.51x` |
-
-符号查找对比是在两边都已经加载完 fixture chain 后测量的：
-
-| 测试项 | 耗时 | 相对耗时 |
-| --- | ---: | --- |
-| `symbol/elf_loader/hit` | `10.280 ns` | `0.13x` |
-| `symbol/libloading/hit` | `80.154 ns` | `1.00x` |
-| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` |
-| `symbol/libloading/miss` | `375.49 ns` | `1.00x` |
+运行 `bash ci/bench.sh`，比较 Relink 与 libloading 的加载和清理耗时。
+环境配置与测量细节见[基准指南](benches/README.md)。
 
 ## Feature 开关
 

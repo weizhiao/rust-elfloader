@@ -1,4 +1,4 @@
-name: End-to-end benchmarks
+name: Load and teardown benchmarks
 
 on:
   workflow_dispatch:
@@ -35,13 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install real shared libraries
+      - name: Install benchmark dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential zlib1g liblz4-1 libzstd1 libsqlite3-0 libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0
-      - name: Measure load and unload
+      - name: Measure load and teardown
         run: bash ci/bench.sh
-      - name: Publish summary
+      - name: Publish benchmark summary
         if: always()
         run: |
           if test -f target/benchmark-report/summary.md; then
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: end-to-end-${{ github.sha }}
+          name: load-teardown-${{ github.sha }}
           path: |
             target/benchmark-report/
             target/criterion/

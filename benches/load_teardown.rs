@@ -1,4 +1,4 @@
-//! Linux/glibc end-to-end comparisons using unmodified real dependency graphs.
+//! Linux/glibc load and teardown comparisons using unmodified real dependency graphs.
 use criterion::{Criterion, criterion_group, criterion_main};
 use elf_loader::{Linker, Loader, input::PathBuf};
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
@@ -22,7 +22,7 @@ const DEFAULT_WORKLOADS: &[&str] = &[
     "libfreetype.so.6",
 ];
 
-fn bench_load_unload(c: &mut Criterion) {
+fn bench_load_teardown(c: &mut Criterion) {
     assert!(
         cfg!(all(target_os = "linux", target_env = "gnu")),
         "this suite requires Linux/glibc"
@@ -120,5 +120,5 @@ fn native_is_loaded(path: &Path) -> bool {
     !handle.is_null()
 }
 
-criterion_group!(benches, bench_load_unload);
+criterion_group!(benches, bench_load_teardown);
 criterion_main!(benches);

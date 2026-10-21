@@ -60,7 +60,7 @@ mkdir -p "$report_dir"
   ldd --version
   dpkg-query -W zlib1g liblz4-1 libzstd1 libsqlite3-0 libc6 libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0 || true
 } > "$report_dir/environment.txt" 2>&1
-cargo bench --locked --bench load_unload --features version -- \
+cargo bench --locked --bench load_teardown --features version -- \
   --warm-up-time "${RELINK_BENCH_WARMUP:-1}" \
   --measurement-time "${RELINK_BENCH_DURATION:-2}" \
   --sample-size "${RELINK_BENCH_SAMPLES:-30}" "${criterion_args[@]}" 2>&1 | tee "$report_dir/run.log" | \
