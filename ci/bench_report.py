@@ -52,9 +52,9 @@ if missing := required - estimates.keys():
     raise SystemExit(f'missing benchmark results: {sorted(missing)}')
 
 print('# Load and teardown benchmark\n')
-print('Warm page cache; fresh Relink context per iteration. Context creation and '
-      'host imports are excluded; Relink teardown includes release and context '
-      'destruction. Native teardown is dlclose. '
+print('Warm page cache; fresh Relink context per iteration. Context creation/destruction and '
+      'host imports are excluded; Relink teardown includes release and destruction '
+      'of released modules. Native teardown is dlclose. '
       'Times: mean [95% CI] in µs. Ratio: Relink / libloading (lower is faster). '
       'Load and teardown are sampled independently.\n')
 print('| Library | Phase | Relink (µs) | libloading (µs) | Ratio |')

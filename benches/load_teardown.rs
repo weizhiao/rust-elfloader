@@ -65,9 +65,8 @@ fn bench_load_teardown(c: &mut Criterion) {
                                 .load(context, PathBuf::from(black_box(path.to_str().unwrap())))
                                 .unwrap()
                         },
-                        |mut context, loaded| {
-                            drop(loaded.release(&mut context).unwrap());
-                            drop(context);
+                        |context, loaded| {
+                            drop(loaded.release(context).unwrap());
                         },
                     )
                     .phases()[index]
@@ -96,7 +95,7 @@ fn bench_load_teardown(c: &mut Criterion) {
                         |_| unsafe {
                             Library::open(Some(black_box(&path)), RTLD_NOW | RTLD_LOCAL).unwrap()
                         },
-                        |(), library| drop(library),
+                        |_, library| drop(library),
                     )
                     .phases()[index]
                 });

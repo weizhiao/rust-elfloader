@@ -573,6 +573,10 @@ impl<'symtab> SymbolInfo<'symtab> {
 
 /// Symbol lookup request plus reusable hash precomputation state.
 ///
+/// The requested name and version remain fixed throughout a lookup. Mutable
+/// access is provided for hash caching; export backends must not replace the
+/// request or change its name or version.
+///
 /// Names and versions are matched as raw bytes without a trailing NUL.
 /// UTF-8 strings and byte slices are both accepted.
 /// Symbol names must not contain any NUL bytes. This is not validated;
@@ -581,6 +585,9 @@ impl<'symtab> SymbolInfo<'symtab> {
 pub struct SymbolLookup<'symbol> {
     info: SymbolInfo<'symbol>,
     precompute: PreCompute,
+    // Only relocation lookups in the requesting module carry this hint.
+    // Store an address for membership checks, never for dereferencing.
+    symbol_hint: usize,
 }
 
 impl<'symbol> SymbolLookup<'symbol> {
@@ -610,7 +617,21 @@ impl<'symbol> SymbolLookup<'symbol> {
     #[inline]
     pub(crate) fn from_info(info: SymbolInfo<'symbol>) -> Self {
         let precompute = PreCompute::new();
-        Self { info, precompute }
+        Self {
+            info,
+            precompute,
+            symbol_hint: 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn set_symbol_hint(&mut self, address: Option<usize>) {
+        self.symbol_hint = address.unwrap_or(0);
+    }
+
+    #[inline]
+    pub(crate) fn symbol_hint(&self) -> Option<usize> {
+        (self.symbol_hint != 0).then_some(self.symbol_hint)
     }
 
     /// Returns the requested symbol name as bytes without a trailing NUL.

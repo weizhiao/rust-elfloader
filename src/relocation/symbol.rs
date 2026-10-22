@@ -200,6 +200,12 @@ where
         lookup: &mut SymbolLookup<'_>,
         source: &'find ModuleHandle<Arch>,
     ) -> Option<&'find ElfSymbol<Arch::Layout>> {
+        // A definition hint is valid only when searching the exact source
+        // module. Other modules, including wrappers, must use ordinary lookup.
+        lookup.set_symbol_hint(
+            core::ptr::eq(source.as_ref(), self.source.as_ref())
+                .then_some(entry.symbol() as *const ElfSymbol<Arch::Layout> as usize),
+        );
         let symbol = source
             .exports()
             .lookup(lookup)
@@ -247,20 +253,16 @@ where
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<SymDef<'find, Arch>> {
         let sym = entry.symbol();
-        let self_def = || (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source));
-        let scope_def = || {
-            let (symbol, source) = self.lookup_in_scope(entry, |_| true)?;
-            Some(self.bind(entry.name(), symbol, source))
-        };
         if unlikely(sym.binds_local()) {
-            return self_def();
+            return (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source));
         }
-
-        if self.symbolic {
-            self_def().or_else(scope_def)
-        } else {
-            scope_def().or_else(self_def)
+        if self.symbolic && !sym.is_undef() {
+            return Some(self.bind(entry.name(), sym, self.source));
         }
+        if let Some((symbol, source)) = self.lookup_in_scope(entry, |_| true) {
+            return Some(self.bind(entry.name(), symbol, source));
+        }
+        (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source))
     }
 
     fn bind<'find>(

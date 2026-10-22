@@ -2,10 +2,7 @@
 use crate::memory::VmOffset;
 use crate::{
     Error, RelocReason, Result,
-    elf::{
-        ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol, HashTable, SymbolEntry,
-        SymbolTableView,
-    },
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
     image::{ElfCore, ModuleInstanceId, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
@@ -66,7 +63,6 @@ enum CachedDefinition<'find, Arch: RelocationArch> {
 
 struct SymbolCache<'find, Arch: RelocationArch> {
     index: usize,
-    relocation_type: ElfRelocationType,
     symbol: &'find ElfSymbol<Arch::Layout>,
     name: &'find [u8],
     definition: CachedDefinition<'find, Arch>,
@@ -237,11 +233,14 @@ where
     #[inline]
     pub(crate) fn bind_symbol_addr(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         // Cache only ordinary bindings within this module's fixed lookup scope.
+        // The definition depends on the symbol, not the relocation type.
         // COPY and TLS lookups use their separate paths. Keep the definition,
         // not its address: IFUNC and custom address resolvers still run per site.
-        if self.symbol_cache.as_ref().is_none_or(|cached| {
-            cached.index != rel.r_symbol() || cached.relocation_type != rel.r_type()
-        }) {
+        if self
+            .symbol_cache
+            .as_ref()
+            .is_none_or(|cached| cached.index != rel.r_symbol())
+        {
             let entry = self.symbol_entry(rel);
             let definition = if Tls::OVERRIDE_TLS_GET_ADDR && entry.name() == TLS_GET_ADDR_SYMBOL {
                 CachedDefinition::TlsEntry(
@@ -256,7 +255,6 @@ where
             };
             self.symbol_cache = Some(SymbolCache {
                 index: rel.r_symbol(),
-                relocation_type: rel.r_type(),
                 symbol: entry.symbol(),
                 name: entry.name(),
                 definition,

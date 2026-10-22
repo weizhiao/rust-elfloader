@@ -23,7 +23,7 @@ fn main() {
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
             println!(
-                "{USAGE}\nEach iteration uses a fresh context. Reports load, teardown (release + context destruction), and total ns/iteration; context creation and host imports are excluded. Defaults: 1000 ms warmup, auto-calibrated iterations for ~1000 ms of measured time per round, 9 rounds. --iterations overrides calibration."
+                "{USAGE}\nEach iteration uses a fresh context. Reports load, teardown (release + finalization/unmapping), and total ns/iteration; context creation/destruction and host imports are excluded. Defaults: 1000 ms warmup, auto-calibrated iterations for ~1000 ms of measured time per round, 9 rounds. --iterations overrides calibration."
             );
             return;
         }
@@ -80,9 +80,8 @@ fn main() {
                     .load(context, PathBuf::from(black_box(path.to_str().unwrap())))
                     .unwrap()
             },
-            |mut context, loaded| {
-                drop(loaded.release(&mut context).unwrap());
-                drop(context);
+            |context, loaded| {
+                drop(loaded.release(context).unwrap());
             },
         )
     };

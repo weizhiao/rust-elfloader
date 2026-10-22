@@ -334,8 +334,7 @@ where
                     let loaded = self
                         .linker
                         .relocator
-                        .run(raw)
-                        .with_local_scope(scope)?
+                        .run_with_local_scope(raw, scope)?
                         .with_global_scope(global)?
                         .with_lookup_order(self.lookup_order)
                         .symbol_registry(Arc::clone(symbols))

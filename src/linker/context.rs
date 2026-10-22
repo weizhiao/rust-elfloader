@@ -381,18 +381,19 @@ where
             });
         }
 
-        let unload_order = self
-            .committed
-            .lifecycle()
-            .rev()
-            .filter(|slot| !reachable.contains(*slot))
-            .collect::<Vec<_>>();
+        // The traversal exhausted this buffer; reuse it for reverse unload order.
+        pending.extend(
+            self.committed
+                .lifecycle()
+                .rev()
+                .filter(|slot| !reachable.contains(*slot)),
+        );
         global.retain(|module| {
             self.committed
                 .module_for_source(module.source_id())
                 .is_some_and(|slot| reachable.contains(slot))
         });
-        Ok(self.committed.remove_batch(unload_order))
+        Ok(self.committed.remove_batch(pending))
     }
 
     /// Returns the retained breadth-first dependency scope rooted at `root`.

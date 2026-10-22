@@ -37,9 +37,32 @@ impl<Binder> Relocator<Binder> {
         T: Relocatable<D, Arch = Arch>,
     {
         let domain = object.domain().id();
+        self.start_run(object, LocalScope::empty(domain))
+    }
+
+    /// Starts a run with its final scope, avoiding an unused empty allocation.
+    pub(crate) fn run_with_local_scope<D: Send + Sync + 'static, T, Arch>(
+        &self,
+        object: T,
+        scope: LocalScope<Arch>,
+    ) -> Result<RelocatorRun<'_, T, Arch, (), Binder>>
+    where
+        Arch: RelocationArch,
+        T: Relocatable<D, Arch = Arch>,
+    {
+        object.domain().id().ensure(scope.domain_id())?;
+        Ok(self.start_run(object, scope))
+    }
+
+    #[inline]
+    fn start_run<T, Arch: RelocationArch>(
+        &self,
+        object: T,
+        scope: LocalScope<Arch>,
+    ) -> RelocatorRun<'_, T, Arch, (), Binder> {
         RelocatorRun {
             object,
-            scope: LocalScope::empty(domain),
+            scope,
             global: None,
             observer: (),
             binding: self.binding,

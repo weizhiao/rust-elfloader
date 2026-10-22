@@ -513,14 +513,11 @@ impl<Arch: RelocationArch> LocalScope<Arch> {
     where
         I: IntoIterator<Item = ModuleScope<Arch>>,
     {
-        let groups = groups.into_iter().collect::<Vec<_>>();
-        for group in &groups {
+        let groups = groups.into_iter().collect::<Arc<[_]>>();
+        for group in groups.iter() {
             lazy.check_scope(group)?;
         }
-        Ok(Self {
-            groups: Arc::from(groups),
-            lazy,
-        })
+        Ok(Self { groups, lazy })
     }
 
     /// Returns the complete runtime domain identity.

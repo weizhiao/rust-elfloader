@@ -233,6 +233,49 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
+    /// Reuses a relocation's own definition when no earlier chain candidate
+    /// can win. Equal hashes fall back to ordinary name/version lookup.
+    fn lookup_known_symbol<'sym, H>(
+        &self,
+        table: SymbolTableView<'sym, L, H>,
+        lookup: &SymbolLookup<'_>,
+    ) -> Option<&'sym ElfSymbol<L>> {
+        let address = lookup.symbol_hint()?;
+        let offset = address.checked_sub(table.symbols.as_ptr() as usize)?;
+        let entry_size = size_of::<ElfSymbol<L>>();
+        if entry_size == 0 || !offset.is_multiple_of(entry_size) {
+            return None;
+        }
+        let symbol_index = offset / entry_size;
+        let symbol = table.get_raw(symbol_index)?;
+        if !symbol.is_exported() {
+            return None;
+        }
+        #[cfg(feature = "version")]
+        if !table.check_match(symbol_index, lookup.version()) {
+            return None;
+        }
+
+        let chain_index = symbol_index.checked_sub(self.header.symbias as usize)?;
+        let chains = self.chains.as_slice();
+        let hash = *chains.get(chain_index)? | 1;
+        // GNU hash chains follow symbol order. A terminal bit on the preceding
+        // entry marks the start of this bucket. Any earlier same-name symbol
+        // must have the same masked hash, including alternate symbol versions.
+        let mut previous = chain_index;
+        while previous != 0 {
+            let chain_hash = chains[previous - 1];
+            if chain_hash & 1 != 0 {
+                break;
+            }
+            if chain_hash | 1 == hash {
+                return None;
+            }
+            previous -= 1;
+        }
+        Some(symbol)
+    }
+
     pub(crate) fn for_each<H>(
         &self,
         table: SymbolTableView<'_, L, H>,
@@ -268,6 +311,9 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         table: SymbolTableView<'sym, L, H>,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
+        if let Some(symbol) = self.lookup_known_symbol(table, lookup) {
+            return Some(symbol);
+        }
         // Get precomputed hash values
         let hash = lookup.gnu_hash();
         let word_bits = L::Word::BITS;

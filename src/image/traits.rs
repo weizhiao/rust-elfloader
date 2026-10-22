@@ -27,6 +27,9 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
     fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr>;
 
     /// Looks up one exported symbol by name and optional version.
+    ///
+    /// Mutable access permits hash caching only. Implementations must preserve
+    /// the requested name and version and must not replace `lookup`.
     fn lookup<'exports>(
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
