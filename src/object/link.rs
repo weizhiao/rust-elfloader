@@ -215,13 +215,13 @@ where
         // The mandatory null symbol stays zero and never participates in lookup.
         for idx in 1..symbol_count {
             let value = {
-                let entry = symtab.view().entry(idx);
-                let symbol = entry.symbol();
+                let symbol = &symtab.symbols()[idx];
                 if symbol.symbol_type() == ElfSymbolType::FILE {
                     continue;
                 }
 
                 let addr = if symbol.is_undef() {
+                    let entry = symtab.view().entry(idx);
                     let definition = resolver.find(&entry);
                     let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
                     let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
@@ -255,12 +255,11 @@ where
 
     fn default_exports(&self) -> ObjectExports<Arch::Layout> {
         let mut exports = ObjectExports::empty();
-        for idx in 0..self.symtab.symbols().len() {
-            let entry = self.symtab.view().entry(idx);
-            let symbol = entry.symbol();
+        for (idx, symbol) in self.symtab.symbols().iter().enumerate() {
             if !symbol.is_exported() || self.symbol_uses_init_memory(symbol) {
                 continue;
             }
+            let entry = self.symtab.view().entry(idx);
             exports.insert(entry.name(), symbol.clone());
         }
         exports

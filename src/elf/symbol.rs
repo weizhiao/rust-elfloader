@@ -440,8 +440,10 @@ impl ElfStringTable {
     #[inline]
     pub(crate) fn get_cstr(&self, offset: usize) -> &'static CStr {
         let bytes = self.bytes_from(offset);
-        CStr::from_bytes_until_nul(bytes)
-            .expect("ELF string table entry is missing a NUL terminator")
+        let len =
+            memchr::memchr(0, bytes).expect("ELF string table entry is missing a NUL terminator");
+        // SAFETY: memchr found the first NUL inside bytes; this slice includes it.
+        unsafe { CStr::from_bytes_with_nul_unchecked(&bytes[..=len]) }
     }
 
     /// Compare a candidate name without first finding its length.

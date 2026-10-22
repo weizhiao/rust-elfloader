@@ -201,8 +201,11 @@ where
         if r_sym == 0 {
             return VmAddr::null();
         }
-        let symbol = self.symbols.entry(r_sym);
-        self.core.segments().base() + VmOffset::new(symbol.symbol().st_value())
+        let symbol = self
+            .symbols
+            .get_raw(r_sym)
+            .expect("relocation symbol index is out of bounds");
+        self.core.segments().base() + VmOffset::new(symbol.st_value())
     }
 
     #[inline]

@@ -21,15 +21,17 @@ use sysv::ElfHash;
 #[inline]
 pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
     let mut hash = 5381u32;
-    let mut pairs = name.chunks_exact(2);
-    for pair in &mut pairs {
-        // Combine two rounds so the second byte does not depend on the
-        // intermediate hash: (h * 33 + a) * 33 + b.
-        hash = hash
-            .wrapping_mul(33 * 33)
-            .wrapping_add(u32::from(pair[0]) * 33 + u32::from(pair[1]));
+    let mut chunks = name.chunks_exact(4);
+    for chunk in &mut chunks {
+        // Combine four rounds to shorten the hash dependency chain.
+        hash = hash.wrapping_mul(33 * 33 * 33 * 33).wrapping_add(
+            u32::from(chunk[0]) * 33 * 33 * 33
+                + u32::from(chunk[1]) * 33 * 33
+                + u32::from(chunk[2]) * 33
+                + u32::from(chunk[3]),
+        );
     }
-    if let [byte] = pairs.remainder() {
+    for byte in chunks.remainder() {
         hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
     }
     hash

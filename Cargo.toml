@@ -68,6 +68,10 @@ version = "0.4.27"
 default-features = false
 optional = true
 
+[dependencies.memchr]
+version = "2.7"
+default-features = false
+
 [dependencies.portable-atomic]
 version = "1.13"
 default-features = false
@@ -143,7 +147,7 @@ path = "examples/support/build_fixtures.rs"
 
 [features]
 default = ["full"]
-std = []
+std = ["memchr/std"]
 
 # Enables the libc backend and, on Linux/glibc, native host-library imports.
 libc = ["dep:libc"]
