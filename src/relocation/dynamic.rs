@@ -426,17 +426,11 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
         let pltrel = pltrel.unwrap_or_else(MappedView::empty);
         let dynrel = dynrel.unwrap_or_else(MappedView::empty);
 
-        if let Some(relr) = relr {
-            // Use RELR relocations if available (more compact format)
-            Ok(Self {
-                relative: RelativeRel::Relr(relr),
-                pltrel,
-                dynrel,
-                packed_rela,
-            })
+        let (relative, dynrel) = if let Some(relr) = relr {
+            // Regular REL/RELA entries still pass through relocate_dynrel,
+            // which also handles relative entries when RELR is present.
+            (RelativeRel::Relr(relr), dynrel)
         } else {
-            // Use traditional REL/RELA relocations
-            // nrelative indicates the count of REL_RELATIVE relocation types
             let mut nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
 
             // DT_ANDROID_RELA carries the whole table, including the relative
@@ -459,10 +453,13 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
                 }
                 .into());
             };
+            (RelativeRel::Rel(relative), dynrel)
+        };
 
-            // Split relocations into relative and non-relative parts
-            let dynrel = if pltrel_is_dynrel_tail {
-                // If contiguous, exclude pltrel entries from dynrel
+        // JMPREL can alias the end of the regular table, independently of
+        // whether relative relocations use REL/RELA or RELR.
+        let dynrel =
+            if pltrel_is_dynrel_tail {
                 let dynrel_len = dynrel.len().checked_sub(pltrel.len()).ok_or(
                     RelocTableError::CountOutOfRange {
                         tag: ElfDynamicTag::JMPREL,
@@ -475,17 +472,15 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
                 };
                 dynrel
             } else {
-                // Otherwise, use all remaining entries
                 dynrel
             };
 
-            Ok(Self {
-                relative: RelativeRel::Rel(relative),
-                pltrel,
-                dynrel,
-                packed_rela,
-            })
-        }
+        Ok(Self {
+            relative,
+            pltrel,
+            dynrel,
+            packed_rela,
+        })
     }
 
     #[inline]
@@ -496,7 +491,10 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
     /// Check if there are no relocations to process
     #[inline]
     fn is_empty(&self) -> bool {
-        self.relative.is_empty() && self.dynrel.is_empty() && self.pltrel.is_empty()
+        self.relative.is_empty()
+            && self.dynrel.is_empty()
+            && self.pltrel.is_empty()
+            && self.packed_rela.is_empty()
     }
 }
 

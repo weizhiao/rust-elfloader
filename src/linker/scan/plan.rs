@@ -106,7 +106,6 @@ type LinkPlanParts<Arch, Tls> = (
 /// materialization policies.
 pub(crate) struct LinkPlan<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     root: ModuleId,
-    group_order: Vec<ModuleId>,
     module_ids: BTreeMap<ModuleKey, ModuleId>,
     entries: PrimaryMap<ModuleId, PlannedModule<Arch, Tls>>,
     memory_layout: MemoryLayoutPlan,
@@ -123,12 +122,10 @@ where
         group_order: Vec<ModuleSlot>,
         mut entries: PlannedEntries<Arch>,
     ) -> Self {
-        let group_ids = group_order;
         let mut module_ids = BTreeMap::new();
         let mut planned_ids = BTreeMap::new();
-        let mut group_order = Vec::with_capacity(group_ids.len());
         let mut pending_entries = PrimaryMap::default();
-        for module_slot in group_ids {
+        for module_slot in group_order {
             let (key, module, direct_deps) = entries
                 .remove(&module_slot)
                 .expect("scan plan group order referenced a missing discovered module");
@@ -143,7 +140,6 @@ where
                 previous.is_none(),
                 "scan plan discovered duplicate module id"
             );
-            group_order.push(id);
         }
 
         let root = *planned_ids
@@ -167,7 +163,6 @@ where
         );
         Self {
             root,
-            group_order,
             module_ids,
             entries: planned_entries,
             memory_layout,
@@ -189,17 +184,15 @@ where
 
     /// Returns the breadth-first module ids discovered from the root.
     #[inline]
-    pub(in crate::linker) fn group_order(&self) -> &[ModuleId] {
-        &self.group_order
+    pub(in crate::linker) fn group_order(&self) -> impl ExactSizeIterator<Item = ModuleId> + '_ {
+        self.entries.iter().map(|(id, _)| id)
     }
 
     pub(in crate::linker) fn modules_with_materialization(
         &self,
         mode: Materialization,
     ) -> impl Iterator<Item = ModuleId> + '_ {
-        self.group_order
-            .iter()
-            .copied()
+        self.group_order()
             .filter(move |module_id| self.materialization(*module_id) == Some(mode))
     }
 
@@ -207,13 +200,10 @@ where
         &mut self,
         mut f: impl FnMut(&mut Self, ModuleId) -> Result<()>,
     ) -> Result<()> {
-        let group_len = self.group_order.len();
-        for index in 0..group_len {
-            let id = self.group_order[index];
-            if self.entries.get(id).is_none() {
-                continue;
-            }
-            f(self, id)?;
+        // Entries are dense and retain their discovery order throughout planning.
+        let module_count = self.entries.iter().len();
+        for index in 0..module_count {
+            f(self, ModuleId::new(index))?;
         }
         Ok(())
     }

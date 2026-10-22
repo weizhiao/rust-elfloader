@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 
 use crate::{
     ByteRepr, Result,
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, Mmap, ProtFlags},
 };
 
 use super::{MappedRegion, RegionAccess, VmAddr};
@@ -17,7 +17,7 @@ use super::{MappedRegion, RegionAccess, VmAddr};
 pub struct HostRegion {
     host_ptr: *mut c_void,
     len: usize,
-    control: Box<dyn Mmap<Region = HostRegion>>,
+    control: Option<Box<dyn Mmap<Region = HostRegion>>>,
     unmap_on_drop: bool,
 }
 
@@ -74,7 +74,12 @@ impl MappedRegion<HostRegion> {
     /// [`Self::local_alias`].
     #[inline]
     pub unsafe fn local_alias_no_unmap(host_ptr: *mut c_void, len: usize) -> Self {
-        unsafe { Self::local_alias(host_ptr, len, NoopMmap) }
+        Self::new(HostRegion {
+            host_ptr,
+            len,
+            control: None,
+            unmap_on_drop: false,
+        })
     }
 }
 
@@ -89,7 +94,7 @@ impl HostRegion {
         Self {
             host_ptr,
             len,
-            control,
+            control: Some(control),
             unmap_on_drop,
         }
     }
@@ -185,8 +190,11 @@ impl RegionAccess for HostRegion {
 
     #[inline]
     unsafe fn madvise(&self, offset: usize, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        let Some(control) = &self.control else {
+            return Ok(());
+        };
         unsafe {
-            self.control.madvise(
+            control.madvise(
                 VmAddr::from_ptr(self.host_ptr.cast::<u8>().add(offset)),
                 len,
                 behavior,
@@ -196,8 +204,11 @@ impl RegionAccess for HostRegion {
 
     #[inline]
     unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()> {
+        let Some(control) = &self.control else {
+            return Ok(());
+        };
         unsafe {
-            self.control.mprotect(
+            control.mprotect(
                 VmAddr::from_ptr(self.host_ptr.cast::<u8>().add(offset)),
                 len,
                 prot,
@@ -209,10 +220,11 @@ impl RegionAccess for HostRegion {
 impl Drop for HostRegion {
     fn drop(&mut self) {
         if self.unmap_on_drop {
-            let _ = unsafe {
-                self.control
-                    .munmap(VmAddr::from_ptr(self.host_ptr), self.len)
-            };
+            let control = self
+                .control
+                .as_ref()
+                .expect("owned region must have a mapping backend");
+            let _ = unsafe { control.munmap(VmAddr::from_ptr(self.host_ptr), self.len) };
         }
     }
 }
@@ -222,61 +234,3 @@ impl Drop for HostRegion {
 unsafe impl Send for HostRegion {}
 // Safety: shared access only exposes byte operations over the mapped range.
 unsafe impl Sync for HostRegion {}
-
-struct NoopMmap;
-
-impl Mmap for NoopMmap {
-    type Region = HostRegion;
-
-    fn page_size(&self) -> PageSize {
-        PageSize::Base
-    }
-
-    unsafe fn create_space(
-        &self,
-        _addr: Option<VmAddr>,
-        _len: usize,
-        _prot: ProtFlags,
-        _populate_later: bool,
-    ) -> Result<MappedRegion<Self::Region>> {
-        unreachable!("NoopMmap only supports borrowed aliases")
-    }
-
-    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr(), len) })
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: isize,
-    ) -> Result<()> {
-        unreachable!("NoopMmap only supports borrowed aliases")
-    }
-
-    unsafe fn map_zero_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-    ) -> Result<()> {
-        unreachable!("NoopMmap only supports borrowed aliases")
-    }
-
-    unsafe fn munmap(&self, _addr: VmAddr, _len: usize) -> Result<()> {
-        Ok(())
-    }
-
-    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
-        Ok(())
-    }
-
-    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
-        Ok(())
-    }
-}

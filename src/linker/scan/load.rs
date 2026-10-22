@@ -51,12 +51,7 @@ where
         Meta: Default,
     {
         let prepared = self.prepare_scan_load(context, root)?;
-        let relocated = self.relocate(prepared)?;
-        let published = relocated.publish(context)?;
-        match published.initialize() {
-            Ok(result) => Ok(result),
-            Err(failed) => Err(failed.rollback(context)),
-        }
+        self.finish_load(context, prepared)
     }
 
     /// Resolves and maps a scan-first module group without relocating it.

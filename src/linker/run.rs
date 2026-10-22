@@ -132,6 +132,17 @@ where
         Meta: Default,
     {
         let prepared = self.prepare_load(context, root)?;
+        self.finish_load(context, prepared)
+    }
+
+    pub(in crate::linker) fn finish_load<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        prepared: PreparedLoad<D, Arch, M::Region, Tls>,
+    ) -> Result<LoadResult>
+    where
+        Meta: Default,
+    {
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -227,12 +238,7 @@ where
         Meta: Default,
     {
         let prepared = self.prepare_mapped(context, key, raw)?;
-        let relocated = self.relocate(prepared)?;
-        let published = relocated.publish(context)?;
-        match published.initialize() {
-            Ok(result) => Ok(result),
-            Err(failed) => Err(failed.rollback(context)),
-        }
+        self.finish_load(context, prepared)
     }
 
     /// Resolves dependencies for a pre-mapped root without relocating it.

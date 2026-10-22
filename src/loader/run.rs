@@ -317,6 +317,24 @@ where
         Ok((builder, has_dynamic))
     }
 
+    fn finish_dynamic_load(
+        builder: ImageBuilder<Tls, D, Arch, M::Region>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
+        observer: &mut Obs,
+        search_paths: Option<&mut SearchPathPool>,
+        operation: &str,
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
+        let mut image = builder.build_dynamic(phdrs, search_paths)?;
+        observer.on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
+        logging::info!(
+            "{}: {} ({})",
+            operation,
+            image.name().escape_ascii(),
+            image.segments()
+        );
+        Ok(image)
+    }
+
     fn load_dynamic_impl(
         &mut self,
         object: &impl ElfReader,
@@ -332,15 +350,13 @@ where
             phdrs,
             true,
         )?;
-        let mut image = builder.build_dynamic(phdrs, self.search_paths.as_deref_mut())?;
-        self.observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
-        logging::info!(
-            "Loaded dynamic image: {} ({})",
-            image.name().escape_ascii(),
-            image.segments()
-        );
-        Ok(image)
+        Self::finish_dynamic_load(
+            builder,
+            phdrs,
+            &mut self.observer,
+            self.search_paths.as_deref_mut(),
+            "Loaded dynamic image",
+        )
     }
 
     /// Maps a scanned dynamic image using its saved metadata and reader.
@@ -366,17 +382,13 @@ where
             &phdrs,
             false,
         )?;
-        let mut image = builder.build_dynamic(&phdrs, self.search_paths.as_deref_mut())?;
-        self.observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
-
-        logging::info!(
-            "Loaded scanned dynamic image: {} ({})",
-            image.name().escape_ascii(),
-            image.segments()
-        );
-
-        Ok(image)
+        Self::finish_dynamic_load(
+            builder,
+            &phdrs,
+            &mut self.observer,
+            self.search_paths.as_deref_mut(),
+            "Loaded scanned dynamic image",
+        )
     }
 
     /// Wraps an already mapped dynamic image for relocation, such as a kernel-loaded executable.
@@ -421,17 +433,13 @@ where
             D::default(),
             self.domain.clone(),
         );
-        let mut image = builder.build_dynamic(&phdrs, self.search_paths.as_deref_mut())?;
-        self.observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
-
-        logging::info!(
-            "Borrowed dynamic image: {} ({})",
-            image.name().escape_ascii(),
-            image.segments()
-        );
-
-        Ok(image)
+        Self::finish_dynamic_load(
+            builder,
+            &phdrs,
+            &mut self.observer,
+            self.search_paths.as_deref_mut(),
+            "Borrowed dynamic image",
+        )
     }
 
     /// Loads an executable image into memory and returns a raw executable.

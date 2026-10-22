@@ -3,7 +3,10 @@ use crate::{
     Result, TlsError,
     sync::{Arc, arc_unsize},
 };
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, btree_map::Entry},
+    vec::Vec,
+};
 use core::{fmt, ptr::NonNull};
 
 /// Immutable metadata assigned to a provider by its registry.
@@ -165,16 +168,16 @@ impl TlsRegistry {
 
     /// Detaches a registration. Drop its returned owner after releasing locks.
     pub fn unregister(&mut self, mod_id: TlsModuleId) -> Option<TlsOwner> {
-        if !self.modules.contains_key(&mod_id) {
+        let Entry::Occupied(entry) = self.modules.entry(mod_id) else {
             return None;
-        }
+        };
         // Finish fallible work before detaching an owner: unwinding must not
         // destroy a provider while the caller still holds the registry lock.
         let generation = self
             .generation
             .checked_add(1)
             .expect("TLS generation exhausted");
-        let entry = self.modules.remove(&mod_id)?;
+        let entry = entry.remove();
         self.generation = generation;
         Some(entry.owner)
     }

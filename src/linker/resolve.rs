@@ -9,12 +9,13 @@ use super::{
 use crate::{
     LoaderRun, ParsePhdrError, Result,
     arch::NativeArch,
+    elf::ElfHeader,
     entity::EntitySet,
     image::{
         ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic, ScannedElf,
         default_module_search,
     },
-    input::ModuleSourceId,
+    input::{ElfReader, ModuleSourceId},
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
@@ -136,28 +137,58 @@ where
         slot
     }
 
-    fn stage_module_deps<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M>(
+    fn stage_with<'cfg>(
         &mut self,
-        deps: Vec<ResolvedDependency<'cfg, Arch>>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        mut stage: F,
-    ) -> Result<Box<[ModuleSlot]>>
-    where
-        D: Send + Sync + 'static,
-        Obs: LoadObserver<D, Arch>,
-        M: Mmap,
-        F: FnMut(
-            &mut Self,
-            ModuleKey,
-            ResolvedKey<'cfg, Arch>,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        ) -> Result<ModuleSlot>,
-    {
-        let mut direct_deps = Vec::with_capacity(deps.len());
-        for ResolvedDependency { key, resolved } in deps {
-            push_dep(&mut direct_deps, stage(self, key, resolved, loader)?);
+        entry_key: ModuleKey,
+        resolved: ResolvedKey<'cfg, Arch>,
+        parent: Option<ModuleSlot>,
+        materialize: &mut impl FnMut(Box<dyn ElfReader + 'cfg>, ElfHeader<Arch::Layout>) -> Result<P>,
+    ) -> Result<ModuleSlot> {
+        let (resolved, pinned, aliases) = resolved.into_parts();
+        let mut module_deps = None;
+        let slot = if let Some(slot) = self.known_module(&entry_key) {
+            slot
+        } else {
+            match resolved {
+                ResolvedKind::Load { reader, ehdr } => {
+                    if let Some(slot) = self.module_for_source(reader.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        let payload = materialize(reader, ehdr)?;
+                        self.stage_dynamic(entry_key, payload, parent)
+                    }
+                }
+                ResolvedKind::Module { module, deps } => {
+                    self.committed.ensure_domain(module.domain_id())?;
+                    if let Some(slot) = self.module_for_source(module.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        module_deps = Some(deps);
+                        self.stage_module(entry_key, module, Box::default())
+                    }
+                }
+            }
+        };
+        // Publish names into the pending graph before descending into supplied
+        // dependencies, so aliases and cycles resolve to this same instance.
+        for alias in aliases {
+            self.session.bind_key(alias, slot);
         }
-        Ok(direct_deps.into_boxed_slice())
+        if let Some(deps) = module_deps {
+            let mut direct_deps = Vec::with_capacity(deps.len());
+            for ResolvedDependency { key, resolved } in deps {
+                let dep = self.stage_with(key, resolved, parent, materialize)?;
+                push_dep(&mut direct_deps, dep);
+            }
+            self.session
+                .set_module_deps(slot, direct_deps.into_boxed_slice());
+        }
+        if pinned {
+            self.session.pin(slot);
+        }
+        Ok(slot)
     }
 
     fn known_direct_deps(&self, slot: ModuleSlot) -> Option<&[ModuleSlot]> {
@@ -395,48 +426,9 @@ where
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
     {
-        let (resolved, pinned, aliases) = resolved.into_parts();
-        let mut module_deps = None;
-        let slot = if let Some(slot) = self.known_module(&entry_key) {
-            slot
-        } else {
-            match resolved {
-                ResolvedKind::Load { reader, ehdr } => {
-                    if let Some(slot) = self.module_for_source(reader.source_id()) {
-                        self.session.bind_key(entry_key, slot);
-                        slot
-                    } else {
-                        let raw = loader.load_dynamic_with_ehdr(reader, ehdr)?;
-                        self.stage_dynamic(entry_key, raw, parent)
-                    }
-                }
-                ResolvedKind::Module { module, deps } => {
-                    self.committed.ensure_domain(module.domain_id())?;
-                    if let Some(slot) = self.module_for_source(module.source_id()) {
-                        self.session.bind_key(entry_key, slot);
-                        slot
-                    } else {
-                        module_deps = Some(deps);
-                        self.stage_module(entry_key, module, Box::default())
-                    }
-                }
-            }
-        };
-        // Publish names into the pending graph before descending into supplied
-        // dependencies, so aliases and cycles resolve to this same instance.
-        for alias in aliases {
-            self.session.bind_key(alias, slot);
-        }
-        if let Some(deps) = module_deps {
-            let direct_deps = self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                ctx.stage::<Obs, M>(key, dep, parent, loader)
-            })?;
-            self.session.set_module_deps(slot, direct_deps);
-        }
-        if pinned {
-            self.session.pin(slot);
-        }
-        Ok(slot)
+        self.stage_with(entry_key, resolved, parent, &mut |reader, ehdr| {
+            loader.load_dynamic_with_ehdr(reader, ehdr)
+        })
     }
 
     pub(super) fn resolve_graph<Obs, M, Resolver>(
@@ -497,51 +489,12 @@ where
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         M: Mmap,
     {
-        let (resolved, pinned, aliases) = resolved.into_parts();
-        let mut module_deps = None;
-        let slot = if let Some(slot) = self.known_module(&entry_key) {
-            slot
-        } else {
-            match resolved {
-                ResolvedKind::Load { reader, ehdr } => {
-                    if let Some(slot) = self.module_for_source(reader.source_id()) {
-                        self.session.bind_key(entry_key, slot);
-                        slot
-                    } else {
-                        let ScannedElf::Dynamic(module) = loader.scan_with_ehdr(reader, ehdr)?
-                        else {
-                            return Err(ParsePhdrError::MissingDynamicSection.into());
-                        };
-                        self.stage_dynamic(entry_key, module, parent)
-                    }
-                }
-                ResolvedKind::Module { module, deps } => {
-                    self.committed.ensure_domain(module.domain_id())?;
-                    if let Some(slot) = self.module_for_source(module.source_id()) {
-                        self.session.bind_key(entry_key, slot);
-                        slot
-                    } else {
-                        module_deps = Some(deps);
-                        self.stage_module(entry_key, module, Box::default())
-                    }
-                }
-            }
-        };
-        // Publish names into the pending graph before descending into supplied
-        // dependencies, so aliases and cycles resolve to this same instance.
-        for alias in aliases {
-            self.session.bind_key(alias, slot);
-        }
-        if let Some(deps) = module_deps {
-            let direct_deps = self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                ctx.stage::<Tls, D, Obs, M>(key, dep, parent, loader)
-            })?;
-            self.session.set_module_deps(slot, direct_deps);
-        }
-        if pinned {
-            self.session.pin(slot);
-        }
-        Ok(slot)
+        self.stage_with(entry_key, resolved, parent, &mut |reader, ehdr| {
+            let ScannedElf::Dynamic(module) = loader.scan_with_ehdr(reader, ehdr)? else {
+                return Err(ParsePhdrError::MissingDynamicSection.into());
+            };
+            Ok(module)
+        })
     }
 
     fn resolve_graph<Tls: TlsResolver<Arch>, D, Obs, M, Resolver>(

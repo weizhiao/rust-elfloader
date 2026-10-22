@@ -125,10 +125,6 @@ impl<L: ElfLayout> SectionTable<L> {
             header,
         ))
     }
-
-    fn sections(&self) -> ScannedSections<'_, L> {
-        ScannedSections::new(Some(self))
-    }
 }
 
 /// The planning capability exposed by one scanned module.
@@ -222,11 +218,6 @@ impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     #[inline]
     fn new(table: Option<&'a SectionTable<L>>) -> Self {
         Self { table, index: 0 }
-    }
-
-    #[inline]
-    fn empty() -> Self {
-        Self::new(None)
     }
 }
 
@@ -612,13 +603,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Returns the PT_INTERP string when present.
     #[inline]
     pub fn interp(&self) -> Option<&[u8]> {
-        self.interp.as_deref().map(|bytes| {
-            let end = bytes
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(bytes.len());
-            &bytes[..end]
-        })
+        self.interp.as_deref()
     }
 
     /// Returns expanded module search metadata.
@@ -678,9 +663,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        self.section_table
-            .as_ref()
-            .map_or_else(ScannedSections::empty, SectionTable::sections)
+        ScannedSections::new(self.section_table.as_ref())
     }
 
     /// Iterates over sections that contribute to the loaded memory image.
@@ -783,13 +766,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Returns the PT_INTERP string when present.
     #[inline]
     pub fn interp(&self) -> Option<&[u8]> {
-        self.interp.as_deref().map(|bytes| {
-            let end = bytes
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(bytes.len());
-            &bytes[..end]
-        })
+        self.interp.as_deref()
     }
 
     /// Returns whether the executable exposes a usable section-table view.
@@ -815,9 +792,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        self.section_table
-            .as_ref()
-            .map_or_else(ScannedSections::empty, SectionTable::sections)
+        ScannedSections::new(self.section_table.as_ref())
     }
 
     /// Iterates over sections that contribute to the loaded memory image.
@@ -864,7 +839,10 @@ fn read_interp<L: ElfLayout>(
         return Ok(None);
     };
 
-    let bytes = object.read_to_vec(interp.p_offset(), interp.p_filesz())?;
+    let mut bytes = object.read_to_vec(interp.p_offset(), interp.p_filesz())?;
+    if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
+        bytes.truncate(end);
+    }
     Ok(Some(bytes.into_boxed_slice()))
 }
 

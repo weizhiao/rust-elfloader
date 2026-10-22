@@ -262,51 +262,29 @@ impl Default for SectionGroups {
         let mut groups = Self {
             defs: PrimaryMap::default(),
         };
-        debug_assert_eq!(
-            groups.define(
-                ProtFlags::PROT_READ,
-                ProtFlags::PROT_READ,
-                0,
-                SectionLifetime::Core,
-            ),
-            READ_SECTION_GROUP
-        );
-        debug_assert_eq!(
-            groups.define(
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                1,
-                SectionLifetime::Core,
-            ),
-            WRITE_SECTION_GROUP
-        );
-        debug_assert_eq!(
-            groups.define(
-                ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
-                ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
-                2,
-                SectionLifetime::Core,
-            ),
-            EXEC_SECTION_GROUP
-        );
-        debug_assert_eq!(
-            groups.define(
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+        let read = ProtFlags::PROT_READ;
+        let write = read | ProtFlags::PROT_WRITE;
+        let exec = read | ProtFlags::PROT_EXEC;
+        for (expected, prot, order, lifetime) in [
+            (READ_SECTION_GROUP, read, 0, SectionLifetime::Core),
+            (WRITE_SECTION_GROUP, write, 1, SectionLifetime::Core),
+            (EXEC_SECTION_GROUP, exec, 2, SectionLifetime::Core),
+            (
+                WRITE_EXEC_SECTION_GROUP,
+                write | exec,
                 3,
                 SectionLifetime::Core,
             ),
-            WRITE_EXEC_SECTION_GROUP
-        );
-        debug_assert_eq!(
-            groups.define(
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            (
+                STAGING_SECTION_GROUP,
+                write,
                 usize::MAX,
                 SectionLifetime::Init,
             ),
-            STAGING_SECTION_GROUP
-        );
+        ] {
+            let group = groups.define(prot, prot, order, lifetime);
+            debug_assert_eq!(group, expected);
+        }
         groups
     }
 }
@@ -464,72 +442,55 @@ fn prepare_pltgot_shdrs<L: ElfLayout>(
         }
     }
 
-    if let Some(id) = got {
-        configure_pltgot_shdr(
-            &mut sections.headers_mut()[id.index()],
-            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            got_cnt,
-            size_of::<usize>(),
-        );
-    } else if got_cnt != 0 {
-        got = Some(sections.push_section(".got", PltGotSection::create_got_shdr(got_cnt)));
+    PltGotShdrs {
+        got: ensure_pltgot_section(sections, got, ".got", got_cnt, false),
+        got_plt: ensure_pltgot_section(sections, got_plt, ".got.plt", plt_cnt, false),
+        plt: ensure_pltgot_section(sections, plt, ".plt", plt_cnt, true),
     }
-    if let Some(id) = got_plt {
-        configure_pltgot_shdr(
-            &mut sections.headers_mut()[id.index()],
-            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            plt_cnt,
-            size_of::<usize>(),
-        );
-    } else if plt_cnt != 0 {
-        got_plt =
-            Some(sections.push_section(".got.plt", PltGotSection::create_got_plt_shdr(plt_cnt)));
-    }
-    if let Some(id) = plt {
-        configure_pltgot_shdr(
-            &mut sections.headers_mut()[id.index()],
-            ElfSectionFlags::ALLOC | ElfSectionFlags::EXECINSTR,
-            plt_cnt,
+}
+
+fn ensure_pltgot_section<L: ElfLayout>(
+    sections: &mut ObjectSections<L>,
+    existing: Option<ElfSectionId>,
+    name: &str,
+    count: usize,
+    executable: bool,
+) -> Option<ElfSectionId> {
+    let id = match existing {
+        Some(id) => id,
+        None if count == 0 => return None,
+        None => sections.push_section(
+            name,
+            ElfShdr::new(
+                0,
+                ElfSectionType::NOBITS,
+                ElfSectionFlags::empty(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+        ),
+    };
+    let (flags, entry_size, alignment) = if executable {
+        (
+            ElfSectionFlags::EXECINSTR,
             PLT_ENTRY_SIZE,
-        );
-        sections.headers_mut()[id.index()].set_sh_addralign(size_of::<usize>());
-    } else if plt_cnt != 0 {
-        plt = Some(sections.push_section(".plt", PltGotSection::create_plt_shdr(plt_cnt)));
-    }
-
-    PltGotShdrs { got, got_plt, plt }
-}
-
-fn configure_pltgot_shdr<L: ElfLayout>(
-    shdr: &mut ElfShdr<L>,
-    flags: ElfSectionFlags,
-    elem_cnt: usize,
-    ent_size: usize,
-) {
+            size_of::<usize>(),
+        )
+    } else {
+        (ElfSectionFlags::WRITE, size_of::<usize>(), 16)
+    };
+    let shdr = sections.section_mut(id);
     shdr.set_section_type(ElfSectionType::NOBITS);
-    shdr.set_flags(flags);
-    shdr.set_sh_size(elem_cnt * ent_size);
-    shdr.set_sh_addralign(16);
-    shdr.set_sh_entsize(ent_size);
-}
-
-fn create_pltgot_shdr<L: ElfLayout>(
-    flags: ElfSectionFlags,
-    elem_cnt: usize,
-    ent_size: usize,
-) -> ElfShdr<L> {
-    ElfShdr::new(
-        0,
-        ElfSectionType::NOBITS,
-        flags,
-        0,
-        0,
-        elem_cnt * ent_size,
-        0,
-        0,
-        16,
-        ent_size,
-    )
+    shdr.set_flags(ElfSectionFlags::ALLOC | flags);
+    shdr.set_sh_size(count * entry_size);
+    shdr.set_sh_addralign(alignment);
+    shdr.set_sh_entsize(entry_size);
+    Some(id)
 }
 
 struct SectionSegment {
@@ -754,9 +715,6 @@ pub(crate) struct PltGotSection {
     got_base: VmAddr,
     got_plt_base: VmAddr,
     plt_base: VmAddr,
-    got_idx: usize,
-    got_plt_idx: usize,
-    plt_idx: usize,
     got_map: HashMap<ObjectRelocKey, usize>,
     plt_map: HashMap<ObjectRelocKey, usize>,
 }
@@ -889,37 +847,8 @@ impl PltGotSection {
         Ok((got_set.len(), got_plt_set.len()))
     }
 
-    fn create_got_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        create_pltgot_shdr(
-            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            elem_cnt,
-            size_of::<usize>(),
-        )
-    }
-
-    fn create_got_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        create_pltgot_shdr(
-            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            elem_cnt,
-            size_of::<usize>(),
-        )
-    }
-
-    fn create_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        let mut shdr = create_pltgot_shdr(
-            ElfSectionFlags::ALLOC | ElfSectionFlags::EXECINSTR,
-            elem_cnt,
-            PLT_ENTRY_SIZE,
-        );
-        shdr.set_sh_addralign(size_of::<usize>());
-        shdr
-    }
-
     fn new(got_base: VmAddr, got_plt_base: VmAddr, plt_base: VmAddr) -> Self {
         Self {
-            got_idx: 0,
-            got_plt_idx: 0,
-            plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
             got_base,
@@ -931,13 +860,13 @@ impl PltGotSection {
     pub(crate) fn add_got_entry(&mut self, key: ObjectRelocKey) -> GotEntry<'_> {
         let base = self.got_base;
         let ent_size = size_of::<usize>();
+        let next_idx = self.got_map.len();
         match self.got_map.entry(key) {
-            Entry::Occupied(mut entry) => {
-                GotEntry::Occupied(base + VmOffset::new(*entry.get_mut() * ent_size))
+            Entry::Occupied(entry) => {
+                GotEntry::Occupied(base + VmOffset::new(*entry.get() * ent_size))
             }
             Entry::Vacant(entry) => {
-                let idx = *entry.insert(self.got_idx);
-                self.got_idx += 1;
+                let idx = *entry.insert(next_idx);
                 GotEntry::Vacant(unsafe {
                     UsizeEntry(&mut *(base + VmOffset::new(idx * ent_size)).as_mut_ptr())
                 })
@@ -950,20 +879,17 @@ impl PltGotSection {
         let got_plt_base = self.got_plt_base;
         let plt_ent_size = PLT_ENTRY_SIZE;
         let got_ent_size = size_of::<usize>();
+        let next_idx = self.plt_map.len();
         match self.plt_map.entry(key) {
-            Entry::Occupied(mut entry) => {
-                PltEntry::Occupied(plt_base + VmOffset::new(*entry.get_mut() * plt_ent_size))
+            Entry::Occupied(entry) => {
+                PltEntry::Occupied(plt_base + VmOffset::new(*entry.get() * plt_ent_size))
             }
             Entry::Vacant(entry) => {
-                let plt_idx = *entry.insert(self.plt_idx);
-                self.plt_idx += 1;
-
-                let got_idx = self.got_plt_idx;
-                self.got_plt_idx += 1;
+                let idx = *entry.insert(next_idx);
 
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
-                        (plt_base + VmOffset::new(plt_idx * plt_ent_size)).as_mut_ptr(),
+                        (plt_base + VmOffset::new(idx * plt_ent_size)).as_mut_ptr(),
                         plt_ent_size,
                     )
                 };
@@ -974,8 +900,7 @@ impl PltGotSection {
                     plt,
                     got: unsafe {
                         UsizeEntry(
-                            &mut *(got_plt_base + VmOffset::new(got_idx * got_ent_size))
-                                .as_mut_ptr(),
+                            &mut *(got_plt_base + VmOffset::new(idx * got_ent_size)).as_mut_ptr(),
                         )
                     },
                 }

@@ -168,8 +168,6 @@ where
     pub fn modules(&self) -> impl Iterator<Item = Module<'a, S>> + '_ {
         self.plan
             .group_order()
-            .iter()
-            .copied()
             .filter_map(move |id| self.checked_module(id))
     }
 }

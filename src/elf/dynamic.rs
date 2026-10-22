@@ -413,6 +413,19 @@ where
     parsed
 }
 
+fn check_entry_size(tag: ElfDynamicTag, actual: Option<usize>, expected: usize) -> Result<()> {
+    let actual = actual.ok_or(ParseDynamicError::MissingRequiredTag { tag })?;
+    if actual != expected {
+        return Err(RelocTableError::InvalidEntrySize {
+            tag,
+            expected,
+            actual,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 impl<Arch> ElfDynamic<Arch>
 where
     Arch: RelocationArch,
@@ -496,39 +509,20 @@ where
         let dynrel = parsed
             .rel_off
             .map(|rel_off| -> Result<_> {
-                if parsed.is_rela.unwrap_or(false) {
-                    let entry_size =
-                        parsed
-                            .rela_entry_size
-                            .ok_or(ParseDynamicError::MissingRequiredTag {
-                                tag: ElfDynamicTag::RELAENT,
-                            })?;
-                    let expected = size_of::<ElfRela<Arch::Layout>>();
-                    if entry_size != expected {
-                        return Err(RelocTableError::InvalidEntrySize {
-                            tag: ElfDynamicTag::RELAENT,
-                            expected,
-                            actual: entry_size,
-                        }
-                        .into());
-                    }
+                let (entry_tag, entry_size, expected) = if parsed.is_rela.unwrap_or(false) {
+                    (
+                        ElfDynamicTag::RELAENT,
+                        parsed.rela_entry_size,
+                        size_of::<ElfRela<Arch::Layout>>(),
+                    )
                 } else {
-                    let entry_size =
-                        parsed
-                            .rel_entry_size
-                            .ok_or(ParseDynamicError::MissingRequiredTag {
-                                tag: ElfDynamicTag::RELENT,
-                            })?;
-                    let expected = size_of::<ElfRel<Arch::Layout>>();
-                    if entry_size != expected {
-                        return Err(RelocTableError::InvalidEntrySize {
-                            tag: ElfDynamicTag::RELENT,
-                            expected,
-                            actual: entry_size,
-                        }
-                        .into());
-                    }
-                }
+                    (
+                        ElfDynamicTag::RELENT,
+                        parsed.rel_entry_size,
+                        size_of::<ElfRel<Arch::Layout>>(),
+                    )
+                };
+                check_entry_size(entry_tag, entry_size, expected)?;
                 let view = segments
                     .read_view::<ElfRelType<Arch>>(
                         VmOffset::new(rel_off.get()),
@@ -547,21 +541,11 @@ where
         let relr = parsed
             .relr_off
             .map(|relr_off| -> Result<_> {
-                let entry_size =
-                    parsed
-                        .relr_entry_size
-                        .ok_or(ParseDynamicError::MissingRequiredTag {
-                            tag: ElfDynamicTag::RELRENT,
-                        })?;
-                let expected = size_of::<ElfRelr<Arch::Layout>>();
-                if entry_size != expected {
-                    return Err(RelocTableError::InvalidEntrySize {
-                        tag: ElfDynamicTag::RELRENT,
-                        expected,
-                        actual: entry_size,
-                    }
-                    .into());
-                }
+                check_entry_size(
+                    ElfDynamicTag::RELRENT,
+                    parsed.relr_entry_size,
+                    size_of::<ElfRelr<Arch::Layout>>(),
+                )?;
                 let view = segments
                     .read_view::<ElfRelr<Arch::Layout>>(
                         VmOffset::new(relr_off.get()),

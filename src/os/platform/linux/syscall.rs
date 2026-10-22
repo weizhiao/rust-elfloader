@@ -155,26 +155,19 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         _populate_later: bool,
     ) -> Result<MappedRegion<Self::Region>> {
-        let ptr = unsafe {
-            #[cfg(target_pointer_width = "32")]
-            let syscall = Sysno::mmap2;
-            #[cfg(not(target_pointer_width = "32"))]
-            let syscall = Sysno::mmap;
-            from_ret(
-                syscalls::raw_syscall!(
-                    syscall,
-                    addr.map_or(core::ptr::null_mut::<c_void>(), |addr| {
-                        addr.as_mut_ptr::<c_void>()
-                    }),
+        let ptr = from_ret(
+            unsafe {
+                raw_mmap(
+                    addr.unwrap_or(VmAddr::null()),
                     len,
-                    prot.bits(),
-                    (MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS).bits(),
-                    usize::MAX,
-                    0
-                ),
-                |code| Error::from(MmapError::MmapAnonymousFailed { code }),
-            )? as *mut c_void
-        };
+                    prot,
+                    MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                )
+            },
+            |code| Error::from(MmapError::MmapAnonymousFailed { code }),
+        )? as *mut c_void;
         // SAFETY: the successful allocation above transfers ownership of this range.
         Ok(unsafe { MappedRegion::local(ptr, len, *self) })
     }
@@ -193,24 +186,10 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: isize,
     ) -> Result<()> {
-        unsafe {
-            #[cfg(target_pointer_width = "32")]
-            let (syscall, offset) = (Sysno::mmap2, offset / PageSize::BASE_BYTES);
-            #[cfg(not(target_pointer_width = "32"))]
-            let syscall = Sysno::mmap;
-            from_ret(
-                syscalls::raw_syscall!(
-                    syscall,
-                    addr.as_mut_ptr::<c_void>(),
-                    len,
-                    prot.bits(),
-                    flags.bits(),
-                    fd as c_int,
-                    offset
-                ),
-                |code| Error::from(MmapError::MmapFailed { code }),
-            )?;
-        }
+        from_ret(
+            unsafe { raw_mmap(addr, len, prot, flags, fd, offset) },
+            |code| Error::from(MmapError::MmapFailed { code }),
+        )?;
         Ok(())
     }
 
@@ -221,24 +200,10 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         flags: MapFlags,
     ) -> Result<()> {
-        unsafe {
-            #[cfg(target_pointer_width = "32")]
-            let syscall = Sysno::mmap2;
-            #[cfg(not(target_pointer_width = "32"))]
-            let syscall = Sysno::mmap;
-            from_ret(
-                syscalls::raw_syscall!(
-                    syscall,
-                    addr.as_mut_ptr::<c_void>(),
-                    len,
-                    prot.bits(),
-                    flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                    usize::MAX,
-                    0
-                ),
-                |code| Error::from(MmapError::MmapAnonymousFailed { code }),
-            )?;
-        }
+        from_ret(
+            unsafe { raw_mmap(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) },
+            |code| Error::from(MmapError::MmapAnonymousFailed { code }),
+        )?;
         Ok(())
     }
 
@@ -275,6 +240,33 @@ impl Mmap for DefaultMmap {
             |code| Error::from(MmapError::Mprotect { code }),
         )?;
         Ok(())
+    }
+}
+
+/// Invokes the native mmap ABI with a byte offset on every architecture.
+#[inline]
+unsafe fn raw_mmap(
+    addr: VmAddr,
+    len: usize,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: isize,
+    offset: usize,
+) -> usize {
+    #[cfg(target_pointer_width = "32")]
+    let (syscall, offset) = (Sysno::mmap2, offset / PageSize::BASE_BYTES);
+    #[cfg(not(target_pointer_width = "32"))]
+    let syscall = Sysno::mmap;
+    unsafe {
+        syscalls::raw_syscall!(
+            syscall,
+            addr.as_mut_ptr::<c_void>(),
+            len,
+            prot.bits(),
+            flags.bits(),
+            fd as c_int,
+            offset
+        )
     }
 }
 
@@ -338,34 +330,22 @@ impl RawFile {
             target_arch = "riscv64",
             target_arch = "loongarch64"
         )))]
-        let fd = unsafe {
-            let res = syscalls::raw_syscall!(Sysno::open, c_path.as_ptr(), RDONLY, 0);
-            if res > -4096isize as usize {
-                return Err(IoError::OpenFailed {
-                    path: path.as_bytes().into(),
-                    code: (-(res as isize)) as u32,
-                }
-                .into());
-            }
-            res
-        };
+        let result = unsafe { syscalls::raw_syscall!(Sysno::open, c_path.as_ptr(), RDONLY, 0) };
         #[cfg(any(
             target_arch = "aarch64",
             target_arch = "riscv64",
             target_arch = "loongarch64"
         ))]
-        let fd = unsafe {
+        let result = unsafe {
             const AT_FDCWD: core::ffi::c_int = -100;
-            let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, c_path.as_ptr(), RDONLY, 0);
-            if res > -4096isize as usize {
-                return Err(IoError::OpenFailed {
-                    path: path.as_bytes().into(),
-                    code: (-(res as isize)) as u32,
-                }
-                .into());
-            }
-            res
+            syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, c_path.as_ptr(), RDONLY, 0)
         };
+        let fd = from_ret(result, |code| {
+            Error::from(IoError::OpenFailed {
+                path: path.as_bytes().into(),
+                code,
+            })
+        })?;
         Self::from_owned_fd(fd as i32)
     }
 

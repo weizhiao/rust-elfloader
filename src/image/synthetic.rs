@@ -308,7 +308,7 @@ struct IndexedName {
 #[derive(Clone, Default)]
 struct SymbolIndex {
     default: Option<usize>,
-    versions: Vec<(SymbolVersion, usize)>,
+    versions: Vec<(Vec<u8>, usize)>,
 }
 
 impl<Arch: RelocationArch> SyntheticModule<Arch> {
@@ -442,76 +442,59 @@ impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
         let entry = &mut entry.symbols;
         let version = symbol.version;
         let existing = match version.as_ref() {
-            Some(version) => entry.versions.iter().find_map(|(entry, index)| {
-                (entry.name == version.name).then(|| (*index, Some(entry.clone())))
+            Some(version) => entry.versions.iter().find_map(|(name, index)| {
+                (*name == version.name).then(|| {
+                    (
+                        *index,
+                        Some(SymbolVersion::new(name, entry.default == Some(*index))),
+                    )
+                })
             }),
             None => entry.default.map(|index| {
-                let version = entry.versions.iter().find_map(|(version, version_index)| {
-                    (*version_index == index && version.default).then(|| version.clone())
+                let version = entry.versions.iter().find_map(|(name, version_index)| {
+                    (*version_index == index).then(|| SymbolVersion::new(name, true))
                 });
                 (index, version)
             }),
         };
 
-        let (idx, previous) = if let Some((idx, previous_version)) = existing {
-            let elf_symbol = ElfSymbol::synthetic(
-                idx,
-                symbol.value,
-                symbol.size,
-                symbol.bind,
-                symbol.symbol_type,
-                symbol.other,
-                symbol.section_index,
-            );
+        let idx = existing
+            .as_ref()
+            .map_or(self.symbols.len(), |(index, _)| *index);
+        let elf_symbol = ElfSymbol::synthetic(
+            idx,
+            symbol.value,
+            symbol.size,
+            symbol.bind,
+            symbol.symbol_type,
+            symbol.other,
+            symbol.section_index,
+        );
+        let previous = if let Some((_, previous_version)) = existing {
             let previous_symbol = core::mem::replace(&mut self.symbols[idx], elf_symbol);
             let previous = SyntheticSymbol::from_elf(
                 self.names[idx].clone(),
                 &previous_symbol,
                 previous_version,
             );
-            (idx, Some(previous))
+            Some(previous)
         } else {
-            let idx = self.symbols.len();
-            let elf_symbol = ElfSymbol::synthetic(
-                idx,
-                symbol.value,
-                symbol.size,
-                symbol.bind,
-                symbol.symbol_type,
-                symbol.other,
-                symbol.section_index,
-            );
             self.names.push(name);
             self.symbols.push(elf_symbol);
-            (idx, None)
+            None
         };
 
+        entry.versions.retain(|(_, index)| *index != idx);
         match version {
             Some(version) => {
-                let was_default = entry
-                    .versions
-                    .iter()
-                    .position(|(entry, _)| entry.name == version.name)
-                    .map(|position| entry.versions.remove(position).0.default)
-                    .unwrap_or(false);
                 if version.default {
-                    for (entry, _) in &mut entry.versions {
-                        entry.default = false;
-                    }
                     entry.default = Some(idx);
-                } else if was_default && entry.default == Some(idx) {
+                } else if entry.default == Some(idx) {
                     entry.default = None;
                 }
-                entry.versions.push((version, idx));
+                entry.versions.push((version.name, idx));
             }
             None => {
-                if let Some(position) = entry
-                    .versions
-                    .iter()
-                    .position(|(version, version_index)| *version_index == idx && version.default)
-                {
-                    entry.versions.remove(position);
-                }
                 entry.default = Some(idx);
             }
         }
@@ -652,7 +635,7 @@ where
             Some(version) => entry
                 .versions
                 .iter()
-                .find_map(|(entry, index)| (entry.name == version).then_some(*index))?,
+                .find_map(|(name, index)| (name == version).then_some(*index))?,
             None => entry.default?,
         };
         Some(&self.symbols[idx])
